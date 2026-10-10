@@ -1,0 +1,13 @@
+# Hyperparameters for scripts/wakeword/train_model.py (openWakeWord auto_train).
+# Defaults follow openWakeWord's examples/custom_model.yml; deviations are commented.
+model_type: dnn
+layer_size: 32
+steps: 50000                      # sequence 1; auto_train adds two more sequences of steps/10
+max_negative_weight: 1500
+target_false_positives_per_hour: 0.2
+batch_n_per_class:
+  ACAV100M_sample: 1024
+  adversarial_negative: 64        # 50 in the example config
+  background_negative: 32         # extra noise-only negatives (car interior, traffic, music)
+  positive: 64                    # 50 in the example config
+seed: 0
