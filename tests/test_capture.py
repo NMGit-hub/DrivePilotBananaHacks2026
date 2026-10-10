@@ -268,16 +268,16 @@ def h264_packets(n: int, width: int = 128, height: int = 96) -> tuple[bytes, lis
 class FakeCamera(ScrcpyCameraSource):
     """ScrcpyCameraSource with adb replaced by a local TCP server that speaks the scrcpy protocol."""
 
-    def __init__(self, payload: bytes, decoder: str = "auto") -> None:
+    def __init__(self, payload: bytes, decoder: str = "auto", hold_s: float = 0.5) -> None:
         super().__init__(CameraVideoConfig(decoder=decoder), WallClock())
         self._listener = socket.create_server(("127.0.0.1", 0))
         self._port = self._listener.getsockname()[1]
-        threading.Thread(target=self._serve, args=(payload,), daemon=True).start()
+        threading.Thread(target=self._serve, args=(payload, hold_s), daemon=True).start()
 
-    def _serve(self, payload: bytes) -> None:
+    def _serve(self, payload: bytes, hold_s: float) -> None:
         conn, _ = self._listener.accept()
         conn.sendall(payload)
-        time.sleep(0.5)
+        time.sleep(hold_s)  # then hang up (or stay silent for a long hold: a stalled phone)
         conn.close()
 
     def _open(self) -> None:
@@ -326,3 +326,105 @@ def test_camera_source_survives_a_corrupt_packet() -> None:
     camera.stop()
     assert camera.bad_packets >= 1 or len(frames) >= 12  # skipped, or tolerated by the decoder itself
     assert len(frames) >= 11  # decoding continued after the corrupt packet
+
+
+# ------------------------------------------------------------------------- review regressions (M1)
+
+
+class CapProxy:
+    """Wraps cv2.VideoCapture to inject slow decoding or rewritten timestamps."""
+
+    def __init__(
+        self, cap: cv2.VideoCapture, grab_delay_s: float = 0.0, pts_offset_after: tuple[int, float] | None = None
+    ) -> None:
+        self._cap, self._delay, self._offset = cap, grab_delay_s, pts_offset_after
+        self._n = 0
+
+    def grab(self) -> bool:
+        time.sleep(self._delay)
+        ok = bool(self._cap.grab())
+        self._n += ok
+        return ok
+
+    def get(self, prop: int) -> float:
+        value = float(self._cap.get(prop))
+        if prop == cv2.CAP_PROP_POS_MSEC and self._offset is not None and self._n > self._offset[0]:
+            value += self._offset[1] * 1000.0
+        return value
+
+    def __getattr__(self, name: str) -> object:  # retrieve, set, release, ...
+        return getattr(self._cap, name)
+
+
+def start_with_proxy(source: FileSource, **proxy_kwargs: object) -> None:
+    source._open()
+    source._cap = CapProxy(source._cap, **proxy_kwargs)  # type: ignore[arg-type, assignment]
+    source._thread = threading.Thread(target=source._thread_main, daemon=True)
+    source._thread.start()
+
+
+def test_slow_decoding_slows_playback_instead_of_starving(clip: Path) -> None:
+    source = FileSource(clip, realtime=True)
+    start_with_proxy(source, grab_delay_s=0.045)  # slower than the 33 ms frame period
+    frames = []
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        frame = source.read(timeout=0.5)
+        if frame is not None:
+            frames.append(frame)
+    source.stop()
+    assert len(frames) >= 15  # keeps flowing at the decoder's pace (~22 fps here) instead of collapsing
+    assert np.all(np.diff([f.t for f in frames]) > 0)
+
+
+def test_pause_right_after_seek_freezes_the_clock(clip: Path) -> None:
+    for _ in range(5):
+        source = FileSource(clip, realtime=True)
+        source.start()
+        assert source.read(timeout=1.0) is not None
+        source.seek_to(1.0)
+        time.sleep(0.01)
+        assert source.toggle_pause() is True
+        time.sleep(0.15)
+        frozen = source.clock.now()
+        time.sleep(0.3)
+        assert source.clock.now() == pytest.approx(frozen, abs=1e-6)
+        source.stop()
+
+
+def test_backward_timestamp_jump_starts_a_new_segment(clip: Path) -> None:
+    source = FileSource(clip, realtime=False)
+    start_with_proxy(source, pts_offset_after=(45, -1.5))  # joined recordings: time jumps back 1.5 s
+    frames = drain(source)
+    source.stop()
+    assert len(frames) == N_FRAMES  # nothing dropped
+    assert {f.segment for f in frames} == {0, 1}
+    assert np.all(np.diff([f.t for f in frames if f.segment == 1]) > 0)
+
+
+def test_forward_timestamp_gap_does_not_sleep_through_it(clip: Path) -> None:
+    source = FileSource(clip, realtime=True)
+    start_with_proxy(source, pts_offset_after=(10, 30.0))  # a 30 s recording gap after frame 10
+    start = time.monotonic()
+    frames = drain(source, timeout=2.0)
+    source.stop()
+    assert time.monotonic() - start < 6.0  # ~3 s of video, not 33 s
+    assert len(frames) >= 60 and frames[-1].segment == 1
+
+
+def test_camera_stop_is_fast_and_stalls_are_detected() -> None:
+    payload = encode_preamble("Fake Phone", 0x68323634) + encode_session(128, 96)  # then silence
+    camera = FakeCamera(payload, "software", hold_s=10.0)
+    camera.cfg = camera.cfg.model_copy(update={"stall_timeout_s": 1.0})
+    camera.start()
+    with pytest.raises(RuntimeError, match="capture failed"):
+        camera.read(timeout=4.0)  # the stall watchdog fires after ~1 s without data
+    assert isinstance(camera._error, ConnectionError) and "no video" in str(camera._error)
+    camera.stop()
+
+    camera = FakeCamera(payload, "software", hold_s=10.0)
+    camera.start()
+    time.sleep(0.2)
+    start = time.monotonic()
+    camera.stop()  # blocked in recv: must return promptly
+    assert time.monotonic() - start < 1.0

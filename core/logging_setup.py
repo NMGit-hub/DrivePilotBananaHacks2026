@@ -96,23 +96,23 @@ class StructLogger:
                 level, msg, exc_info=exc_info, stack_info=stack_info, stacklevel=3, extra={"fields": fields}
             )
 
-    def debug(self, msg: str, /, *, exc_info: Any = None, stack_info: bool = False, **fields: Any) -> None:
+    def debug(self, msg: str, /, *, exc_info: Any = None, stack_info: Any = False, **fields: Any) -> None:
         """Log at DEBUG with structured fields."""
         self._log(logging.DEBUG, msg, fields, exc_info, stack_info)
 
-    def info(self, msg: str, /, *, exc_info: Any = None, stack_info: bool = False, **fields: Any) -> None:
+    def info(self, msg: str, /, *, exc_info: Any = None, stack_info: Any = False, **fields: Any) -> None:
         """Log at INFO with structured fields."""
         self._log(logging.INFO, msg, fields, exc_info, stack_info)
 
-    def warning(self, msg: str, /, *, exc_info: Any = None, stack_info: bool = False, **fields: Any) -> None:
+    def warning(self, msg: str, /, *, exc_info: Any = None, stack_info: Any = False, **fields: Any) -> None:
         """Log at WARNING with structured fields."""
         self._log(logging.WARNING, msg, fields, exc_info, stack_info)
 
-    def error(self, msg: str, /, *, exc_info: Any = None, stack_info: bool = False, **fields: Any) -> None:
+    def error(self, msg: str, /, *, exc_info: Any = None, stack_info: Any = False, **fields: Any) -> None:
         """Log at ERROR with structured fields."""
         self._log(logging.ERROR, msg, fields, exc_info, stack_info)
 
-    def exception(self, msg: str, /, *, stack_info: bool = False, **fields: Any) -> None:
+    def exception(self, msg: str, /, *, stack_info: Any = False, **fields: Any) -> None:
         """Log at ERROR with the current exception's traceback."""
         self._log(logging.ERROR, msg, fields, True, stack_info)
 

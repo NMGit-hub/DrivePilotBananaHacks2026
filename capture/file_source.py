@@ -25,6 +25,8 @@ from core.types import Frame
 log = get_logger(__name__)
 
 _CONTROL_POLL_S = 0.05
+_DISCONTINUITY_S = 1.0  # a timestamp jump bigger than this (either way) starts a new segment
+_MAX_LAG_S = 0.5  # further behind real time than this: re-anchor (slow down) instead of skipping
 
 
 class FileSource(VideoSource):
@@ -80,14 +82,14 @@ class FileSource(VideoSource):
 
     def toggle_pause(self) -> bool:
         """Pause or resume. Returns the new paused state."""
-        with self._ctrl_lock:
+        with self._ctrl_lock:  # same lock as the capture thread's clock re-anchoring
             self._paused = not self._paused
             paused = self._paused
-        if self.realtime:
-            if paused:
-                self._media_clock.pause()
-            else:
-                self._media_clock.play()
+            if self.realtime:
+                if paused:
+                    self._media_clock.pause()
+                else:
+                    self._media_clock.play()
         self._wake.set()
         log.info("playback paused" if paused else "playback resumed", t=round(self._media_clock.now(), 2))
         return paused
@@ -140,6 +142,8 @@ class FileSource(VideoSource):
         segment = 0
         last_t = -math.inf
         resync_clock = True  # anchor the clock to the first frame of every segment
+        late_frames = 0
+        grab_ms = 0.0  # running average of the decode cost per frame
 
         while not self._stop.is_set():
             with self._ctrl_lock:
@@ -157,32 +161,60 @@ class FileSource(VideoSource):
                 self._wake.clear()
                 continue
 
-            if not cap.grab():
+            grab_start = time.perf_counter()
+            grabbed = cap.grab()
+            grab_ms = 0.9 * grab_ms + 0.1 * (time.perf_counter() - grab_start) * 1000.0
+            if not grabbed:
                 if self.loop and self._frame_count > 0:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     segment += 1
                     last_t = -math.inf
                     resync_clock = True
                     continue
-                log.info("end of video", path=str(self.path))
+                log.info("end of video", path=str(self.path), late_frames=late_frames)
                 return
 
             index = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
-            pts = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
-            if math.isfinite(last_t) and pts < last_t + 0.5 * period:
-                # Phone recordings (variable frame rate) occasionally stamp two frames with the same time, and
-                # some containers repeat early timestamps. A near-zero time step breaks per-second rates
-                # downstream (optical flow, stop timers), so such a frame is skipped.
-                self._count_skipped()
-                continue
-            t = max(pts, 0.0)
+            pts = max(cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0, 0.0)
+            if math.isfinite(last_t):
+                step = pts - last_t
+                if abs(step) > _DISCONTINUITY_S:
+                    # Joined recordings or a timestamp reset: a new segment on a re-anchored clock (instead of
+                    # dropping everything until the timestamps catch up, or sleeping through a forward gap).
+                    segment += 1
+                    resync_clock = True
+                    log.warning(
+                        "timestamp jump in video; starting a new segment", jump_s=round(step, 2), segment=segment
+                    )
+                elif step < 0.5 * period:
+                    # Phone recordings (variable frame rate) occasionally stamp two frames with the same time,
+                    # and some containers repeat early timestamps. A near-zero time step breaks per-second rates
+                    # downstream (optical flow, stop timers), so such a frame is skipped.
+                    self._count_skipped()
+                    continue
+            t = pts
             last_t = t
 
             if self.realtime and not resync_clock:
-                if self._media_clock.now() - t > period:  # behind real time: skip decoding this frame
+                lag = self._media_clock.now() - t
+                decode_bound = grab_ms > 0.8 * period * 1000.0
+                if lag > _MAX_LAG_S or (decode_bound and lag > period):
+                    # Behind real time and skipping can't help: grab() itself decodes, so when decoding is the
+                    # bottleneck (e.g. 4K HEVC on a busy CPU) skipping would starve the pipeline. Play on from
+                    # this frame instead: playback runs slower than real time.
+                    late_frames += 1
+                    if late_frames in (1, 10, 100) or late_frames % 1000 == 0:
+                        log.warning(
+                            "decoding slower than real time; playback slowed",
+                            lag_s=round(lag, 2),
+                            decode_ms=round(grab_ms, 1),
+                            count=late_frames,
+                        )
+                    resync_clock = True
+                elif lag > period:  # slightly behind (the consumer was slow): skip this frame to catch up
                     self._count_skipped()
                     continue
-                if not self._wait_until(t):  # a control (pause/seek/stop) arrived while waiting
+                elif not self._wait_until(t):  # a control (pause/seek/stop) arrived while waiting
                     continue
 
             ok, image = cap.retrieve()
@@ -192,9 +224,10 @@ class FileSource(VideoSource):
             if resync_clock:
                 # Anchor the clock once the first frame of a segment is actually decoded, so a slow first
                 # decode (codec start-up) doesn't make the whole segment start "late".
-                self._media_clock.seek(t)
-                if self.realtime:
-                    self._media_clock.play()
+                with self._ctrl_lock:
+                    self._media_clock.seek(t)
+                    if self.realtime and not self._paused:  # a pause may have arrived since the loop top
+                        self._media_clock.play()
                 resync_clock = False
             elif not self.realtime:
                 self._media_clock.seek(t)  # lock-step: the (paused) clock follows the frames

@@ -103,6 +103,7 @@ class CameraVideoConfig(_Strict):
     height: int = Field(1080, gt=0)
     fps: int = Field(30, gt=0, le=60)
     bitrate_mbps: float = Field(8.0, gt=0.0)
+    stall_timeout_s: float = Field(3.0, gt=0.0, description="No video bytes for this long = the camera stalled.")
     decoder: Literal["auto", "d3d11va", "cuda", "software"] = Field(
         "auto", description="H.264 decoding: auto tries hardware (D3D11VA, then CUDA) before software."
     )
@@ -204,6 +205,66 @@ class EgoMotionConfig(_Strict):
         return self
 
 
+# ---------------------------------------------------------------------------------------- world state
+
+
+class VehicleMotionConfig(_Strict):
+    """Is each tracked vehicle stopped? (state/vehicle_motion.py)"""
+
+    window_s: float = Field(0.6, gt=0.0, description="Speed is fitted over this much track history.")
+    min_samples: int = Field(5, ge=2)
+    stopped_below: float = Field(0.12, gt=0.0, description="Box heights per second below which a car is still.")
+    moving_above: float = Field(0.35, gt=0.0, description="Box heights per second above which it moves.")
+    stopped_after_s: float = Field(0.5, ge=0.0, description="PLAN.md: a car is stopped after 0.5 s of stillness.")
+    max_track_age_s: float = Field(3.0, gt=0.0)
+
+
+class IntersectionConfig(_Strict):
+    """Where cars wait relative to us, and when we are at a stop sign (state/approach.py, state/world.py)."""
+
+    side_x: float = Field(0.30, gt=0.0, lt=0.5, description="Left/right zones: outer fraction of the width.")
+    min_side_aspect: float = Field(1.3, gt=0.0, description="Cross-street cars are seen side-on (w/h).")
+    max_ahead_aspect: float = Field(2.2, gt=0.0)
+    lead_center_band: float = Field(0.25, gt=0.0, lt=0.5)
+    lead_min_height: float = Field(0.18, gt=0.0, lt=1.0, description="Lead car: box height fraction (close).")
+    min_height: float = Field(0.03, gt=0.0, lt=1.0, description="Smaller boxes are beyond the intersection.")
+    min_bottom_y: float = Field(0.30, ge=0.0, lt=1.0)
+    max_bottom_y: float = Field(0.98, gt=0.0, le=1.0)
+    stop_sign_min_conf: float = Field(0.45, gt=0.0, lt=1.0)
+    stop_sign_memory_s: float = Field(
+        10.0, gt=0.0, description="We are 'at a stop' if a stop sign was seen this recently."
+    )
+    camera_hfov_deg: float = Field(114.0, gt=0.0, lt=180.0, description="Below ~100° the sides may be out of view.")
+
+
+class StopQueueConfig(_Strict):
+    """The 4-way-stop queue (state/stop_queue.py)."""
+
+    tie_window_s: float = Field(1.0, ge=0.0, description="PLAN.md: stops within 1 s are a tie (right goes first).")
+    depart_moved: float = Field(1.0, gt=0.0, description="Box heights a waiting car must move to have departed.")
+    relink_iou: float = Field(0.3, gt=0.0, le=1.0)
+    lost_timeout_s: float = Field(8.0, gt=0.0)
+    max_wait_s: float = Field(45.0, gt=0.0, description="A car that never leaves is probably parked.")
+    ego_depart_s: float = Field(1.5, gt=0.0, description="Moving this long = we left (creeping is not).")
+
+
+class TrafficLightConfig(_Strict):
+    """Traffic-light reading (state/traffic_light.py)."""
+
+    min_height_frac: float = Field(0.012, gt=0.0)
+    center_band: float = Field(0.40, gt=0.0, le=0.5)
+    max_center_y: float = Field(0.65, gt=0.0, le=1.0)
+    v_min: int = Field(150, ge=0, le=255)
+    lamp_contrast: int = Field(60, ge=0, le=255)
+    min_lit_frac: float = Field(0.02, ge=0.0, lt=1.0)
+    max_lamp_frac: float = Field(0.40, gt=0.0, le=1.0)
+    s_min_halo: int = Field(70, ge=0, le=255)
+    v_halo_min: int = Field(90, ge=0, le=255)
+    min_confidence: float = Field(0.5, ge=0.0, le=1.0)
+    stable_s: float = Field(0.5, gt=0.0)
+    green_confirm_s: float = Field(0.3, ge=0.0)
+
+
 # ------------------------------------------------------------------------------------------- vision
 
 
@@ -292,6 +353,10 @@ class AppConfig(_Strict):
     gps: GpsConfig = GpsConfig()
     perception: PerceptionConfig = PerceptionConfig()
     ego_motion: EgoMotionConfig = EgoMotionConfig()
+    vehicle_motion: VehicleMotionConfig = VehicleMotionConfig()
+    intersection: IntersectionConfig = IntersectionConfig()
+    stop_queue: StopQueueConfig = StopQueueConfig()
+    traffic_light: TrafficLightConfig = TrafficLightConfig()
     vision_model: Literal["claude", "gemini", "ollama", "mock"] = "claude"
     vision: VisionConfig = VisionConfig()
     ui: UiConfig = UiConfig()

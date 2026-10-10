@@ -26,6 +26,8 @@ from perception.gpu_monitor import GpuMonitor
 
 log = get_logger(__name__)
 
+_MAX_CONSECUTIVE_ERRORS = 30  # ~1 s of frames: then something is persistently wrong
+
 
 @dataclass(frozen=True, slots=True)
 class PerceptionResult:
@@ -101,6 +103,8 @@ class PerceptionWorker:
         self.started_at: float | None = None
         self.finished_at: float | None = None
         self.error: BaseException | None = None
+        self.frame_errors = 0  # frames that failed (detector/ego exceptions) and were skipped
+        self.last_result_at: float | None = None  # time.monotonic() of the last delivered result
 
     def add_listener(self, listener: Listener) -> None:
         """Register a callback for every result (call before start)."""
@@ -126,10 +130,22 @@ class PerceptionWorker:
         """True while the worker thread is alive."""
         return self._thread is not None and self._thread.is_alive()
 
+    def stale(self, max_age_s: float = 1.0) -> bool:
+        """True if no result was delivered in the last `max_age_s` (camera stalled, worker stuck or dead).
+
+        While stale, the world state is out of date: answers and alerts must say so instead of using it.
+        """
+        last = self.last_result_at
+        return last is None or time.monotonic() - last > max_age_s
+
     # ------------------------------------------------------------------------------------- the loop
 
     def _main(self) -> None:
         try:
+            # CUDA state is per thread: warm up here so the first real frame doesn't pay seconds of start-up.
+            warmup = getattr(self.detector, "warmup", None)
+            if callable(warmup):
+                warmup()
             self._loop()
         except BaseException as exc:
             self.error = exc
@@ -139,13 +155,14 @@ class PerceptionWorker:
 
     def _loop(self) -> None:
         last_segment: int | None = None
+        consecutive_errors = 0
         window = StageStats()
         window_start = time.monotonic()
         window_frames = 0
         self.started_at = time.monotonic()
         while not self._stop.is_set():
             wait_start = time.perf_counter()
-            frame = self.source.read(timeout=0.5)
+            frame = self.source.read(timeout=0.5)  # raises if the capture thread failed (camera unplugged...)
             wait_ms = (time.perf_counter() - wait_start) * 1000
             if frame is None:
                 if self.source.finished:
@@ -154,13 +171,25 @@ class PerceptionWorker:
                 continue
 
             new_segment = frame.segment != last_segment
-            if new_segment and last_segment is not None:
+            if new_segment:  # also on the first frame: the detector/estimator may carry state from a previous run
                 self.detector.reset()
                 self.ego.reset()
             last_segment = frame.segment
 
-            detection = self.detector(frame)
-            ego = self.ego.update(frame, [t.box for t in detection.tracks])
+            try:
+                detection = self.detector(frame)
+                ego = self.ego.update(frame, detection.raw_boxes or [t.box for t in detection.tracks])
+            except Exception:
+                self.frame_errors += 1
+                consecutive_errors += 1
+                if consecutive_errors in (1, 10) or self.frame_errors % 100 == 0:
+                    log.exception("perception failed on a frame; skipping it", errors=self.frame_errors)
+                if consecutive_errors >= _MAX_CONSECUTIVE_ERRORS:
+                    raise RuntimeError(f"perception failed on {consecutive_errors} frames in a row") from None
+                time.sleep(min(0.5, 0.01 * consecutive_errors))  # back off a little
+                last_segment = None  # resync detector/ego state on the next good frame
+                continue
+            consecutive_errors = 0
             timings = dict(detection.timings_ms)
             timings["ego_motion"] = ego.elapsed_ms
             timings["wait_for_frame"] = wait_ms
@@ -169,6 +198,7 @@ class PerceptionWorker:
                 frame=frame, tracks=detection.tracks, ego=ego, timings_ms=timings, new_segment=new_segment
             )
 
+            self.last_result_at = time.monotonic()
             for listener in self._listeners:
                 try:
                     listener(result)

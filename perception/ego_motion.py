@@ -173,6 +173,8 @@ class EgoMotionEstimator:
     ) -> tuple[MotionMeasures, MotionMeasures, np.ndarray | None]:
         """Short and long measures plus the frame-to-frame homography (advances the frame history)."""
         gray, mask = self._prepare(frame, boxes)
+        if self._history and self._history[-1].gray.shape != gray.shape:
+            self.reset()  # the frame size changed (new camera session): old features are in other coordinates
         short, long, homography = NOT_MEASURED, NOT_MEASURED, None
         if self._history and frame.t > self._history[-1].t:
             prev = self._history[-1]

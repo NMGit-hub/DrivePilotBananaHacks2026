@@ -298,3 +298,91 @@ def test_perception_config_rejects_unknown_class_and_bad_size() -> None:
         PerceptionConfig(classes=("car", "dragon"))
     with pytest.raises(ValueError):
         PerceptionConfig(imgsz=650)
+
+
+# ------------------------------------------------------------------------- review regressions (M1)
+
+
+class FlakyDetector(FakeDetector):
+    """Raises on chosen calls (e.g. a transient CUDA error)."""
+
+    def __init__(self, fail_on: set[int] | None = None, always: bool = False) -> None:
+        super().__init__()
+        self.calls, self.fail_on, self.always, self.warmed = 0, fail_on or set(), always, False
+
+    def warmup(self) -> None:
+        self.warmed = True
+
+    def __call__(self, frame: Frame) -> DetectionResult:
+        self.calls += 1
+        if self.always or self.calls in self.fail_on:
+            raise RuntimeError("CUDA error: an illegal memory access was encountered")
+        return super().__call__(frame)
+
+
+def test_worker_survives_a_failing_frame(short_clip: Path, ego_cfg: EgoMotionConfig) -> None:
+    source = FileSource(short_clip, realtime=False)
+    detector = FlakyDetector(fail_on={5})
+    worker = PerceptionWorker(source, detector, EgoMotionEstimator(ego_cfg))  # type: ignore[arg-type]
+    source.start()
+    worker.start()
+    worker.join(timeout=20)
+    source.stop()
+    assert worker.error is None and detector.warmed
+    assert worker.frame_errors == 1 and worker.processed == 44
+    assert not worker.stale(max_age_s=5.0)
+
+
+def test_worker_gives_up_on_persistent_errors(short_clip: Path, ego_cfg: EgoMotionConfig) -> None:
+    source = FileSource(short_clip, realtime=False, loop=True)
+    worker = PerceptionWorker(source, FlakyDetector(always=True), EgoMotionEstimator(ego_cfg))  # type: ignore[arg-type]
+    source.start()
+    worker.start()
+    worker.join(timeout=30)
+    source.stop()
+    assert isinstance(worker.error, RuntimeError) and "in a row" in str(worker.error)
+    assert worker.stale(max_age_s=0.0)
+
+
+def test_ego_motion_survives_a_frame_size_change(ego_cfg: EgoMotionConfig) -> None:
+    est = EgoMotionEstimator(ego_cfg)
+    for i in range(10):
+        est.update(Frame(image=texture(1280, 720), t=i / FPS, index=i, captured_at=0.0))
+    result = est.update(Frame(image=texture(960, 720), t=10 / FPS, index=10, captured_at=0.0))  # new session size
+    assert result.long.baseline_s == 0.0  # history was reset instead of crashing
+
+
+def test_vehicle_dedup_is_fast_in_crowded_scenes() -> None:
+    from perception.detector import vehicle_duplicate_mask
+
+    rng = np.random.default_rng(0)
+    xy = rng.uniform(0, 1800, (150, 2))
+    xyxy = np.hstack([xy, xy + rng.uniform(20, 120, (150, 2))])
+    conf = rng.uniform(0.1, 0.9, 150)
+    start = time.perf_counter()
+    keep = vehicle_duplicate_mask(xyxy, conf, np.ones(150, bool), 0.7)
+    assert (time.perf_counter() - start) * 1000 < 10.0
+    assert keep.sum() >= 100
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs the CUDA GPU")
+@pytest.mark.skipif(not DEV_CLIP.exists(), reason="dev clip missing (scripts/fetch_dev_clips.py)")
+def test_track_ids_stay_unique_across_resets() -> None:
+    from perception.detector import Detector
+
+    cfg = load_config()
+    detector = Detector(cfg.perception, cfg.root)
+    source = FileSource(DEV_CLIP, realtime=False, start_s=6.0)
+    source.start()
+    first: set[int] = set()
+    second: set[int] = set()
+    for i in range(40):
+        frame = source.read(timeout=10)
+        assert frame is not None
+        if i == 20:
+            detector.reset()
+        ids = {t.track_id for t in detector(frame).tracks}
+        (first if i < 20 else second).update(ids)
+    source.stop()
+    assert first and second and not (first & second)

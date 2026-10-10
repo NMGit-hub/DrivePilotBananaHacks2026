@@ -72,6 +72,9 @@ class DetectionResult:
 
     tracks: list[Track]
     timings_ms: dict[str, float] = field(default_factory=dict)
+    # Every raw detection this frame (including low-score and not-yet-confirmed ones), for masking moving objects
+    # out of the ego-motion estimate: a crossing truck must not make us look like we're moving.
+    raw_boxes: list[tuple[float, float, float, float]] = field(default_factory=list)
 
 
 VEHICLE_CLASSES = frozenset({"car", "truck", "bus", "motorcycle"})
@@ -83,21 +86,24 @@ def vehicle_duplicate_mask(xyxy: np.ndarray, conf: np.ndarray, is_vehicle: np.nd
     YOLO sometimes reports one pickup as both "car" and "truck"; without this, one vehicle becomes two tracks and
     would be counted twice in the 4-way-stop queue. Non-vehicle boxes are always kept.
     """
-    keep = np.ones(len(xyxy), dtype=bool)
-    order = [i for i in np.argsort(-conf) if is_vehicle[i]]
-    areas = (xyxy[:, 2] - xyxy[:, 0]).clip(0) * (xyxy[:, 3] - xyxy[:, 1]).clip(0)
-    for rank, i in enumerate(order):
-        if not keep[i]:
+    n = len(xyxy)
+    keep = np.ones(n, dtype=bool)
+    if n < 2:
+        return keep
+    # Pairwise IoU in one vectorised step (crowded scenes can have 100+ boxes at the tracker's low threshold).
+    x1, y1, x2, y2 = (xyxy[:, k] for k in range(4))
+    areas = (x2 - x1).clip(0) * (y2 - y1).clip(0)
+    iw = (np.minimum(x2[:, None], x2[None, :]) - np.maximum(x1[:, None], x1[None, :])).clip(0)
+    ih = (np.minimum(y2[:, None], y2[None, :]) - np.maximum(y1[:, None], y1[None, :])).clip(0)
+    inter = iw * ih
+    union = areas[:, None] + areas[None, :] - inter
+    iou = np.divide(inter, union, out=np.zeros_like(inter, dtype=float), where=union > 0)
+    for i in np.argsort(-conf):  # greedy: most confident first
+        if not is_vehicle[i] or not keep[i]:
             continue
-        for j in order[rank + 1 :]:
-            if not keep[j]:
-                continue
-            ix1, iy1 = max(xyxy[i, 0], xyxy[j, 0]), max(xyxy[i, 1], xyxy[j, 1])
-            ix2, iy2 = min(xyxy[i, 2], xyxy[j, 2]), min(xyxy[i, 3], xyxy[j, 3])
-            inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
-            union = areas[i] + areas[j] - inter
-            if union > 0 and inter / union > iou_thresh:
-                keep[j] = False
+        suppress = is_vehicle & keep & (iou[i] > iou_thresh)
+        suppress[i] = False
+        keep[suppress] = False
     return keep
 
 
@@ -132,6 +138,10 @@ class Detector:
         if cfg.half:
             self._predict_args["quantize"] = 16
         self._source_fps = source_fps
+        self._fps_estimate = source_fps  # processed frames per second (EMA), sizes the lost-track window
+        self._last_call: float | None = None
+        self._id_offset = 0  # ultralytics restarts ids at 1 on reset; offset keeps ids unique across segments
+        self._max_id = 0
         self.tracker = self._new_tracker()
         self.warmup()
 
@@ -149,7 +159,11 @@ class Detector:
         return BYTETracker(args=args)
 
     def warmup(self, shape: tuple[int, int] = (720, 1280)) -> None:
-        """Run a few dummy frames so CUDA kernels are compiled, then verify the weights are on the GPU."""
+        """Run a few dummy frames so CUDA kernels are compiled, then verify the weights are on the GPU.
+
+        CUDA state is per thread: the perception thread must call this too (PerceptionWorker does), otherwise
+        its first real frame pays a multi-second warm-up.
+        """
         dummy = np.zeros((*shape, 3), np.uint8)
         for _ in range(3):
             self.model.predict(dummy, **self._predict_args)
@@ -171,15 +185,23 @@ class Detector:
         self.reset()
 
     def reset(self) -> None:
-        """Forget all tracks (call on a new video segment: seek, loop, source restart)."""
+        """Forget all tracks (call on a new video segment: seek, loop, source restart). Ids stay unique."""
+        self._id_offset = self._max_id
+        self._last_call = None
         self.tracker = self._new_tracker()
 
     def __call__(self, frame: Frame) -> DetectionResult:
         """Detect and track objects in one frame."""
         start = time.perf_counter()
+        if self._last_call is not None and start > self._last_call:
+            self._fps_estimate = 0.9 * self._fps_estimate + 0.1 / (start - self._last_call)
+            # ByteTrack counts its lost-track buffer in processed frames: keep it equal to track_buffer_s seconds.
+            self.tracker.max_frames_lost = max(1, round(self.cfg.tracker.track_buffer_s * self._fps_estimate))
+        self._last_call = start
         result: Any = self.model.predict(frame.image, **self._predict_args)[0]  # type: ignore[index]
         after_predict = time.perf_counter()
         boxes = result.boxes.cpu().numpy()
+        raw_boxes = [(float(b[0]), float(b[1]), float(b[2]), float(b[3])) for b in boxes.xyxy]
         if len(boxes):
             is_vehicle = np.array([self.names[int(c)] in VEHICLE_CLASSES for c in boxes.cls])
             keep = vehicle_duplicate_mask(boxes.xyxy, boxes.conf, is_vehicle, self.cfg.vehicle_dedup_iou)
@@ -190,13 +212,15 @@ class Detector:
 
         tracks = [
             Track(
-                track_id=int(row[4]),
+                track_id=int(row[4]) + self._id_offset,
                 cls=self.names[int(row[6])],
                 conf=float(row[5]),
                 box=(float(row[0]), float(row[1]), float(row[2]), float(row[3])),
             )
             for row in tracked
         ]
+        if tracks:
+            self._max_id = max(self._max_id, max(t.track_id for t in tracks))
         speed = result.speed  # ultralytics' own per-stage ms (synchronized on CUDA)
         timings = {
             "preprocess": float(speed.get("preprocess") or 0.0),
@@ -206,4 +230,4 @@ class Detector:
             "track": (end - after_predict) * 1000,
             "detect_track_total": (end - start) * 1000,
         }
-        return DetectionResult(tracks=tracks, timings_ms=timings)
+        return DetectionResult(tracks=tracks, timings_ms=timings, raw_boxes=raw_boxes)

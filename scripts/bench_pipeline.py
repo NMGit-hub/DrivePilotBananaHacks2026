@@ -7,8 +7,12 @@
 Real-time mode plays the clip at its own speed (frames are skipped if perception falls behind), which is what
 the live camera does; lock-step processes every frame as fast as possible (throughput). The report is written
 to runs/<stamp>_bench/bench.json, and the exit status is 1 if a target is missed.
-Targets (BUILD_PLAN.md M1): real-time processing keeps ≥ 25 of 30 fps; p95 perception time (detect + track +
-ego motion) < 40 ms; model weights on CUDA.
+
+Targets (BUILD_PLAN.md M1), checked in real-time mode:
+- processed fps >= 25/30 of the source frame rate;
+- p95 processing time (detect + track + ego motion) < 40 ms;
+- p95 latency from frame decode to result (processing + waiting for the worker to be free) < 70 ms.
+The detector refuses to start unless its weights are on CUDA in the configured precision.
 """
 
 from __future__ import annotations
@@ -20,6 +24,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import torch
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -30,13 +37,21 @@ from core.runlog import RunRecorder  # noqa: E402
 from perception.detector import Detector  # noqa: E402
 from perception.ego_motion import EgoMotionEstimator  # noqa: E402
 from perception.gpu_monitor import GpuMonitor  # noqa: E402
-from perception.pipeline import PerceptionWorker  # noqa: E402
+from perception.pipeline import PerceptionResult, PerceptionWorker  # noqa: E402
 
 log = get_logger("bench")
 
 DEFAULT_CLIP = "data/videos/dev/stop_sign_turn_lanes_red_light__c4130097-887da34f.mov"
 TARGET_REALTIME_FPS_FRACTION = 25 / 30
-TARGET_P95_PERCEPTION_MS = 40.0
+TARGET_P95_PROCESSING_MS = 40.0
+TARGET_P95_LATENCY_MS = 70.0
+
+
+def _percentiles(values: list[float]) -> dict[str, float]:
+    arr = np.asarray(values, dtype=float)
+    if not arr.size:
+        return {}
+    return {"p50": float(np.percentile(arr, 50)), "p95": float(np.percentile(arr, 95)), "max": float(arr.max())}
 
 
 def run_mode(
@@ -49,13 +64,19 @@ def run_mode(
     recorder: RunRecorder,
 ) -> dict[str, Any]:
     """Run perception over the clip in one mode and return its measurements."""
+    torch.cuda.reset_peak_memory_stats(cfg.perception.device)
     source = FileSource(clip, realtime=realtime)
     worker = PerceptionWorker(
         source, detector, EgoMotionEstimator(cfg.ego_motion), recorder=recorder, perf_interval_s=2.0, gpu=gpu
     )
-    detector.reset()
-    perception_ms: list[float] = []
-    worker.add_listener(lambda r: perception_ms.append(r.timings_ms["detect_track_total"] + r.timings_ms["ego_motion"]))
+    processing_ms: list[float] = []
+    media_times: list[float] = []
+
+    def collect(result: PerceptionResult) -> None:
+        processing_ms.append(result.timings_ms["detect_track_total"] + result.timings_ms["ego_motion"])
+        media_times.append(result.frame.t)
+
+    worker.add_listener(collect)
     source.start()
     worker.start()
     deadline = time.monotonic() + duration if duration else None
@@ -68,30 +89,53 @@ def run_mode(
 
     assert worker.started_at is not None and worker.finished_at is not None
     wall = worker.finished_at - worker.started_at
-    stages = worker.run_stats.summary()
-    import numpy as np
-
-    arr = np.asarray(perception_ms)
-    media_span = source.clock.now() - (cfg.video.file.start_s or 0.0)
     return {
         "mode": "realtime" if realtime else "lockstep",
         "frames_processed": worker.processed,
+        "frame_errors": worker.frame_errors,
         "source_frames_decoded": source.stats.decoded,
         "source_frames_dropped": source.stats.dropped,
         "wall_s": round(wall, 2),
-        "media_s": round(media_span, 2),
+        "media_s": round(media_times[-1] - media_times[0], 2) if len(media_times) > 1 else 0.0,
         "processed_fps": round(worker.processed / wall, 2) if wall > 0 else 0.0,
         "source_fps": round(source.fps, 2),
-        "perception_ms": {
-            "p50": float(np.percentile(arr, 50)),
-            "p95": float(np.percentile(arr, 95)),
-            "max": float(arr.max()),
-        }
-        if arr.size
-        else {},
-        "stages_ms": stages,
+        "processing_ms": _percentiles(processing_ms),
+        "stages_ms": worker.run_stats.summary(),
         "gpu_samples": worker.gpu_samples,
+        "torch_peak_mb": round(torch.cuda.max_memory_allocated(cfg.perception.device) / 1e6, 1),
     }
+
+
+def build_checks(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compare the real-time run with the M1 targets."""
+    checks: list[dict[str, Any]] = []
+    for r in results:
+        if r["mode"] != "realtime":
+            continue
+        fps_target = round(TARGET_REALTIME_FPS_FRACTION * r["source_fps"], 1)
+        processing = r["processing_ms"].get("p95", float("inf"))
+        latency = r["stages_ms"].get("latency", {}).get("p95", float("inf"))
+        checks += [
+            {
+                "name": "real-time processed fps",
+                "value": r["processed_fps"],
+                "target": f">= {fps_target}",
+                "ok": r["processed_fps"] >= fps_target,
+            },
+            {
+                "name": "p95 processing ms (detect + track + ego)",
+                "value": round(processing, 1),
+                "target": f"< {TARGET_P95_PROCESSING_MS}",
+                "ok": processing < TARGET_P95_PROCESSING_MS,
+            },
+            {
+                "name": "p95 decode-to-result latency ms",
+                "value": round(latency, 1),
+                "target": f"< {TARGET_P95_LATENCY_MS}",
+                "ok": latency < TARGET_P95_LATENCY_MS,
+            },
+        ]
+    return checks
 
 
 def print_report(report: dict[str, Any]) -> None:
@@ -102,18 +146,18 @@ def print_report(report: dict[str, Any]) -> None:
     for mode in report["modes"]:
         print(
             f"\n[{mode['mode']}] processed {mode['frames_processed']} frames in {mode['wall_s']} s "
-            f"= {mode['processed_fps']} fps (source {mode['source_fps']} fps, dropped {mode['source_frames_dropped']})"
+            f"= {mode['processed_fps']} fps (source {mode['source_fps']} fps, dropped {mode['source_frames_dropped']},"
+            f" frame errors {mode['frame_errors']})"
         )
         print(f"  {'stage':22s} {'p50':>8s} {'p95':>8s} {'max':>8s}  (ms)")
         for key, s in mode["stages_ms"].items():
             print(f"  {key:22s} {s['p50']:8.2f} {s['p95']:8.2f} {s['max']:8.2f}")
-        if mode["gpu_samples"]:
-            peak = max(s.get("torch_peak_mb", 0) for s in mode["gpu_samples"])
-            dev = max(s.get("device_used_mb", 0) for s in mode["gpu_samples"])
-            util = [s.get("gpu_util_pct", 0) for s in mode["gpu_samples"]]
-            print(
-                f"  GPU: torch peak {peak:.0f} MB, device used max {dev:.0f} MB, util avg {sum(util) / len(util):.0f}%"
-            )
+        util = [s.get("gpu_util_pct", 0.0) for s in mode["gpu_samples"]]
+        dev = max((s.get("device_used_mb", 0.0) for s in mode["gpu_samples"]), default=0.0)
+        print(
+            f"  GPU: torch peak {mode['torch_peak_mb']:.0f} MB, device used max {dev:.0f} MB"
+            + (f", util avg {sum(util) / len(util):.0f}%" if util else "")
+        )
     print("\ntargets:")
     for check in report["checks"]:
         print(f"  [{'PASS' if check['ok'] else 'FAIL'}] {check['name']}: {check['value']} (target {check['target']})")
@@ -138,38 +182,17 @@ def main(argv: list[str] | None = None) -> int:
     ) as recorder:
         setup_logging(cfg.logging.level, log_file=recorder.log_file, secrets=cfg.secrets.values())
         gpu = GpuMonitor(cfg.perception.device)
-        others = gpu.other_gpu_processes()
+        others = set(gpu.other_gpu_processes())
         detector = Detector(cfg.perception, cfg.root)
         modes = ["realtime", "lockstep"] if args.mode == "both" else [args.mode]
         results = [run_mode(cfg, clip, m == "realtime", args.duration, detector, gpu, recorder) for m in modes]
-        others = sorted(set(others) | set(gpu.other_gpu_processes()))
-
-        checks = []
-        for r in results:
-            if r["mode"] == "realtime":
-                fps_target = round(TARGET_REALTIME_FPS_FRACTION * r["source_fps"], 1)
-                checks.append(
-                    {
-                        "name": "real-time processed fps",
-                        "value": r["processed_fps"],
-                        "target": f">= {fps_target}",
-                        "ok": r["processed_fps"] >= fps_target,
-                    }
-                )
-            p95 = r["perception_ms"].get("p95", float("inf"))
-            checks.append(
-                {
-                    "name": f"p95 perception ms ({r['mode']})",
-                    "value": round(p95, 1),
-                    "target": f"< {TARGET_P95_PERCEPTION_MS}",
-                    "ok": p95 < TARGET_P95_PERCEPTION_MS,
-                }
-            )
+        others |= set(gpu.other_gpu_processes())
+        checks = build_checks(results)
         report = {
             "clip": str(clip),
             "imgsz": cfg.perception.imgsz,
             "half": cfg.perception.half,
-            "other_gpu_processes": others,
+            "other_gpu_processes": sorted(others),
             "modes": results,
             "checks": checks,
         }

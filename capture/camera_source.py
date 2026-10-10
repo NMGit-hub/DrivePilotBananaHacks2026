@@ -14,7 +14,9 @@ import re
 import shutil
 import socket
 import subprocess
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,7 @@ log = get_logger(__name__)
 
 DEVICE_SERVER_PATH = "/data/local/tmp/scrcpy-server.jar"
 CONNECT_TIMEOUT_S = 8.0
+_READ_POLL_S = 0.5  # socket timeout: how often a blocked read checks for stop / stalls
 
 
 class CameraError(RuntimeError):
@@ -128,6 +131,7 @@ class ScrcpyCameraSource(VideoSource):
         self.frame_size: tuple[int, int] | None = None
         self.bad_packets = 0
         self.decoder_backend = ""
+        self._server_log: deque[str] = deque(maxlen=50)  # last lines of scrcpy-server output (for errors)
 
     @property
     def is_live(self) -> bool:
@@ -212,6 +216,8 @@ class ScrcpyCameraSource(VideoSource):
             fps=self.cfg.fps,
         )
         self._server = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # Drain the server's output continuously: an unread pipe fills up and can stall adb and the stream.
+        threading.Thread(target=self._drain_server_log, args=(self._server,), name="scrcpy-log", daemon=True).start()
         self._sock = self._connect()
         info = read_stream_info(self._read_exactly, expect_dummy_byte=False)  # dummy byte consumed by _connect
         self.device_name = info.device_name
@@ -226,12 +232,12 @@ class ScrcpyCameraSource(VideoSource):
         last_error = "timeout"
         while time.monotonic() < deadline:
             if self._server is not None and self._server.poll() is not None:
-                err = (self._server.stderr.read() if self._server.stderr else b"").decode(errors="replace")
-                raise CameraError(f"scrcpy-server exited: {err.strip()[-500:]}")
+                time.sleep(0.2)  # let the drain thread collect the last lines
+                raise CameraError(f"scrcpy-server exited: {' | '.join(self._server_log)[-500:]}")
             sock = socket.create_connection(("127.0.0.1", self._port), timeout=2.0)
             try:
                 if sock.recv(1):
-                    sock.settimeout(5.0)
+                    sock.settimeout(_READ_POLL_S)
                     return sock
                 last_error = "connection closed before the server was ready"
             except OSError as exc:
@@ -240,22 +246,46 @@ class ScrcpyCameraSource(VideoSource):
             time.sleep(0.1)
         raise CameraError(f"could not connect to scrcpy-server: {last_error}")
 
+    def _drain_server_log(self, server: subprocess.Popen[bytes]) -> None:
+        assert server.stderr is not None
+        for raw in iter(server.stderr.readline, b""):
+            line = raw.decode(errors="replace").strip()
+            if line:
+                self._server_log.append(line)
+                if "ERROR" in line or "WARN" in line:
+                    log.warning("scrcpy-server", line=line)
+
     def _read_exactly(self, n: int) -> bytes:
-        assert self._sock is not None
+        sock = self._sock
+        if sock is None:
+            raise ConnectionAbortedError("camera closed")
         buf = bytearray(n)
         view = memoryview(buf)
         got = 0
+        last_data = time.monotonic()
         while got < n:
             if self._stop.is_set():
                 raise ConnectionAbortedError("stopping")
             try:
-                k = self._sock.recv_into(view[got:], n - got)
+                k = sock.recv_into(view[got:], n - got)
             except TimeoutError:
-                continue  # no data for 5 s: keep waiting unless stopping
+                if time.monotonic() - last_data > self.cfg.stall_timeout_s:
+                    raise ConnectionError(f"no video from the phone for {self.cfg.stall_timeout_s:.0f} s") from None
+                continue
             if k == 0:
                 raise ConnectionError("scrcpy stream closed")
             got += k
+            last_data = time.monotonic()
         return bytes(buf)
+
+    def stop(self) -> None:
+        """Stop promptly: shut the socket down first so a blocked read returns immediately."""
+        self._stop.set()
+        sock = self._sock
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+        super().stop()
 
     def _run(self) -> None:
         decoder, backend = create_h264_decoder(self.cfg.decoder)
@@ -263,12 +293,15 @@ class ScrcpyCameraSource(VideoSource):
         log.info("camera decoder", backend=backend)
         pending_config = b""
         index = 0
+        segment = -1
         try:
             while not self._stop.is_set():
                 item = read_next(self._read_exactly)
                 if isinstance(item, SessionHeader):
+                    # A new capture session (start, rotation, resolution change): downstream state must reset.
+                    segment += 1
                     self.frame_size = (item.width, item.height)
-                    log.info("camera session", width=item.width, height=item.height)
+                    log.info("camera session", width=item.width, height=item.height, segment=segment)
                     continue
                 assert isinstance(item, MediaPacket)
                 if item.config:
@@ -288,7 +321,15 @@ class ScrcpyCameraSource(VideoSource):
                     continue
                 for decoded in decoded_frames:
                     image = frame_to_bgr(decoded)
-                    self._publish(Frame(image=image, t=self.clock.now(), index=index, captured_at=time.monotonic()))
+                    self._publish(
+                        Frame(
+                            image=image,
+                            t=self.clock.now(),
+                            index=index,
+                            captured_at=time.monotonic(),
+                            segment=max(segment, 0),
+                        )
+                    )
                     index += 1
         except (OSError, ProtocolError) as exc:  # OSError includes ConnectionError and a socket closed by stop()
             if not self._stop.is_set():

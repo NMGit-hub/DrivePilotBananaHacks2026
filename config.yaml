@@ -19,6 +19,7 @@ video:
     height: 1080
     fps: 30
     bitrate_mbps: 8.0
+    stall_timeout_s: 3.0    # no video bytes for this long = camera stalled (error, the app restarts it)
     decoder: auto           # auto = hardware H.264 decoding (D3D11VA, then CUDA), software as a last resort
 
 gps:

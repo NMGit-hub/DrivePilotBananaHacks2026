@@ -12,8 +12,11 @@ label, the detected stop start and end are within ±0.5 s, and there are no fals
 from __future__ import annotations
 
 import argparse
+import hashlib
 import itertools
+import json
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +30,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from capture.file_source import FileSource  # noqa: E402
 from core.config import AppConfig, EgoMotionConfig, load_config  # noqa: E402
 from core.logging_setup import setup_logging  # noqa: E402
+from core.types import Frame  # noqa: E402
 from perception.ego_motion import EgoMotionEstimator, StopStateMachine  # noqa: E402
 
 LABELS = REPO_ROOT / "eval" / "ego_stop_labels.yaml"
@@ -54,9 +58,27 @@ def clip_path(cfg: AppConfig, bdd_id: str) -> Path:
     return matches[0]
 
 
+def perception_key(cfg: AppConfig) -> str:
+    """Short hash of every detector/tracker setting, so cached detections never go stale."""
+    blob = json.dumps(cfg.perception.model_dump(mode="json"), sort_keys=True)
+    return hashlib.sha1(blob.encode()).hexdigest()[:10]
+
+
+def read_all(source: FileSource) -> Iterator[Frame]:
+    """Yield every frame of a lock-step source; a timeout before the end is an error, not a short clip."""
+    while True:
+        frame = source.read(timeout=30)
+        if frame is not None:
+            yield frame
+        elif source.finished:
+            return
+        else:
+            raise RuntimeError(f"timed out reading {source.name}")
+
+
 def detector_boxes(cfg: AppConfig, path: Path) -> dict[int, list[tuple[float, float, float, float]]]:
     """Boxes per frame index from YOLO26s + ByteTrack (cached)."""
-    cache = CACHE / f"boxes_{path.stem.split('__')[-1]}_{cfg.perception.imgsz}.npz"
+    cache = CACHE / f"boxes_{path.stem.split('__')[-1]}_{perception_key(cfg)}.npz"
     if cache.exists():
         data = np.load(cache, allow_pickle=False)
         return {int(i): [tuple(b) for b in data[f"f{int(i)}"]] for i in data["indices"]}
@@ -66,8 +88,8 @@ def detector_boxes(cfg: AppConfig, path: Path) -> dict[int, list[tuple[float, fl
     source = FileSource(path, realtime=False)
     source.start()
     boxes: dict[int, list[tuple[float, float, float, float]]] = {}
-    while (frame := source.read(timeout=10)) is not None:
-        boxes[frame.index] = [t.box for t in detector(frame).tracks]
+    for frame in read_all(source):
+        boxes[frame.index] = detector(frame).raw_boxes
     source.stop()
     CACHE.mkdir(parents=True, exist_ok=True)
     arrays = {f"f{i}": np.asarray(b, dtype=np.float32).reshape(-1, 4) for i, b in boxes.items()}
@@ -85,7 +107,7 @@ def measure_clip(cfg: AppConfig, ego_cfg: EgoMotionConfig, bdd_id: str) -> ClipM
     ts: list[float] = []
     values: dict[str, list[float | None]] = {m: [] for m in METRICS}
     shorts: dict[str, list[float | None]] = {m: [] for m in METRICS}
-    while (frame := source.read(timeout=10)) is not None:
+    for frame in read_all(source):
         short, long, _ = estimator.measure(frame, boxes.get(frame.index, []))
         ts.append(frame.t)
         for m in METRICS:
