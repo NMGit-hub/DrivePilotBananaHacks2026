@@ -114,8 +114,11 @@ class FileSource(VideoSource):
         return paused
 
     def seek_relative(self, delta_s: float) -> None:
-        """Skip by `delta_s` seconds from the current playback time (clamped to the clip)."""
-        self.seek_to(self._media_clock.now() + delta_s)
+        """Skip by `delta_s` seconds from the current playback time (clamped to the clip); from a seek still
+        pending if there is one, so two quick presses of an arrow key add up."""
+        with self._ctrl_lock:
+            base = self._pending_seek if self._pending_seek is not None else self._media_clock.now()
+        self.seek_to(base + delta_s)
 
     def seek_to(self, t: float) -> None:
         """Jump to media time `t` seconds (clamped to the clip; with `loop`, any time from 0 on)."""

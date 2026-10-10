@@ -185,6 +185,26 @@ def test_seek_relative_is_clamped(clip: Path) -> None:
     assert seg1 and seg1[0].t == pytest.approx(0.0, abs=0.05)
 
 
+def test_two_quick_relative_seeks_add_up(clip: Path) -> None:
+    source = FileSource(clip, realtime=True)
+    source.start()
+    source.seek_to(2.5)
+    source.toggle_pause()  # (nothing moves while the two seeks are pending)
+    time.sleep(0.3)
+    while source.read(timeout=0.1) is not None:
+        pass
+    start = source.clock.now()
+    source.seek_relative(-1.0)
+    source.seek_relative(-1.0)
+    shown = None
+    for _ in range(10):
+        shown = source.read(timeout=1.0)
+        if shown is not None and shown.segment >= 1:
+            break
+    source.stop()
+    assert shown is not None and shown.t == pytest.approx(start - 2.0, abs=0.1)
+
+
 def test_start_offset(clip: Path) -> None:
     source = FileSource(clip, realtime=False, start_s=1.0)
     source.start()
