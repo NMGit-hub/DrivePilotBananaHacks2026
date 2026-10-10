@@ -9,9 +9,13 @@ to be in, which roundabout exit, what a sign means, whether you can park here.
 - **Model only when needed:** sign, parking, traffic-light, lane and road questions go to a vision-language
   model (Claude Haiku by default; Gemini Flash or a local Ollama model via `config.yaml`) with the latest frames.
 - **Navigation:** Mapbox route + phone GPS for lane guidance, roundabout exits and route questions.
+- **V2 (in progress):** an overlay screen (car badges for the 4-way stop, the light's state, pedestrians, the
+  navigation banner with lanes, speed and speed limit), "what was that sign?" with the frame it answered from,
+  the object an answer is about pulsing on screen, "find me a parking spot", and the fine-tuned US sign detector
+  ("Speed limit is now 35."). Pedestrian alerts and YOLOPv2 lanes/drift are being built.
 
-See [PLAN.md](PLAN.md) for the full design and [PROGRESS.md](PROGRESS.md) for current status.
-This repository is building **V1** (the base app); V2 extras come later.
+See [PLAN.md](PLAN.md) for the full design, [V2_BUILD_PLAN.md](V2_BUILD_PLAN.md) for V2 and
+[PROGRESS.md](PROGRESS.md) for current status, measurements and known limits.
 
 ## Requirements
 
@@ -65,10 +69,13 @@ adb reverse tcp:8000 tcp:8000
 .venv/Scripts/python -m app --camera
 ```
 
-- The screen is at <http://localhost:8000/>: the video, plus your question and the answer as text.
-  Hotkeys: **space** pause, **←/→** skip 5 s, **Q** type a question.
+- The screen is at <http://localhost:8000/>: the video with its overlays (each frame and its boxes arrive in
+  one message), the navigation banner, speed and speed limit, and the conversation as text. The plain V1 screen
+  is at <http://localhost:8000/v1> (or `ui.overlays: false`). Hotkeys: **space** pause, **←/→** skip 5 s,
+  **Q** type a question.
 - Say **"Hey DrivePilot"**, then the question ("who got here first?", "which lane for 520 east?",
-  "I'm going to Redmond Town Center", "tell me when it's green", "quiet mode", "repeat that", "stop").
+  "I'm going to Redmond Town Center", "tell me when it's green", "what was that sign?", "help me find a
+  parking spot", "quiet mode", "repeat that", "stop").
 - On the phone, open <http://localhost:8000/gps> and tap Start: it sends the location once a second.
 - Options: `--no-voice` (typed questions only), `--no-audio` (answers on the screen only), `--gpx track.gpx`,
   `--ask "22.5=who got here first?"` (a typed question at a video time), `--exit-at-end`,
@@ -90,6 +97,10 @@ For drives: plug the laptop into its own charger and set Windows to **Best perfo
 .venv/Scripts/python scripts/eval_traffic_lights.py    # traffic-light reading vs hand labels
 .venv/Scripts/python scripts/ask_model.py --suite eval/model_questions.yaml   # vision model on dev frames
 .venv/Scripts/python scripts/fetch_route.py --from 47.6158,-122.2037 --to "Redmond Town Center"
+.venv/Scripts/python eval/run_sheet.py                 # the test sheet: every question at its moment, judged
+.venv/Scripts/python scripts/cache_perception.py --labels eval/parking_labels.yaml --videos data/videos/parking_lot
+.venv/Scripts/python scripts/eval_parking.py           # parking spots vs hand-labeled lot clips (cached perception)
+.venv/Scripts/python scripts/find_bdd_clips.py --scene "parking lot" --min-crawl-s 15 --max-mph 15 --fetch 10
 ```
 
 ## Configuration
@@ -103,6 +114,9 @@ Everything lives in [config.yaml](config.yaml); API keys come from `.env`. The m
 | `vision_model` | Which vision-language provider answers scene questions: `claude` (default, Claude Haiku), `gemini`, `ollama` or `mock`. |
 | `nav.home` | The address for "take me home". |
 | `voice.wakeword.threshold` | Wake-word sensitivity (0.25; lower hears more, with more false wakes). |
+| `ui.overlays` | The V2 overlay screen (default) or the plain V1 one. |
+| `vision.mark_objects` | Number the tracked objects on the frame sent to the model, so its answer can point at one. |
+| `parking.*`, `memory.*`, `sign_alerts.*` | V2: the parking spot finder, "what was that sign?", sign alerts. |
 
 ## Tests
 
