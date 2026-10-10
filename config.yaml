@@ -144,15 +144,16 @@ voice:
   output_volume: 1.0        # 0-1; benchmarks run quieter
   wakeword:                 # "Hey DrivePilot" (openWakeWord model trained by scripts/wakeword)
     model: models/wakeword/hey_drivepilot.onnx
-    threshold: 0.25         # chosen on validation data (models/wakeword/metrics.json)
+    threshold: 0.15         # real voices (scripts/wakeword/check_real.py): 0.25 missed clear takes; still 0
+                            #   false wakes per hour on 21 h of speech + car noise down to 0.10 (metrics.json)
     debounce_s: 2.0
   endpoint:                 # when the question has ended (Silero VAD)
     speech_threshold: 0.5
-    end_silence_s: 0.6      # PLAN.md: stop listening after ~0.6 s of silence
+    end_silence_s: 0.5      # PLAN.md says ~0.6 s; 0.5 keeps local answers under 1 s and cut off none of the real takes
     speculative_silence_s: 0.25  # start transcribing early; kept if the silence lasts
     no_speech_timeout_s: 4.0
     max_utterance_s: 10.0
-    pre_roll_s: 0.4
+    pre_roll_s: 1.5         # the whole wake phrase goes to Whisper (a cut one garbles the question's first word)
   stt:                      # faster-whisper on the GPU
     model: small.en
     device: cuda

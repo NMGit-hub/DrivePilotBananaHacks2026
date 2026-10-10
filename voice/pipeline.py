@@ -95,6 +95,9 @@ class VoicePipeline:
         self._samples += len(chunk)
         t = self.t
         fired = self.wake.process(chunk, t)
+        # Before the pre-roll is taken: the chunk the wake word fired in belongs to the question's audio (missing
+        # it left an 80 ms hole right after "Hey DrivePilot" that garbled the first word, on real voices).
+        self._ring.append(chunk)
         if self._endpointer.active:
             event = self._endpointer.feed(chunk, t)
             if event is not None:
@@ -114,7 +117,6 @@ class VoicePipeline:
                     self.on_wake()
                 except Exception:
                     log.exception("on_wake failed")
-        self._ring.append(chunk)
 
     def _handle(self, event: EndpointEvent, t: float) -> None:
         if event.kind == "speculate":

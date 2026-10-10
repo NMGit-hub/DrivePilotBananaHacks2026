@@ -95,8 +95,9 @@ def test_question_ends_after_the_silence_with_a_speculation_first() -> None:
     kinds = [k for _, k, _ in events]
     assert kinds == ["speculate", "end"]
     (spec_t, _, spec_end), (end_t, _, end_speech) = events
-    assert 2.0 + 0.25 <= spec_t <= 2.0 + 0.25 + 0.15
-    assert 2.0 + 0.6 <= end_t <= 2.0 + 0.6 + 0.15
+    cfg = EndpointConfig()
+    assert 2.0 + cfg.speculative_silence_s <= spec_t <= 2.0 + cfg.speculative_silence_s + 0.15
+    assert 2.0 + cfg.end_silence_s <= end_t <= 2.0 + cfg.end_silence_s + 0.15
     assert end_speech == pytest.approx(2.0, abs=0.04) and spec_end == end_speech
 
 
@@ -168,6 +169,30 @@ def test_pipeline_wakes_collects_and_uses_the_speculative_transcript() -> None:
     assert len(heard) == 1 and heard[0].text == "who got here first?" and heard[0].speculative
     assert len(stt.calls) == 1  # the speculation was used: Whisper ran once
     assert stt.calls[0] >= round(cfg.endpoint.pre_roll_s * SAMPLE_RATE)  # the pre-roll is part of the question
+
+
+def test_the_question_audio_has_no_gap_after_the_wake_word() -> None:
+    # The chunk the wake word fired in used to be left out of the question's audio: an 80 ms hole right after
+    # "Hey DrivePilot" that made Whisper mishear the first word on real voices ("tell me" -> "only one").
+    cfg = load_config().voice
+    received: list[np.ndarray] = []
+
+    class RecordingStt(FakeStt):
+        def transcribe(self, audio: np.ndarray) -> tuple[str, float]:
+            received.append(audio)
+            return super().transcribe(audio)
+
+    pipe = VoicePipeline(
+        cfg, FakeWake([1.0]), RecordingStt(), lambda q: None, vad=FakeVad([(0.2, 1.8)]), answer_in_thread=False
+    )  # type: ignore[arg-type]
+    stream = (np.arange(5 * SAMPLE_RATE) % 20000).astype(np.int16)  # every sample different from its neighbour
+    for k in range(0, len(stream), CHUNK):
+        pipe.feed(stream[k : k + CHUNK])
+    pipe.flush()
+    audio = np.round(received[-1] * 32768.0).astype(np.int64)
+    steps = np.diff(audio) % 20000
+    assert np.all(steps == 1)  # contiguous: no chunk missing anywhere
+    assert len(audio) > round(cfg.endpoint.pre_roll_s * SAMPLE_RATE)
 
 
 def test_wake_during_a_question_is_ignored_and_empty_transcripts_are_dropped() -> None:

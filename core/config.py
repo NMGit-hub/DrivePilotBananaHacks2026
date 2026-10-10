@@ -415,7 +415,9 @@ class WakeWordConfig(_Strict):
     """openWakeWord "Hey DrivePilot" (voice/wakeword.py)."""
 
     model: ConfigPath = Path("models/wakeword/hey_drivepilot.onnx")
-    threshold: float = Field(0.25, gt=0.0, lt=1.0, description="Chosen on validation data (scripts/wakeword).")
+    threshold: float = Field(
+        0.15, gt=0.0, lt=1.0, description="0 false wakes/h down to 0.10 (metrics.json); real voices need <= 0.2."
+    )
     debounce_s: float = Field(2.0, ge=0.0, description="Ignore further triggers for this long after one.")
 
 
@@ -423,13 +425,20 @@ class EndpointConfig(_Strict):
     """When the question ends: Silero VAD after the wake word (voice/endpoint.py)."""
 
     speech_threshold: float = Field(0.5, gt=0.0, lt=1.0, description="VAD probability that counts as speech.")
-    end_silence_s: float = Field(0.6, gt=0.0, description="PLAN.md: stop listening after ~0.6 s of silence.")
+    end_silence_s: float = Field(
+        0.5, gt=0.0, description="PLAN.md: ~0.6 s; 0.5 keeps local answers under 1 s (real takes not cut off)."
+    )
     speculative_silence_s: float = Field(
         0.25, ge=0.0, description="Start transcribing after this much silence (kept if the silence lasts)."
     )
     no_speech_timeout_s: float = Field(4.0, gt=0.0, description="Give up if nothing is said after the wake word.")
     max_utterance_s: float = Field(10.0, gt=0.0)
-    pre_roll_s: float = Field(0.4, ge=0.0, description="Audio kept from just before the wake word fired.")
+    pre_roll_s: float = Field(
+        1.5,
+        ge=0.0,
+        description="Audio kept from before the wake word fired: the whole phrase, so Whisper "
+        'hears it intact (a cut "...lot, tell me" was misheard on real voices).',
+    )
 
 
 class SttConfig(_Strict):
