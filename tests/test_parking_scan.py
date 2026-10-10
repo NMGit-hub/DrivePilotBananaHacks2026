@@ -332,18 +332,18 @@ def test_score_scan_ties_announcements_to_the_labels() -> None:
         scan(4.0, report(4.0, cars=2)),  # left spot, 1 s early: a hit
         scan(6.0, report(6.0, cars=4)),  # left again, further ahead: a new announcement, a repeat of the same spot
         scan(14.0, report(14.0, side="right", cars=0, before=None), latency=2.0),  # right target
-        # in both right windows (the open run and the handicap stall): the target is the one matched
-        scan(20.0, report(20.0, side="right", cars=3, before="red car")),
+        # the open run again (a spot that never leaves the frame matches for 8 s after it became visible)
+        scan(17.0, report(17.0, side="right", cars=3, before="red car")),
         scan(31.0, report(31.0, cars=1, before="blue van")),  # look-alike
-        scan(36.0, report(36.0, side="right", cars=5, before="black SUV")),  # right target window (never passed)
+        scan(36.0, report(36.0, side="right", cars=5, before="black SUV")),  # long after: no window, false alarm
         scan(37.0, report(37.0, cars=1, before="green car")),  # nothing labeled: false alarm
     ]
     s = score_scan(clip(), 40.0, results)
     assert s.targets == [0, 1]
     assert s.hits[0].t == 4.0 and s.hits[1].t == 14.0
     assert s.matches[3].spot == clip().spots[1]
-    assert [m.repeat for m in s.matches] == [False, True, False, True, False, True, False]
-    assert [m.false_alarm for m in s.matches] == [False, False, False, False, True, False, True]
+    assert [m.repeat for m in s.matches] == [False, True, False, True, False, False, False]
+    assert [m.false_alarm for m in s.matches] == [False, False, False, False, True, True, True]
     assert s.matches[4].look_alike is not None and s.matches[6].look_alike is None
 
     summary = summarize_scan([s])
@@ -353,9 +353,9 @@ def test_score_scan_ties_announcements_to_the_labels() -> None:
         1,
         1,
     )
-    assert (summary.false_alarms, summary.look_alike_hits, summary.repeats, summary.announcements) == (2, 1, 3, 7)
+    assert (summary.false_alarms, summary.look_alike_hits, summary.repeats, summary.announcements) == (3, 1, 2, 7)
     assert summary.recall == 1.0 and summary.recall_with_neighbour == 1.0 and summary.recall_without_neighbour == 1.0
-    assert summary.false_per_10min == pytest.approx(10.0 * 2 / (40.0 / 60.0))
+    assert summary.false_per_10min == pytest.approx(10.0 * 3 / (40.0 / 60.0))
     assert summary.delays == (-1.0, 4.0) and summary.spoken_delays == (0.0, 6.0)
     assert summary.late == 0 and summary.restricted == 0
     d = summary.as_dict()
@@ -365,7 +365,7 @@ def test_score_scan_ties_announcements_to_the_labels() -> None:
 def test_announcing_a_restricted_labeled_spot_is_counted() -> None:
     handicap = [scan(21.0, report(21.0, side="right", cars=0, before=None, restriction="ev"))]  # misread as EV
     s = score_scan(clip(), 40.0, handicap)
-    assert s.matches[0].spot == clip().spots[1]  # the open run's window wins
+    assert s.matches[0].spot == clip().spots[2]  # (the open run's window ended at 18 s)
     narrow = ClipLabels("n", "lot_aisles", True, ((0.0, 40.0),), None, clip().spots[2:], (), ())
     summary = summarize_scan([score_scan(narrow, 40.0, handicap)])
     assert summary.restricted == 1 and summary.false_alarms == 0 and summary.targets == 0

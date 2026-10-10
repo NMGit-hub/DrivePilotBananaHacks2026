@@ -373,7 +373,7 @@ class ParkingConfig(_Strict):
     curb_pitch_m: float = Field(6.0, gt=0.0, description="Parallel-parked car spacing (car length + ~1 m).")
     pitch_window_s: float = Field(6.0, gt=0.0, description="Spacings measured over this long give the pitch.")
     pitch_ratio_min: float = Field(0.6, gt=0.0, description="Only neighbour spacings from this many prior pitches...")
-    pitch_ratio_max: float = Field(1.5, gt=0.0, description="...to this many measure the pitch (gaps are larger).")
+    pitch_ratio_max: float = Field(1.5, gt=0.0, description="...to this many (x scale_max) measure the pitch.")
     pitch_min_samples: int = Field(6, ge=1, description="Spacings needed before the measured pitch is used.")
     scale_min: float = Field(
         0.75,

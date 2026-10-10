@@ -280,8 +280,11 @@ class Assistant:
         return self._model(r, snap, cancel), "model"
 
     def _highlight_next(self, snap: WorldSnapshot) -> None:
-        """A right-of-way answer is about the car that goes next: the page pulses it."""
-        ahead = local.ahead_of_us(snap.queue) if snap.queue.active else []
+        """A right-of-way answer is about the car that goes next: the page pulses it. Not in a deadlock (nobody
+        has the right of way) or while we move (the answer is a refusal)."""
+        queue = snap.queue
+        settled = queue.active and not queue.deadlock and snap.ego_stopped and snap.ego_motion_confident
+        ahead = local.ahead_of_us(queue) if settled else []
         if self.on_highlight is not None and ahead and ahead[0].track_id is not None:
             try:
                 self.on_highlight(ahead[0].track_id)

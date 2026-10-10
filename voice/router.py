@@ -504,7 +504,7 @@ _LANE = _rx(
 # "What was that sign?": something we already passed (V2-M4). The vision model gets the last seconds of frames
 # and the close-ups of the signs seen (intent "memory"); "what does that sign say?" (in view now) stays a scene
 # question.
-_PASSED = r"(?:passed|pass|went past|drove past|drove by|went by|go past|go by)"
+_PASSED = r"(?:passed|went past|drove past|drove by|went by)"  # (past tense: "if I go past the school" is not)
 _MEMORY = _rx(
     r"\bwhat (?:was|were) (?:that|those|the|this|these) (?:last |previous )?(?:\w+ ){0,2}?(?:signs?|board|billboard)\b",
     r"\bwhat did (?:that|the|this|those|these) (?:last |previous )?(?:\w+ ){0,2}?(?:signs?|board|billboard) "
@@ -512,9 +512,11 @@ _MEMORY = _rx(
     r"\bwhat (?:was|did|were) (?:that|it|those|we)\b.*\b(?:just )?" + _PASSED + r"\b",
     rf"\b(?:we|i) (?:just )?{_PASSED}\b.*\b(?:what|which|was|did)\b",
     rf"\b(?:what|which) (?:\w+ ){{0,3}}(?:did )?(?:we|i) (?:just )?{_PASSED}\b",
-    r"\bback there\b",
+    r"\b(?:was|were|did|said)\b.*\bback there\b",
+    r"\bdid (?:we|i) (?:just )?(?:pass|go past|drive past|go by|drive by)\b",
     r"^(?:what was that|what were those|what was it)$",
-    r"\bdid you (?:see|catch|read) (?:that|the|what|those)\b",
+    r"\bdid you (?:see|catch|read) (?:what (?:that|the|those) (?:\w+ )?(?:said|says|say)|(?:that|the|those) "
+    r"(?:\w+ )?signs?)\b",
     r"\bwhat was the (?:speed limit|limit|name of (?:that|the) \w+)\b",
 )
 

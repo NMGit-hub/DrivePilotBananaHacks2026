@@ -46,7 +46,7 @@ from answers.vision import (
 from core.config import AppConfig
 from core.logging_setup import get_logger
 from core.types import Frame
-from perception.detector import Track
+from perception.detector import Track, is_own_hood
 from state.memory import SceneMemory
 from state.stop_queue import Approach
 from state.traffic_light import LightColor
@@ -94,11 +94,28 @@ MEMORY_PROMPT = (
     "image numbers."
 )
 MEMORY_REMINDER = "(End with the tag of the image that shows it best, e.g. [image 2].)"
-TAG = re.compile(r"\s*[\[(]\s*(ref|image|img)\s*#?\s*(\d{1,3})\s*[\])]", re.IGNORECASE)
+# Hidden tags: "[ref 3]", "(ref: 3)", "[image 2]", "[ref 1, ref 2]", a bare "Ref 1." and one cut off at the end of
+# the reply ("... [ref 1").
+_TAG_NUM = r"\d{1,3}(?:\s*(?:,|and|&)\s*(?:(?:ref|image|img)s?\s*[:#]?\s*)?\d{1,3})*"
+TAG = re.compile(
+    rf"\s*[\[(]\s*(ref|image|img)s?\s*[:#]?\s*({_TAG_NUM})\s*(?:[\])]|$)|\s*\b(ref)\s*[:#]?\s*({_TAG_NUM})\b\.?",
+    re.IGNORECASE,
+)
+# Mark or image numbers said out loud despite the prompt: "Car #1", "the car (1)", "object 1", "in image 2", ...
+# (not "marked 35", "labeled 25" or "[EXIT ONLY]": those are sign text).
 STRAY_MARK = re.compile(
-    r"\s*\((?:marked |box |tag |number |object |#)\s*#?\d{1,3}\)"
-    r"|\s+(?:marked|tagged|labeled|labelled) (?:as )?#?\d{1,3}\b"
-    r"|\s*\[[^\]]{0,24}\]",
+    r"\s*,?\s*\b(?:in|from|on)\s+(?:the\s+)?(?:image|img|frame|picture)\s*#?\d{1,3}\b,?"
+    r"|\s*\b(?:in|at|inside)\s+(?:the\s+)?(?:box|mark|tag)\s*#?\d{1,3}\b"
+    r"|\s*\((?:marked |box |tag |object |mark |#)?\s*#?\d{1,3}\)"
+    r"|\s*#\d{1,3}\b"
+    r"|\s*\[\s*#?\d{1,3}\s*\]",
+    re.IGNORECASE,
+)
+STRAY_OBJECT = re.compile(r"\b(?:the\s+)?(?:object|box|mark|image|img|frame)\s*#?\d{1,3}\b", re.IGNORECASE)
+# "the car number 1" (a mark number after an object noun; "lane number 2" is a real lane)
+OBJECT_NUMBER = re.compile(
+    r"\b(cars?|bus(?:es)?|vans?|suvs?|trucks?|lights?|signs?|person|people|cyclists?|pedestrians?|vehicles?)"
+    r"\s+(?:number|no\.|(?:marked|tagged|labeled|labelled)(?: as)?)\s*#?\d{1,3}\b",
     re.IGNORECASE,
 )
 MARK_COLORS = {"vehicle": (255, 220, 60), "person": (40, 190, 255), "light": (200, 200, 200), "sign": (90, 90, 255)}
@@ -188,12 +205,16 @@ class Mark:
     color: str = ""  # a vehicle's color name, if known
 
 
-def pick_marks(snapshot: WorldSnapshot, tracks: Sequence[Track], limit: int) -> list[Mark]:
-    """The objects worth numbering on the latest frame: vehicles, people and stop signs (nearest = largest first),
-    then the lights; at most `limit`."""
+def pick_marks(
+    snapshot: WorldSnapshot, tracks: Sequence[Track], limit: int, width: int = 0, height: int = 0
+) -> list[Mark]:
+    """The objects worth numbering on the latest frame: vehicles (not our own hood), people and stop signs
+    (nearest = largest first), then the lights; at most `limit`."""
     Obj = tuple[float, str, int | None, tuple[float, float, float, float], str, str]
     objects: list[Obj] = []
     for v in snapshot.vehicles:
+        if width and height and is_own_hood(v.box, width, height):
+            continue
         area = (v.box[2] - v.box[0]) * (v.box[3] - v.box[1])
         objects.append((area, "vehicle", v.track_id, v.box, v.cls, v.color))
     for tr in tracks:
@@ -272,6 +293,11 @@ def _on_side(box: tuple[float, float, float, float], width: int, side: str) -> b
     return center < 0.4 if side == "left" else center > 0.6
 
 
+def _at_side_edge(box: tuple[float, float, float, float], width: int, margin: float = 6.0) -> bool:
+    """Cut off by the frame's side: a car right beside us (parked, passing), rarely what an answer is about."""
+    return box[0] <= margin or box[2] >= width - margin
+
+
 def _area(mark: Mark) -> float:
     return (mark.box[2] - mark.box[0]) * (mark.box[3] - mark.box[1])
 
@@ -305,8 +331,14 @@ def resolve_highlight(answer: str, tagged: Sequence[int], marks: dict[int, Mark]
     for number in tagged:  # the model's own pick, if it agrees with what the answer says about it...
         mark = marks.get(number)
         if mark is not None and fits(mark, use_color=True):
-            if biggest is not None and _area(mark) < TAG_MIN_SHARE * _area(biggest) and color is None and side is None:
-                return biggest.number  # ...unless a far bigger one fits just as well (answers are about the nearest)
+            if (
+                biggest is not None
+                and _area(mark) < TAG_MIN_SHARE * _area(biggest)
+                and color is None
+                and side is None
+                and not _at_side_edge(biggest.box, width)
+            ):
+                return biggest.number  # ...unless a far bigger one in full view fits just as well (the nearest)
             return number
     if not candidates:
         return None
@@ -336,9 +368,14 @@ def draw_marks(image: np.ndarray, marks: Sequence[Mark]) -> np.ndarray:
 
 def strip_tags(sentence: str) -> tuple[str, list[tuple[str, int]]]:
     """The sentence without its hidden tags ("[ref 3]", "[image 2]") or stray mark numbers, and the tags found."""
-    tags = [("image" if kind.lower() in ("image", "img") else "ref", int(n)) for kind, n in TAG.findall(sentence)]
-    text = STRAY_MARK.sub("", TAG.sub("", sentence)).strip()
-    text = re.sub(r"\s+([.,!?;:])", r"\1", text)
+    tags: list[tuple[str, int]] = []
+    for kind_a, nums_a, kind_b, nums_b in TAG.findall(sentence):
+        kind = "image" if (kind_a or kind_b).lower() in ("image", "img") else "ref"
+        tags += [(kind, int(n)) for n in re.findall(r"\d{1,3}", nums_a or nums_b)]
+    text = STRAY_OBJECT.sub("that one", OBJECT_NUMBER.sub(r"\1", STRAY_MARK.sub("", TAG.sub("", sentence))))
+    text = re.sub(r"\s+([.,!?;:])", r"\1", re.sub(r"\s{2,}", " ", text)).strip(" ,")
+    if text and text[0].islower() and sentence.lstrip()[:1].isupper():  # ("In Image 2, the sign..." -> "The sign...")
+        text = text[0].upper() + text[1:]
     return text, tags
 
 
@@ -471,7 +508,8 @@ class SceneHandler:
         if latest is not None:
             now_image = latest.image
             if vcfg.mark_objects and latest is snapshot.frame:  # (the boxes are from this very frame)
-                marks = pick_marks(snapshot, self._tracks() if self._tracks is not None else (), vcfg.max_marks)
+                tracks = self._tracks() if self._tracks is not None else ()
+                marks = pick_marks(snapshot, tracks, vcfg.max_marks, latest.width, latest.height)
                 if marks:
                     now_image = draw_marks(now_image, marks)
             images.append(ImagePart(encode_jpeg(now_image, vcfg.latest_width, vcfg.jpeg_quality), "Now"))
@@ -525,6 +563,7 @@ class SceneHandler:
             read = f", read as {sign.text}" if sign.text else ""
             label = f"Image {number}: close-up of a {what} we saw {now - sign.t:.0f} s ago, {sign.side}{read}"
             images.append(ImagePart(encode_jpeg(sign.image, 512, 90), label))
+            numbered[number] = Frame(image=sign.image, t=sign.t, index=0, captured_at=0.0)  # (its thumbnail)
         for frame in frames:
             number += 1
             numbered[number] = frame
@@ -594,7 +633,8 @@ class SceneHandler:
         """Safety nets on every sentence, hidden tags taken out, and spoken fallbacks for failures."""
         said = False
         no_vouch_said = False
-        shown = False
+        replaced = False  # a safety net changed the answer: it no longer points at what the model named
+        image: int | None = None
         spoken: list[str] = []
         tagged: list[int] = []
         try:
@@ -603,22 +643,26 @@ class SceneHandler:
                 for kind, number in tags:
                     if kind == "ref":
                         tagged.append(number)
-                    elif planned is not None and not shown:
-                        self._show_image(number, planned)
-                        shown = True
+                    elif image is None:
+                        image = number
                 if not sentence or not re.search(r"\w", sentence):
                     continue
-                spoken.append(sentence)
+                # Every piece on its own: a short sentence joined to the next, or one left over where a tag was
+                # taken out, must still meet the start-anchored nets ("... stopping. Go.").
+                pieces = [p for p in re.split(r"(?<=[.!?])\s+", sentence) if p]
                 if passing and SCHOOL_BUS.search(sentence):
                     # "Should I go around them?" with a school bus in view: the rule, not the model's judgment.
                     log.warning("school bus in a passing answer: replaced by the rule", sentence=sentence)
                     yield SCHOOL_BUS_RULE
                     return
-                if PERMISSION.search(sentence) or (strict and VOUCHING.search(sentence)):
+                if any(PERMISSION.search(p) or (strict and VOUCHING.search(p)) for p in pieces):
                     log.warning("replaced a sentence that vouched for traffic", sentence=sentence, strict=strict)
+                    replaced = True
                     if no_vouch_said:
                         continue
                     sentence, no_vouch_said = NO_VOUCH, True
+                else:
+                    spoken.append(sentence)
                 said = True
                 yield sentence
         except VisionCancelled:
@@ -630,8 +674,10 @@ class SceneHandler:
             else:
                 yield FALLBACK_TIMEOUT if isinstance(exc, VisionTimeout) else FALLBACK_ERROR
             return
-        if planned is not None and spoken:
+        if planned is not None and spoken and not replaced:
             self._highlight(" ".join(spoken), tagged, planned)
+            if image is not None:
+                self._show_image(image, planned)  # (after the answer's sentences: the page shows it under them)
         if not said:
             log.warning("vision answer was empty")
             yield FALLBACK_EMPTY

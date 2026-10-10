@@ -17,7 +17,7 @@ _ABBREVIATIONS = {
 }  # fmt: skip
 # Tokens that may or may not end a sentence; at the very end of the text so far, wait for the next word.
 _AMBIGUOUS = {"a.m", "p.m", "mph", "min", "no", "approx"}
-_BOUNDARY = re.compile(r"[.!?]+[\"')\]]*(?:\s+(?=[A-Z0-9\"'(])|\s+$)")
+_BOUNDARY = re.compile(r"[.!?]+[\"')\]]*(?:\s+(?=[A-Z0-9\"'(\[])|\s+$)")  # ("[": a hidden tag, answers/scene.py)
 
 
 def _last_word(text_before: str) -> str:

@@ -207,6 +207,7 @@ class DrivePilotApp:
         self.world = WorldState(cfg, on_event=self._on_world_event, speed_source=self._gps_speed_at)
         self.memory = SceneMemory(cfg.memory)  # V2: "what was that sign?"
         self._latest_tracks: Sequence[Track] = ()
+        self._last_result: PerceptionResult | None = None  # the latest frame the world state took in
         self._highlight: tuple[int, float] | None = None  # (track id, until perf_counter): pulsed on the page
         self._image_ids = itertools.count(1)
         self._world_thread = AsyncListener(self._world_update, name="world", max_pending=2)
@@ -331,22 +332,30 @@ class DrivePilotApp:
             self.memory.add(result.frame, result.tracks)
         except Exception:
             log.exception("scene memory failed")
+        self._last_result = result
         if self.hub is not None and self.cfg.ui.overlays:
-            frame = result.frame
-            highlight = self._highlight
-            try:
-                overlay = frame_packet(
-                    self.world.snapshot(),
-                    result.tracks,
-                    frame.width,
-                    frame.height,
-                    parking_active=self.parking.active,
-                    highlight=highlight[0] if highlight is not None and time.perf_counter() < highlight[1] else None,
-                )
-            except Exception:
-                log.exception("overlay failed")
-                overlay = None
-            self.hub.offer_frame(frame, overlay)
+            self.hub.offer_frame(result.frame, self._overlay(result))
+
+    def _overlay(self, result: PerceptionResult) -> dict[str, Any] | None:
+        """The V2 page's overlay for this result (with the highlight, and when its pulse ends on the wall clock)."""
+        frame = result.frame
+        highlight = self._highlight
+        left = highlight[1] - time.perf_counter() if highlight is not None else 0.0
+        try:
+            overlay = frame_packet(
+                self.world.snapshot(),
+                result.tracks,
+                frame.width,
+                frame.height,
+                parking_active=self.parking.active,
+                highlight=highlight[0] if highlight is not None and left > 0 else None,
+            )
+        except Exception:
+            log.exception("overlay failed")
+            return None
+        if left > 0:
+            overlay["pulse_until"] = round(time.time() + left, 3)  # (the page stops pulsing then, even when paused)
+        return overlay
 
     def _on_world_event(self, event: WorldEvent) -> None:
         if self.recorder is not None:
@@ -581,6 +590,9 @@ class DrivePilotApp:
         self._highlight = (track_id, time.perf_counter() + self.cfg.ui.highlight_s)
         if self.recorder is not None:
             self.recorder.event("highlight", t=self.media_time(), track_id=track_id)
+        last = self._last_result
+        if self.hub is not None and self.cfg.ui.overlays and last is not None:
+            self.hub.offer_frame(last.frame, self._overlay(last))  # (a paused replay sends no new frames)
 
     def _show_image(self, frame: Frame) -> None:
         """A remembered frame an answer came from: shown on the page as a thumbnail."""

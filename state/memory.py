@@ -103,16 +103,22 @@ class SceneMemory:
         if y2 - y1 < cfg.sign_min_px:
             return
         key = (kind, track_id)
-        with self._lock:
-            old = self._signs.get(key)
         area = (x2 - x1) * (y2 - y1)
-        if old is not None and (old.box[2] - old.box[0]) * (old.box[3] - old.box[1]) >= area and text is None:
-            return
-        crop = sign_crop(frame.image, box)
+
+        def better(old: SignCrop | None) -> bool:
+            return old is None or text is not None or (old.box[2] - old.box[0]) * (old.box[3] - old.box[1]) < area
+
+        with self._lock:
+            if not better(self._signs.get(key)):
+                return
+        crop = sign_crop(frame.image, box)  # (outside the lock: cutting and scaling takes a moment)
         if crop is None:
             return
-        keep_text = text if text is not None else (old.text if old is not None else None)
         with self._lock:
+            old = self._signs.get(key)  # (again: another thread may have kept a better view meanwhile)
+            if not better(old):
+                return
+            keep_text = text if text is not None else (old.text if old is not None else None)
             self._signs[key] = SignCrop(track_id, kind, frame.t, crop, box, _side(box, frame.width), keep_text)
 
     def frames(self, window_s: float, count: int, now: float | None = None) -> list[Frame]:

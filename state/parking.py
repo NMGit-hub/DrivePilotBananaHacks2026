@@ -383,6 +383,9 @@ class ParkingTracker:
         for tr in vehicles:
             car = self._cars.setdefault(tr.track_id, _Car(tr.cls))
             car.cls, car.box, car.last_seen = tr.cls, tr.box, t
+            if turning:
+                car.samples.clear()  # positions from before a turn can't be compared with those after it
+                continue
             if not self._ground_visible(tr.box, width, height, cam, horizon):
                 continue  # cut off: no position this frame (its history ages out)
             x1, _, x2, y2 = tr.box
@@ -416,10 +419,10 @@ class ParkingTracker:
         beside our path come closer (most of them are parked)."""
         if turning:
             return None
-        if ego_stopped:
-            return 0.0
         if gps_speed is not None:
             return max(0.0, gps_speed) * self._scale
+        if ego_stopped:
+            return 0.0
         lane, near = self._m(self.cfg.lane_half_width_m), self._m(self.cfg.speed_max_z_m)
         rates = []
         for car in self._cars.values():
@@ -513,7 +516,9 @@ class ParkingTracker:
 
     def _measured_pitch(self, side: str) -> float | None:
         """The median of recent neighbour spacings near the prior pitch (gaps and missed cars are larger, split
-        boxes smaller), or None with too few of them."""
+        boxes smaller), or None with too few of them. Known limit: the window also holds one-stall gaps at a high
+        scale, so a row where most spacings are single gaps can measure the gap (tests/test_v2_review.py, xfail);
+        tighter windows, lower quartiles and harmonic voting all did worse on the real lot clips."""
         cfg = self.cfg
         prior = self._prior_pitch
         lo, hi = cfg.pitch_ratio_min * prior * cfg.scale_min, cfg.pitch_ratio_max * prior * cfg.scale_max

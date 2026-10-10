@@ -316,18 +316,25 @@ function draw() {
   if (overlay) drawOverlay(overlay, ox, oy, vw, vh, dpr);
   stats.frames++;
   stats.lagMs = Math.max(0, Date.now() - header.captured * 1000);
+  if (!latest.drawn) { // page fps: new frames drawn per second (not redraws of the same one)
+    latest.drawn = true;
+    const now = performance.now();
+    drawTimes.push(now);
+    while (drawTimes.length && now - drawTimes[0] > 1000) drawTimes.shift();
+    stats.fps = drawTimes.length;
+  }
 }
 
 function drawOverlay(overlay, ox, oy, vw, vh, dpr) {
   const now = performance.now() / 1000;
-  const fs = Math.max(11, Math.round(vh / 46)) ; // label size follows the video size
+  const fs = Math.max(11 * dpr, Math.round(vh / 46)); // label size follows the video size (and pixel density)
   for (const item of overlay.items) {
     const [x1, y1, x2, y2] = item.box;
     const x = ox + x1 * vw, y = oy + y1 * vh, w = (x2 - x1) * vw, h = (y2 - y1) * vh;
     const color = COLORS[item.color] || COLORS.white;
     let width = item.kind === "vehicle" && item.color === "gray" ? 1.2 : (item.kind === "spot" ? 3 : 2);
     let alpha = item.color === "gray" ? 0.55 : 0.95;
-    if (item.pulse) { // the thing an answer is about: pulses
+    if (item.pulse && !(overlay.pulse_until && Date.now() / 1000 > overlay.pulse_until)) { // what an answer is about
       const p = 0.5 + 0.5 * Math.sin(now * 2 * Math.PI * 1.5);
       width = 3 + 4 * p; alpha = 0.6 + 0.4 * p;
     }
@@ -369,27 +376,27 @@ function drawOverlay(overlay, ox, oy, vw, vh, dpr) {
 }
 
 let drawTimes = [];
+let frameSeq = 0; // messages in arrival order: a decode that finishes late must not replace a newer frame
 function onFrame(buffer) {
   const bytes = new Uint8Array(buffer);
   if (bytes[0] !== 0x44 || bytes[1] !== 0x50 || bytes[2] !== 0x56 || bytes[3] !== 0x31) return; // "DPV1"
   const size = new DataView(buffer).getUint32(4);
   const header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + size)));
   const jpeg = new Blob([bytes.subarray(8 + size)], {type: "image/jpeg"});
+  const seq = ++frameSeq;
   createImageBitmap(jpeg).then(bitmap => {
+    if (latest && latest.seq > seq) { bitmap.close(); return; } // an older frame decoded late
     if (latest && latest.bitmap) latest.bitmap.close();
-    latest = {bitmap, header};
+    latest = {bitmap, header, seq, drawn: false};
     noVideo.style.display = "none";
-    const now = performance.now();
-    drawTimes.push(now);
-    while (drawTimes.length && now - drawTimes[0] > 1000) drawTimes.shift();
-    stats.fps = drawTimes.length;
     if (!drawPending) { drawPending = true; requestAnimationFrame(draw); }
   }).catch(() => {});
 }
 
 // keep pulsing highlights alive between frames (a paused replay sends no new frames)
 setInterval(() => {
-  if (latest && latest.header.overlay && latest.header.overlay.items.some(i => i.pulse) && !drawPending) {
+  const ov = latest && latest.header.overlay;
+  if (ov && ov.items.some(i => i.pulse) && !(ov.pulse_until && Date.now() / 1000 > ov.pulse_until + 0.2) && !drawPending) {
     drawPending = true; requestAnimationFrame(draw);
   }
 }, 50);

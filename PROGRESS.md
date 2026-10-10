@@ -42,6 +42,22 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   7 object rows all right after two fixes (3 pulse the right object: person crossing, bus, school bus; 4 correctly
   none: sign, building, construction, road); first try had 1 of 3 right (a person tagged for "the bus"). The memory
   row ("what did that yellow sign say?") stays partly right (reads "SCHOOL ... AHEAD"). 986 tests pass.
+- **Independent review of V2-M1 fixes, M2, M4 (2026-10-10): 11 bugs + 7 risks, each with a reproducer; fixed with
+  regression tests** (`tests/test_v2_review.py`, 35 of its 41 tests fail on the reviewed code): **safety**: a hidden
+  tag between two sentences glued a bare "Go." / "Merge now." onto the previous sentence past the start-anchored
+  permission net (now every piece of a sentence is checked, which also catches "Sure thing. Go.", and the splitter
+  splits before "["); a 4-way deadlock or a refusal while moving still pulsed one car and painted it amber as "goes
+  next"; a sentence replaced by the safety net still pulsed the car it named; sign text was stripped ("marked 35",
+  "[EXIT ONLY]") while mark/image numbers were spoken ("In Image 2, ...", "Car #1", "(ref: 1)", a tag cut off at the
+  end); a memory answer naming a sign close-up showed no thumbnail, and thumbnails landed under the question; our
+  hood could be mark 1 and a big car beside us overrode the model's right tag; highlights didn't show while a replay
+  was paused (and pulsed forever once paused: the overlay now carries `pulse_until`); open-ended spot labels matched
+  any event to the clip's end (capped at 8 s); memory routes for present-tense questions ("if I go past...", "did
+  you see the light turn green?"); a cut-off car's samples survived a turn; GPS speed now wins over a possibly wrong
+  "stopped"; the page could draw an older frame decoded late, and counted fps on decodes; sign close-up updates are
+  atomic. **Not fixed (measured):** a row where most spacings are one-stall gaps measures the gap as its pitch in
+  simulation (xfail test): three fixes (tighter window, lower quartile, harmonic voting) each added 1-3 false spots
+  on the real lot clips, so the original estimator stays. 1035 tests pass.
 - **5A (BDD100K GPS):** `nav/bdd_info.py` + `scripts/bdd_info_to_gpx.py` read `data/bdd100k/bdd100k_info.zip` without
   unpacking (fields checked on real files and a 3,000-file survey: -1 = unknown speed/course, bad accuracy, repeated
   timestamps, gaps up to 23 s), write GPX 1.0 with a `video_start` waypoint; `GpxReplay` aligns on it, never

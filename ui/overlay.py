@@ -18,7 +18,7 @@ from typing import Any
 
 from nav.phrasing import in_distance, maneuver_phrase
 from nav.progress import Progress
-from perception.detector import Track
+from perception.detector import Track, is_own_hood
 from state.world import WorldSnapshot
 
 GREEN, RED, AMBER, WHITE, GRAY = "green", "red", "amber", "white", "gray"
@@ -26,8 +26,6 @@ PEOPLE = {"person": "pedestrian", "bicycle": "cyclist"}
 SIGNS = {"stop sign": "STOP"}
 _ORDINALS = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"]
 MPS_TO_MPH = 2.23694
-HOOD_BOTTOM = 0.97  # a "vehicle" whose box reaches this far down the frame...
-HOOD_WIDTH = 0.45  # ...and is this wide is our own hood / dashboard, not another car
 
 
 def _norm(box: Sequence[float], width: int, height: int) -> list[float]:
@@ -39,12 +37,6 @@ def _norm(box: Sequence[float], width: int, height: int) -> list[float]:
         round(min(max(x2 / width, 0.0), 1.0), 4),
         round(min(max(y2 / height, 0.0), 1.0), 4),
     ]
-
-
-def is_own_hood(box: Sequence[float], width: int, height: int) -> bool:
-    """The detector sometimes takes our own hood or dashboard for a car: wide, at the bottom of the frame."""
-    x1, _, x2, y2 = box
-    return y2 >= HOOD_BOTTOM * height and (x2 - x1) >= HOOD_WIDTH * width
 
 
 def ordinal(n: int) -> str:
@@ -74,7 +66,7 @@ def frame_packet(
             if entry.track_id is None:
                 continue
             queued[entry.track_id] = (position, entry.arrived)
-            if next_id is None and (queue.ego_position is None or position < queue.ego_position):
+            if next_id is None and not queue.deadlock and (queue.ego_position is None or position < queue.ego_position):
                 next_id = entry.track_id  # the first car ahead of us: it goes next
     parked = {c.track_id for row in snap.parking.rows.values() for c in row}
 

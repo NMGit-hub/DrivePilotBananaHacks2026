@@ -184,15 +184,22 @@ class ClipScore:
 
 
 def match_report(
-    t: float, side: str | None, clip: ClipLabels, duration: float, early_s: float = 1.0, late_s: float = 0.5
+    t: float,
+    side: str | None,
+    clip: ClipLabels,
+    duration: float,
+    early_s: float = 1.0,
+    late_s: float = 0.5,
+    open_s: float = 8.0,
 ) -> tuple[LabeledSpot | None, LookAlike | None]:
     """The labeled spot an "open spot on <side>" report at time t is about (the clearest, then the nearest in
-    time), or else the look-alike window it falls in (a false alarm on a look-alike), or (None, None)."""
+    time), or else the look-alike window it falls in (a false alarm on a look-alike), or (None, None). A spot
+    labeled as never leaving the frame (t_pass null) matches only for `open_s` after it became visible."""
     best: tuple[int, float, LabeledSpot] | None = None
     for spot in clip.spots:
         if spot.side != side:
             continue
-        end = duration if spot.t_pass is None else spot.t_pass
+        end = min(duration, spot.t_visible + open_s) if spot.t_pass is None else spot.t_pass
         if spot.t_visible - early_s <= t <= end + late_s:
             rank = (0 if spot.target else 1, abs(t - spot.t_visible))
             if best is None or rank < best[:2]:
