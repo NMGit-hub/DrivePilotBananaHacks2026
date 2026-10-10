@@ -183,6 +183,5 @@ a V2 feature only goes in the demo if it works.
   6. Phrasing: "Open spot on your left, two cars ahead", **plus the car right before the spot** ("…just after the
      white SUV"). **Few false positives from a tiny car in a spot** (small cars, motorcycles): small vehicles count
      as occupying, and the model check must see an empty stall.
-- Open design detail to settle in V2-M1: CLAUDE.md allows voice input by wake word only, so the lot offer asks the
-  driver to answer with the wake word ("Hey DrivePilot, yes" / "find me a spot"); a no-wake-word reply window
-  would need the user's OK.
+- **The lot offer is answered with a plain "yes"** (user): after DrivePilot asks, it listens for a few seconds for
+  "yes" / "no" without the wake word (an exception to CLAUDE.md's wake-word-only rule, recorded there).

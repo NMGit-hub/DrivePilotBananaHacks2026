@@ -28,7 +28,9 @@ is the live status. Read both before starting work.
   Gemini Flash, Ollama and a mock stay available as drop-ins and never leak into callers.
 - **Voice input is wake word only:** "Hey DrivePilot" (custom openWakeWord model trained locally, in
   `scripts/wakeword/`). No push-to-talk buttons or extra devices. (Typed questions exist only as
-  the replay/dev tool described in PLAN.md "Replay mode".)
+  the replay/dev tool described in PLAN.md "Replay mode".) One exception (user, 2026-10-10): right after
+  DrivePilot itself asks a yes/no question (the V2 parking-lot offer), it listens a few seconds for a plain
+  "yes" / "no" without the wake word.
 - **Secrets** live in `.env` (gitignored). `.env.example` documents them. Never commit keys, and never print
   them in logs.
 - Config values go in `config.yaml`, not hard-coded numbers.

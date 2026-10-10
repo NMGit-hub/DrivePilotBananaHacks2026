@@ -95,6 +95,12 @@ at video t=0 can be shifted with `--set video.file.gpx_offset_s=<seconds>`). Thr
 home, best first:
 
 ### A. Real dashcam clips that come with GPS: BDD100K (recommended)
+> Update 2026-10-10: **done by the user.** BDD100K has moved: the data is now at https://dl.cv.ethz.ch/bdd100k/data/
+> (not bdd-data.berkeley.edu as in the steps below). `data/bdd100k/bdd100k_info.zip` is 4.09 GB (not ~11 GB):
+> 80,000 JSON files under `bdd100k/info/100k/{train,val}/<clip id>.json` (70,000 train, 10,000 val; no test
+> split), 47.7 GB uncompressed, so never extract it all. All 10 dev clips are in `val` (CRC-checked). Steps 6-8
+> (the "next Claude session" part) are not done yet: they wait for the user's go.
+
 BDD100K (Berkeley DeepDrive) has 100,000 40-second US dashcam clips, each with a GPS/IMU "info" file (1 fps
 location, speed and heading). The dev clips already in `data/videos/dev/` come from it, but from a mirror without the
 info files.

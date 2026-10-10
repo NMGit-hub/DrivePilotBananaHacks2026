@@ -334,8 +334,10 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   `eval/dev_clips.yaml` and `scripts/fetch_dev_clips.py`. Development/tuning only. Replace with our own drives.
 - No dev clip shows several cars waiting at a 4-way stop: the queue logic is verified with synthetic scenarios
   until we record one.
-- BDD100K's GPS/IMU "info" files are not in that mirror, so dev clips have **no GPX**. The GPX replay path is
-  tested with synthetic GPX files in tests until real drives are recorded.
+- BDD100K's GPS/IMU "info" files are not in that mirror, so dev clips have **no GPX** yet. **2026-10-10: the user
+  downloaded `data/bdd100k/bdd100k_info.zip`** (from BDD100K's new home, https://dl.cv.ethz.ch/bdd100k/data/;
+  4.09 GB, 80,000 clips' info: 70,000 train + 10,000 val; all 10 dev clips present, CRC-checked). Converting it to
+  GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
 - **After the wake word, the microphone listens for up to 4 s** (`voice.endpoint.no_speech_timeout_s`, counted from
