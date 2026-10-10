@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DrivePilot</title>
+<style>
+  :root {
+    --bg: #0d0f12;
+    --panel: #15181d;
+    --line: #262b33;
+    --text: #e7eaee;
+    --muted: #8b94a3;
+    --you: #7cc4ff;
+    --pilot: #e7eaee;
+    --alert-bg: #3a2a0a;
+    --alert: #ffc24d;
+    --listen: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { display: flex; height: 100vh; }
+  #stage { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+  #video-box { flex: 1 1 auto; position: relative; background: #000; min-height: 0; }
+  #video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  #no-video { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+  #status { flex: 0 0 auto; padding: 8px 14px; border-top: 1px solid var(--line); background: var(--panel);
+    color: var(--muted); font: 13px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #status b { color: var(--text); font-weight: 600; }
+  aside { flex: 0 0 400px; display: flex; flex-direction: column; border-left: 1px solid var(--line);
+    background: var(--panel); min-width: 0; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center;
+    gap: 10px; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  #conn { margin-left: auto; font-size: 12px; color: var(--muted); }
+  #listening { display: none; font-size: 12px; font-weight: 600; color: var(--bg); background: var(--listen);
+    border-radius: 999px; padding: 2px 10px; }
+  #listening.on { display: inline-block; }
+  #feed { flex: 1 1 auto; overflow-y: auto; padding: 12px 16px 24px; }
+  .turn { margin: 0 0 14px; }
+  .who { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 2px; }
+  .q .text { color: var(--you); font-weight: 600; }
+  .a .text { color: var(--pilot); }
+  .alert { background: var(--alert-bg); border-left: 3px solid var(--alert); padding: 8px 10px; border-radius: 4px; }
+  .alert .text { color: var(--alert); font-weight: 600; }
+  .note { color: var(--muted); font-style: italic; font-size: 14px; }
+  .t { color: var(--muted); font-size: 11px; margin-left: 6px; text-transform: none; letter-spacing: 0; }
+  form { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
+  input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 10px; font: inherit; }
+  input:focus { outline: 2px solid var(--you); outline-offset: -1px; }
+  button { background: #2b3440; color: var(--text); border: 0; border-radius: 6px; padding: 8px 14px; font: inherit;
+    cursor: pointer; }
+  #keys { padding: 0 16px 10px; color: var(--muted); font-size: 12px; }
+  kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 11px ui-monospace, monospace; }
+  @media (max-width: 900px) {
+    main { flex-direction: column; height: auto; min-height: 100vh; }
+    #video-box { height: 56vw; flex: 0 0 auto; }
+    aside { flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--line); }
+    #feed { max-height: 50vh; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <section id="stage">
+    <div id="video-box">
+      <div id="no-video">Waiting for video…</div>
+      <img id="video" alt="Camera view" src="/video.mjpg">
+    </div>
+    <div id="status">Starting…</div>
+  </section>
+  <aside>
+    <header>
+      <h1>DrivePilot</h1>
+      <span id="listening">Listening…</span>
+      <span id="conn">connecting</span>
+    </header>
+    <div id="feed" aria-live="polite"></div>
+    <form id="ask">
+      <input id="question" autocomplete="off" maxlength="500" placeholder="Type a question (Q)">
+      <button type="submit">Ask</button>
+    </form>
+    <div id="keys"><kbd>Space</kbd> pause · <kbd>←</kbd>/<kbd>→</kbd> 5 s · <kbd>Q</kbd> type a question</div>
+  </aside>
+</main>
+<script>
+"use strict";
+const feed = document.getElementById("feed");
+const statusLine = document.getElementById("status");
+const listening = document.getElementById("listening");
+const conn = document.getElementById("conn");
+const input = document.getElementById("question");
+const video = document.getElementById("video");
+const noVideo = document.getElementById("no-video");
+let answerBlock = null; // the answer being streamed (sentences are appended to it)
+let lastId = 0;
+let session = null; // the app run this page shows
+
+function clock(t) {
+  if (typeof t !== "number") return "";
+  const m = Math.floor(t / 60), s = t - 60 * m;
+  return `${m}:${s.toFixed(1).padStart(4, "0")}`;
+}
+
+function turn(cls, who, text, t) {
+  const div = document.createElement("div");
+  div.className = `turn ${cls}`;
+  const label = document.createElement("div");
+  label.className = "who";
+  label.textContent = who;
+  if (typeof t === "number") {
+    const time = document.createElement("span");
+    time.className = "t";
+    time.textContent = clock(t);
+    label.appendChild(time);
+  }
+  const body = document.createElement("div");
+  body.className = "text";
+  body.textContent = text;
+  div.append(label, body);
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+  return body;
+}
+
+function note(text) {
+  const div = document.createElement("div");
+  div.className = "turn note";
+  div.textContent = text;
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function show(m) {
+  if (m.id && m.id <= lastId) return; // already shown (reconnect)
+  if (m.id) lastId = m.id;
+  switch (m.type) {
+    case "question":
+      listening.classList.remove("on");
+      turn("q", m.via === "typed" ? "You (typed)" : "You", m.text, m.t);
+      answerBlock = null;
+      break;
+    case "answer":
+      if (answerBlock) answerBlock.textContent += " " + m.text;
+      else answerBlock = turn("a", "DrivePilot", m.text, m.t);
+      feed.scrollTop = feed.scrollHeight;
+      break;
+    case "alert":
+      turn("alert", "Alert", m.text, m.t);
+      break;
+    case "listening":
+      listening.classList.add("on");
+      break;
+    case "nothing":
+      listening.classList.remove("on");
+      break;
+    case "stopped":
+      answerBlock = null;
+      break;
+    case "note":
+      note(m.text);
+      break;
+  }
+}
+
+function showStatus(s) {
+  const parts = [];
+  parts.push(`<b>${s.live ? "LIVE" : "REPLAY"}</b> ${clock(s.t)}${s.paused ? " <b>paused</b>" : ""}`);
+  if (typeof s.fps === "number") parts.push(`${s.fps.toFixed(1)} fps`);
+  if (s.camera) parts.push(`<b>${escapeHtml(s.camera)}</b>`);
+  parts.push(`GPS ${escapeHtml(s.gps || "off")}`);
+  if (s.nav) parts.push(`Next: ${escapeHtml(s.nav)}`);
+  if (s.quiet) parts.push("<b>quiet mode</b>");
+  if (s.voice) parts.push(`voice ${escapeHtml(s.voice)}`);
+  if (s.vision) parts.push(`vision ${escapeHtml(s.vision)}`);
+  statusLine.innerHTML = parts.join(" · ");
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+}
+
+let retry = 500;
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onopen = () => { conn.textContent = "connected"; retry = 500; };
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "hello") {
+      if (m.session !== session) { // a new app run: start over
+        session = m.session;
+        feed.replaceChildren();
+        lastId = 0;
+        answerBlock = null;
+      }
+      m.history.forEach(show);
+      if (m.status && m.status.type) showStatus(m.status);
+    } else if (m.type === "status") {
+      showStatus(m);
+    } else {
+      show(m);
+    }
+  };
+  ws.onclose = () => {
+    conn.textContent = "reconnecting…";
+    setTimeout(connect, retry);
+    retry = Math.min(retry * 2, 5000);
+  };
+}
+connect();
+
+video.addEventListener("load", () => { noVideo.style.display = "none"; });
+video.addEventListener("error", () => {
+  noVideo.style.display = "grid";
+  setTimeout(() => { video.src = "/video.mjpg?" + Date.now(); }, 1000);
+});
+
+async function post(path, body) {
+  try {
+    const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
+                                 body: JSON.stringify(body)});
+    return r.ok ? r.json() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+document.getElementById("ask").addEventListener("submit", ev => {
+  ev.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  input.blur();
+  post("/api/ask", {text});
+});
+
+document.addEventListener("keydown", ev => {
+  if (ev.target === input) {
+    if (ev.key === "Escape") { input.value = ""; input.blur(); }
+    return;
+  }
+  if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+  if (ev.code === "Space") { ev.preventDefault(); post("/api/control", {action: "pause"}); }
+  else if (ev.key === "ArrowLeft") { ev.preventDefault(); post("/api/control", {action: "seek", delta_s: -5}); }
+  else if (ev.key === "ArrowRight") { ev.preventDefault(); post("/api/control", {action: "seek", delta_s: 5}); }
+  else if (ev.key === "q" || ev.key === "Q") { ev.preventDefault(); input.focus(); }
+});
+</script>
+</body>
+</html>

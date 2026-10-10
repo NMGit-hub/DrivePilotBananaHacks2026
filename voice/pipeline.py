@@ -61,12 +61,14 @@ class VoicePipeline:
         on_wake: Callable[[], None] | None = None,
         vad: StreamingVad | None = None,
         answer_in_thread: bool = True,
+        on_nothing: Callable[[str], None] | None = None,
     ) -> None:
         self.cfg = cfg
         self.wake = wake
         self.stt = stt
         self.on_question = on_question
         self.on_wake = on_wake
+        self.on_nothing = on_nothing  # the wake word fired but no question came: "timeout" | "empty"
         self.answer_in_thread = answer_in_thread
         self._endpointer = Endpointer(cfg.endpoint, vad or StreamingVad())
         self._ring: deque[np.ndarray] = deque(maxlen=max(1, round(cfg.endpoint.pre_roll_s * SAMPLE_RATE / CHUNK) + 1))
@@ -122,6 +124,7 @@ class VoicePipeline:
         if event.kind == "timeout":
             self.timeouts += 1
             log.info("no question after the wake word", t=round(t, 2))
+            self._nothing("timeout")
             return
         end_detected_at = time.perf_counter()
         speculative = self._speculation is not None and self._endpointer.speculation_still_valid()
@@ -155,6 +158,7 @@ class VoicePipeline:
             log.info("heard", text=text, stt_ms=round(stt_ms), speculative=speculative, reason=event.reason)
             if not text:
                 self.empty_transcripts += 1
+                self._nothing("empty")
                 return
             if self.answer_in_thread:
                 threading.Thread(target=self._answer, args=(heard,), name="answer", daemon=True).start()
@@ -162,6 +166,13 @@ class VoicePipeline:
                 self._answer(heard)
 
         future.add_done_callback(done)
+
+    def _nothing(self, reason: str) -> None:
+        if self.on_nothing is not None:
+            try:
+                self.on_nothing(reason)
+            except Exception:
+                log.exception("on_nothing failed")
 
     def _answer(self, heard: HeardQuestion) -> None:
         try:

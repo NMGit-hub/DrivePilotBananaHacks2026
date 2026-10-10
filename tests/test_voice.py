@@ -251,6 +251,65 @@ def test_clip_cache_renders_once_and_reloads(tmp_path: Path) -> None:
     assert len(again) == len(first)
 
 
+def test_listening_stops_speech_and_blips(tmp_path: Path) -> None:
+    speaker, output = make_speaker(tmp_path)
+    speaker.say(Utterance("x" * 400, "answer", Priority.ANSWER))
+    time.sleep(0.2)
+    speaker.listening()  # "Hey DrivePilot" mid-answer
+    assert speaker.wait_idle(2.0)
+    kinds = [(r.kind, r.interrupted) for r in speaker.records]
+    assert kinds == [("answer", True), ("cue", False)]  # the answer is dropped, not resumed
+    assert output.played[-1] < 0.1 * FakeTts.rate  # a short blip
+    speaker.close()
+
+
+def test_navigation_alerts_are_synthesized_not_saved(tmp_path: Path) -> None:
+    tts, output = FakeTts(), FakeOutput()
+    clips = ClipCache(tts, tmp_path)  # type: ignore[arg-type]
+    clips.prepare(["Not this one."])
+    played: list[tuple[str, float | None]] = []
+    speaker = AudioSpeaker(
+        tts,  # type: ignore[arg-type]
+        output,  # type: ignore[arg-type]
+        clips,
+        on_record=lambda r: played.append((r.text, r.sound_at)),
+    ).start()
+    speaker.say(Utterance("In half a mile, use the left lane.", "alert", Priority.REQUESTED, clip="nav_lanes"))
+    speaker.say(Utterance("Not this one.", "alert", Priority.REQUESTED, clip="nav_not_this_exit"))
+    assert speaker.wait_idle(5.0)
+    speaker.close()
+    assert len(list(tmp_path.glob("*.wav"))) == 1  # only the prepared fixed text is kept on disk
+    assert [text for text, _ in played] == ["In half a mile, use the left lane.", "Not this one."]
+    assert all(sound_at is not None for _, sound_at in played)
+
+
+def test_pipeline_reports_when_no_question_follows_the_wake_word() -> None:
+    cfg = load_config().voice
+    nothing: list[str] = []
+    silent = VoicePipeline(
+        cfg,
+        FakeWake([1.0]),
+        FakeStt(),
+        lambda q: None,
+        vad=FakeVad([]),
+        answer_in_thread=False,
+        on_nothing=nothing.append,
+    )  # type: ignore[arg-type]
+    feed_seconds(silent, 8.0)
+    empty = VoicePipeline(
+        cfg,
+        FakeWake([1.0]),
+        FakeStt(text=""),
+        lambda q: None,
+        vad=FakeVad([(0.2, 1.8)]),
+        answer_in_thread=False,
+        on_nothing=nothing.append,
+    )  # type: ignore[arg-type]
+    feed_seconds(empty, 5.0)
+    empty.flush()
+    assert nothing == ["timeout", "empty"]
+
+
 # --------------------------------------------------------------------------------- real models (GPU)
 
 

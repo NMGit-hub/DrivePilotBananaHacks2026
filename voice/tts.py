@@ -82,6 +82,10 @@ class ClipCache:
         self._memory[text] = audio
         return audio
 
+    def cached(self, text: str) -> np.ndarray | None:
+        """The clip for `text` if it was rendered already (`get` / `prepare`); never renders."""
+        return self._memory.get(text)
+
     def prepare(self, texts: list[str]) -> None:
         """Render every alert up front (startup)."""
         for text in texts:

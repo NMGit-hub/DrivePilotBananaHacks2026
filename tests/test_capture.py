@@ -155,6 +155,24 @@ def test_seek_starts_a_new_segment(clip: Path) -> None:
     assert decoded_index(after.image) in (59, 60, 61)
 
 
+def test_seek_while_paused_shows_one_frame_there(clip: Path) -> None:
+    source = FileSource(clip, realtime=True)
+    source.start()
+    assert source.read(timeout=1.0) is not None
+    assert source.toggle_pause() is True
+    time.sleep(0.05)
+    source.read(timeout=0.05)  # a frame published just before the pause took effect
+    source.seek_to(2.0)
+    shown = source.read(timeout=1.0)
+    assert shown is not None and shown.segment == 1 and shown.t == pytest.approx(2.0, abs=0.05)
+    assert source.read(timeout=0.3) is None  # still paused: just the one frame
+    assert source.clock.now() == pytest.approx(shown.t, abs=1e-6)
+    assert source.toggle_pause() is False
+    after = source.read(timeout=1.0)
+    source.stop()
+    assert after is not None and after.t > shown.t
+
+
 def test_seek_relative_is_clamped(clip: Path) -> None:
     source = FileSource(clip, realtime=False)
     source.start()

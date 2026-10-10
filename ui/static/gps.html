@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DrivePilot GPS</title>
+<style>
+  :root { --bg: #0d0f12; --panel: #15181d; --line: #262b33; --text: #e7eaee; --muted: #8b94a3;
+    --ok: #4ade80; --warn: #ffc24d; --bad: #f87171; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 17px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { color: var(--muted); margin: 0 0 20px; font-size: 15px; }
+  button { width: 100%; padding: 16px; font: 600 18px system-ui, sans-serif; border: 0; border-radius: 10px;
+    background: #2563eb; color: white; cursor: pointer; }
+  button:disabled { background: #2b3440; color: var(--muted); }
+  #state { margin: 20px 0 8px; font-size: 22px; font-weight: 650; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+  dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>DrivePilot GPS</h1>
+  <p>Keep this page open on the phone while driving. It sends the phone's location to the laptop once a second
+     (over USB: <code>adb reverse tcp:8000 tcp:8000</code>).</p>
+  <button id="start">Start sending location</button>
+  <div id="state" class="warn">Not started</div>
+  <dl>
+    <dt>Fixes sent</dt><dd id="sent">0</dd>
+    <dt>Accuracy</dt><dd id="accuracy">–</dd>
+    <dt>Speed</dt><dd id="speed">–</dd>
+    <dt>Heading</dt><dd id="heading">–</dd>
+    <dt>Last sent</dt><dd id="last">–</dd>
+    <dt>Screen</dt><dd id="wake">–</dd>
+  </dl>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let latest = null;      // newest position from the browser
+let sentStamp = null;   // timestamp of the position last sent
+let sent = 0;
+let lastOk = 0;
+let wakeLock = null;
+
+function setState(text, cls) { $("state").textContent = text; $("state").className = cls; }
+
+async function keepScreenOn() {
+  if (!("wakeLock" in navigator)) { $("wake").textContent = "may turn off (no wake lock)"; return; }
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    $("wake").textContent = "kept on";
+    wakeLock.addEventListener("release", () => { $("wake").textContent = "may turn off"; });
+  } catch (e) {
+    $("wake").textContent = "may turn off";
+  }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && wakeLock !== null) keepScreenOn();
+});
+
+async function send() {
+  if (latest === null || latest.timestamp === sentStamp) return;
+  const c = latest.coords;
+  const body = {
+    lat: c.latitude, lon: c.longitude, accuracy: c.accuracy,
+    speed: (typeof c.speed === "number" && c.speed >= 0) ? c.speed : null,
+    heading: (typeof c.heading === "number" && !Number.isNaN(c.heading)) ? c.heading % 360 : null,
+  };
+  sentStamp = latest.timestamp;
+  try {
+    const r = await fetch("/api/gps", {method: "POST", headers: {"Content-Type": "application/json"},
+                                       body: JSON.stringify(body)});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const reply = await r.json();
+    sent += 1;
+    lastOk = Date.now();
+    $("sent").textContent = sent;
+    $("last").textContent = new Date().toLocaleTimeString();
+    if (reply.ok) setState("Sending", "ok");
+    else setState("Laptop isn't using phone GPS", "warn");
+  } catch (e) {
+    setState("Can't reach the laptop", "bad");
+  }
+}
+
+$("start").addEventListener("click", () => {
+  if (!("geolocation" in navigator)) { setState("This browser has no location access", "bad"); return; }
+  $("start").disabled = true;
+  $("start").textContent = "Running";
+  setState("Waiting for a GPS fix…", "warn");
+  keepScreenOn();
+  navigator.geolocation.watchPosition(
+    pos => {
+      latest = pos;
+      const c = pos.coords;
+      $("accuracy").textContent = `${Math.round(c.accuracy)} m`;
+      $("speed").textContent = (typeof c.speed === "number" && c.speed >= 0) ? `${(c.speed * 2.23694).toFixed(0)} mph` : "–";
+      $("heading").textContent = (typeof c.heading === "number" && !Number.isNaN(c.heading)) ? `${Math.round(c.heading)}°` : "–";
+    },
+    err => setState(err.code === 1 ? "Location permission denied" : `No GPS fix (${err.message})`, "bad"),
+    {enableHighAccuracy: true, maximumAge: 0, timeout: 15000},
+  );
+  setInterval(() => {
+    send();
+    if (lastOk && Date.now() - lastOk > 5000 && latest !== null) setState("No fix sent for 5 s", "warn");
+  }, 1000);
+});
+</script>
+</body>
+</html>

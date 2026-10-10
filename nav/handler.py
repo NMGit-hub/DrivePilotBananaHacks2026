@@ -48,6 +48,10 @@ NO_ROUTE = "There's no destination set. Say \"I'm going to\" and a place."
 NO_GPS = "I don't have a GPS position yet, so I can't plan a route. Try again in a moment."
 GPS_LOST = "I've lost the GPS signal, so I can't tell where we are on the route right now."
 NO_HOME = "I don't know where home is yet. Say the address instead, or set nav.home in config.yaml."
+NOT_THIS_EXIT = "Not this one."
+NOT_THIS_EXIT_NEXT = "Not this one, next exit."
+REROUTE_FAILED = "You're off the route, and I couldn't find a new one yet. I'll keep trying."
+FIXED_ALERTS = (NOT_THIS_EXIT, NOT_THIS_EXIT_NEXT, REROUTE_FAILED)  # pre-rendered at startup (instant playback)
 HOME_WORDS = {"home", "my home", "my house", "the house"}
 EXIT_TYPES = {"off ramp", "fork", "roundabout", "rotary", "roundabout turn"}
 # Steps that aren't a choice of lane by themselves (unless Mapbox gives lane data for them).
@@ -415,9 +419,7 @@ class NavHandler:
             exits = current.roundabout_exits_m
             for k, position in enumerate(exits):
                 if progress.along_m >= position - 3.0 and self._once("exit", current.index, k):
-                    out.append(
-                        ("nav_not_this_exit", "Not this one, next exit." if k == len(exits) - 1 else "Not this one.")
-                    )
+                    out.append(("nav_not_this_exit", NOT_THIS_EXIT_NEXT if k == len(exits) - 1 else NOT_THIS_EXIT))
         return out
 
     def _reroute(self, fix: GpsFix, generation: int) -> None:
@@ -443,10 +445,7 @@ class NavHandler:
                     self._reroute_failures += 1
                     log.warning("reroute failed", error=error, failures=self._reroute_failures)
                     if self._reroute_failures == 1:  # say it once; keep trying quietly, waiting longer each time
-                        text = (
-                            "nav_reroute_failed",
-                            "You're off the route, and I couldn't find a new one yet. I'll keep trying.",
-                        )
+                        text = ("nav_reroute_failed", REROUTE_FAILED)
                     return
                 current = self._gps() or fix
                 quick = self._rerouted_at is not None and current.t - self._rerouted_at < QUICK_REROUTE_S

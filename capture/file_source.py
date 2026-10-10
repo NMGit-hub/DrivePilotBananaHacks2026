@@ -144,6 +144,7 @@ class FileSource(VideoSource):
         resync_clock = True  # anchor the clock to the first frame of every segment
         late_frames = 0
         grab_ms = 0.0  # running average of the decode cost per frame
+        preview = False  # a seek while paused shows one frame at the new position
 
         while not self._stop.is_set():
             with self._ctrl_lock:
@@ -155,8 +156,18 @@ class FileSource(VideoSource):
                 last_t = -math.inf
                 resync_clock = True
                 self._media_clock.seek(seek)
+                preview = paused
                 log.info("seek", target=round(seek, 2), segment=segment)
             if paused:
+                if preview:
+                    preview = False
+                    frame = self._decode_one(cap, segment)
+                    if frame is not None:
+                        last_t = frame.t
+                        with self._ctrl_lock:
+                            self._media_clock.seek(frame.t)
+                        self._publish(frame)
+                    continue
                 self._wake.wait(_CONTROL_POLL_S)
                 self._wake.clear()
                 continue
@@ -232,6 +243,18 @@ class FileSource(VideoSource):
             elif not self.realtime:
                 self._media_clock.seek(t)  # lock-step: the (paused) clock follows the frames
             self._publish(Frame(image=image, t=t, index=index, captured_at=time.perf_counter(), segment=segment))
+
+    @staticmethod
+    def _decode_one(cap: cv2.VideoCapture, segment: int) -> Frame | None:
+        """The next frame, decoded (or None at the end)."""
+        if not cap.grab():
+            return None
+        ok, image = cap.retrieve()
+        if not ok or image is None:
+            return None
+        index = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+        t = max(cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0, 0.0)
+        return Frame(image=image, t=t, index=index, captured_at=time.perf_counter(), segment=segment)
 
     def _wait_until(self, t: float) -> bool:
         """Sleep until media time `t`. Returns False if interrupted by a control change or stop."""

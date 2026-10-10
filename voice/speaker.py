@@ -3,8 +3,10 @@
 PLAN.md "Rules for alerts": a chime before every alert; alerts play right away (pre-rendered); safety alerts
 interrupt anything and an interrupted answer resumes after. Here every alert interrupts an answer (a "you're
 up" that waits for a long answer to finish would miss the 0.3 s target); the interrupted sentence is said again
-afterwards. `stop()` silences everything at once. Each utterance's latency (queued → first sound at the
-speaker, device latency included) is recorded for the benchmarks.
+afterwards. `stop()` silences everything at once; `listening()` (wake word heard) does too, then plays a
+short blip. Alerts whose text was pre-rendered (`ClipCache.prepare`) play from memory; others (navigation,
+whose distances vary) are synthesized when said. Each utterance's latency (queued → first sound at the
+speaker, device latency included) is recorded for the benchmarks and passed to `on_record`.
 """
 
 from __future__ import annotations
@@ -12,14 +14,15 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
 
-from answers.speech import Utterance
+from answers.speech import Priority, Utterance
 from core.logging_setup import get_logger
 from voice.audio import AudioOutput
-from voice.tts import ClipCache, Tts, alert_chime
+from voice.tts import ClipCache, Tts, alert_chime, listen_tone
 
 log = get_logger(__name__)
 
@@ -60,11 +63,21 @@ class _State:
 class AudioSpeaker:
     """Speaks utterances on an `AudioOutput` (implements `answers.speech.Speaker`)."""
 
-    def __init__(self, tts: Tts, output: AudioOutput, clips: ClipCache, chime_volume: float = 0.25) -> None:
+    def __init__(
+        self,
+        tts: Tts,
+        output: AudioOutput,
+        clips: ClipCache,
+        chime_volume: float = 0.25,
+        listen_chime: bool = True,
+        on_record: Callable[[SpeechRecord], None] | None = None,
+    ) -> None:
         self.tts = tts
         self.output = output
         self.clips = clips
+        self.on_record = on_record
         self._chime = alert_chime(tts.rate, chime_volume)
+        self._listen = listen_tone(tts.rate, chime_volume) if listen_chime else None
         self._gap = np.zeros(round(0.04 * tts.rate), np.float32)
         self._cond = threading.Condition()
         self._state = _State()
@@ -99,6 +112,16 @@ class AudioSpeaker:
             self._state.generation += 1
             if self._state.playing is not None:
                 self.output.stop()
+
+    def listening(self) -> None:
+        """The wake word was heard: stop speaking (so "Hey DrivePilot, stop" works mid-answer) and blip."""
+        self.stop()
+        if self._listen is None:
+            return
+        cue = Utterance(text="", kind="cue", priority=Priority.SAFETY)
+        with self._cond:
+            self._state.alerts.append(_Item(cue, time.perf_counter(), self._listen))
+            self._cond.notify()
 
     def wait_idle(self, timeout: float = 30.0) -> bool:
         """Block until nothing is queued or playing (tests, benchmarks)."""
@@ -137,42 +160,50 @@ class AudioSpeaker:
             except Exception:
                 log.exception("speech synthesis failed", text=item.utterance.text)
                 audio = None
+            dropped: SpeechRecord | None = None
             with self._cond:
                 if self._state.generation != generation:  # stop() while we were synthesizing
-                    self._finish(item, None, interrupted=True)
-                    continue
-                if item.utterance.kind != "alert" and self._state.alerts:
+                    dropped = self._finish(item, None, interrupted=True)
+                elif item.utterance.kind == "answer" and self._state.alerts:
                     item.audio = audio  # an alert arrived during synthesis: it goes first, this answer right after
                     self._state.answers.appendleft(item)
                     self._state.playing = None
                     self._cond.notify_all()
                     continue
+            if dropped is not None:
+                self._report(dropped)
+                continue
             sound_at = self.output.play(audio, self.tts.rate) if audio is not None and len(audio) else None
             with self._cond:
                 stopped = self._state.generation != generation
                 interrupted = stopped or self._state.interrupted
-                if interrupted and not stopped and item.utterance.kind != "alert":
+                if interrupted and not stopped and item.utterance.kind == "answer":
                     self._state.answers.appendleft(_Item(item.utterance, item.queued_at, item.audio))
-                self._finish(item, sound_at, interrupted)
+                record = self._finish(item, sound_at, interrupted)
+            self._report(record)
 
     def _render(self, item: _Item) -> np.ndarray:
         if item.audio is not None:
             return item.audio
         utterance = item.utterance
         if utterance.kind == "alert":
-            audio = np.concatenate((self._chime, self._gap, self.clips.get(utterance.text)))
+            clip = self.clips.cached(utterance.text)
+            speech = clip if clip is not None else self.tts.synthesize(utterance.text)
+            audio = np.concatenate((self._chime, self._gap, speech))
         else:
             audio = self.tts.synthesize(utterance.text)
         item.audio = audio
         return audio
 
-    def _finish(self, item: _Item, sound_at: float | None, interrupted: bool) -> None:
+    def _finish(self, item: _Item, sound_at: float | None, interrupted: bool) -> SpeechRecord:
         """Record the utterance (caller holds the lock)."""
         record = SpeechRecord(item.utterance.kind, item.utterance.text, item.queued_at, sound_at, interrupted)
         self.records.append(record)
         if self._state.playing is item:
             self._state.playing = None
         self._cond.notify_all()
+        if record.kind == "cue":
+            return record
         log.info(
             "spoke",
             kind=record.kind,
@@ -180,3 +211,12 @@ class AudioSpeaker:
             interrupted=interrupted,
             text=record.text,
         )
+        return record
+
+    def _report(self, record: SpeechRecord) -> None:
+        """Hand a finished record to `on_record` (outside the lock)."""
+        if self.on_record is not None:
+            try:
+                self.on_record(record)
+            except Exception:
+                log.exception("on_record failed")

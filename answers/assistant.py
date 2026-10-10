@@ -37,6 +37,7 @@ NOTHING_TO_REPEAT = "I haven't said anything yet."
 STARTING = "I'm still starting up. Ask me again in a moment."
 NO_MODEL = "I can't look at the scene right now: the vision model isn't connected."
 NO_NAV = "Navigation isn't available right now."
+CAMERA_LOST = "I've lost the camera feed, so I can't see the road right now."
 HANDLER_ERROR = "Sorry, something went wrong answering that."
 CANCELLED = "Okay, cancelled."
 OKAY = "Okay."
@@ -90,9 +91,11 @@ class Assistant:
         speaker: Speaker,
         nav: NavAnswerer | None = None,
         model: SceneAnswerer | None = None,
+        unavailable: Callable[[], str | None] | None = None,
     ) -> None:
         self.cfg = cfg
         self._snapshot = snapshot
+        self._unavailable = unavailable  # why there's no snapshot (e.g. CAMERA_LOST); None: still starting
         self.speaker = speaker
         self.nav = nav
         self.model = model
@@ -197,7 +200,8 @@ class Assistant:
         if r.kind is RouteKind.CONTROL:
             return self._control(r.intent, snap), "control"
         if snap is None:
-            return STARTING, "local"
+            reason = self._unavailable() if self._unavailable is not None else None
+            return reason or STARTING, "local"
         sure_stopped = snap.ego_stopped and snap.ego_motion_confident
         if r.kind in (RouteKind.DESTINATION, RouteKind.NAV, RouteKind.LANE):
             if self.nav is None:
@@ -271,6 +275,10 @@ class Assistant:
             stale = snap is not None and (snap.t - last.t > REPEAT_STALE_S or snap.t < last.t)
             return EARLIER + last.text if stale else last.text
         raise ValueError(f"unknown control intent {intent!r}")
+
+    def interrupt(self) -> None:
+        """Stop speaking now and cut off any answer still streaming (the wake word was heard)."""
+        self._interrupt()
 
     def _interrupt(self) -> None:
         """Stop speaking now and cut off any answer still streaming."""
