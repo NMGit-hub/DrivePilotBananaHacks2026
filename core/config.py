@@ -460,6 +460,76 @@ class SignAlertsConfig(_Strict):
     recent: int = Field(6, ge=1, description="Recent sightings kept for the page and answers.")
 
 
+class LanesConfig(_Strict):
+    """YOLOPv2 lanes (perception/lanes.py) and the lane tracker and drift warning (state/lanes.py), V2-M5."""
+
+    enabled: bool = Field(True, description="Run the lane model (if its weights are installed) and the drift warning.")
+    fps: float = Field(12.0, gt=0.0, le=30.0, description="The lane model runs this often on the latest frame.")
+    weights: ConfigPath = Path("models/lanes/yolopv2.pt")
+    device: int = Field(0, ge=0, description="CUDA device index; the lane model refuses the CPU.")
+    half: bool = Field(True, description="FP16 inference.")
+    cuda_graph: bool = Field(True, description="Replay the forward pass as a CUDA graph (Windows launch overhead).")
+    # Geometry (a flat road seen by a pinhole camera; lateral positions need only the height and the horizon).
+    camera_height_m: float = Field(1.3, gt=0.0, description="Camera above the road (only a prior: see lane_width_m).")
+    camera_offset_m: float = Field(0.0, description="Camera right of the car's center line (left: negative).")
+    horizon_prior: float = Field(0.5, gt=0.0, lt=1.0, description="Horizon row / frame height until estimated.")
+    horizon_min: float = Field(0.3, gt=0.0, lt=1.0, description="The estimated horizon stays within these...")
+    horizon_max: float = Field(0.75, gt=0.0, lt=1.0, description="...fractions of the frame height.")
+    horizon_rate: float = Field(0.1, gt=0.0, le=1.0, description="Each measurement moves the estimate this share.")
+    hood_cutoff: float = Field(0.92, gt=0.0, le=1.0, description="Ignore mask rows below this (the hood, the dash).")
+    near_m: float = Field(4.0, gt=0.0, description="Lane-line pixels from this far ahead...")
+    far_m: float = Field(30.0, gt=0.0, description="...to this far are used.")
+    max_line_width_m: float = Field(0.6, gt=0.0, description="Wider mask runs in a row are blobs, not one line.")
+    max_heading: float = Field(0.35, gt=0.0, description="Lines' heading searched within ±this (dX/dZ, ~19°)...")
+    max_curvature: float = Field(0.008, ge=0.0, description="...and curvature within ±this (dX/dZ², 1/(2·radius)).")
+    bin_m: float = Field(0.1, gt=0.0, description="Line offsets are histogrammed in bins this wide.")
+    line_sigma_m: float = Field(0.12, gt=0.0, description="Histogram smoothing (one line's spread).")
+    min_line_sep_m: float = Field(1.5, gt=0.0, description="Two lines are at least this far apart (double = one).")
+    min_line_support_m: float = Field(2.0, gt=0.0, description="A line needs this much of its length detected.")
+    lane_width_m: float = Field(3.6, gt=0.0, description="Nominal lane width: our measured lanes set the scale.")
+    lane_width_min_m: float = Field(2.6, gt=0.0, description="Our lane is plausible between these widths...")
+    lane_width_max_m: float = Field(4.6, gt=0.0, description="...(after the scale is set).")
+    scale_min: float = Field(0.6, gt=0.0, description="The measured scale (camera height error) is kept within...")
+    scale_max: float = Field(1.7, gt=0.0, description="...these factors of the prior.")
+    scale_window: int = Field(60, ge=1, description="Lane widths (frames) the scale is the median of.")
+    gap_min: float = Field(0.75, gt=0.0, description="A neighbouring lane is this to...")
+    gap_max: float = Field(1.3, gt=0.0, description="...this many of our lane's widths wide.")
+    edge_drivable_max: float = Field(
+        0.35, ge=0.0, description="An outer line is the road's edge if drivable area reaches past it by < this (lanes)."
+    )
+    vote_window_s: float = Field(1.5, gt=0.0, description="Lane count and index are the majority over this long...")
+    vote_min_frames: int = Field(5, ge=1, description="...of at least this many frames that gave an answer...")
+    vote_share: float = Field(0.7, gt=0.5, le=1.0, description="...that agree this much (otherwise: None).")
+    # Drift: slowly closing in on a line, above 25 mph.
+    car_width_m: float = Field(1.85, gt=0.0)
+    min_speed_mps: float = Field(11.18, ge=0.0, description="PLAN.md: drift warnings above 25 mph (GPS speed).")
+    smooth_s: float = Field(0.3, gt=0.0, description="Lateral position smoothing (time constant).")
+    velocity_window_s: float = Field(1.5, gt=0.0, description="Lateral speed is fitted over this long.")
+    drift_gap_m: float = Field(0.3, description="Alert when the car's side is this close to the line...")
+    drift_min_mps: float = Field(0.08, ge=0.0, description="...closing in at least this fast...")
+    lane_change_mps: float = Field(0.5, gt=0.0, description="...but slower than this (faster: a lane change)...")
+    drift_window_s: float = Field(2.5, gt=0.0, description="...having moved toward it steadily for this long...")
+    drift_min_shift_m: float = Field(0.25, ge=0.0, description="...by at least this much.")
+    lane_change_quiet_s: float = Field(4.0, ge=0.0, description="No drift alert this long after a lane change.")
+    rearm_gap_m: float = Field(0.55, ge=0.0, description="After an alert: re-armed once the gap is this big again.")
+    cooldown_s: float = Field(10.0, ge=0.0, description="At most one drift alert in this long.")
+    lost_s: float = Field(1.0, gt=0.0, description="No lane for this long: the tracked position is forgotten.")
+
+    @model_validator(mode="after")
+    def _ordered(self) -> LanesConfig:
+        if not self.horizon_min < self.horizon_prior < self.horizon_max:
+            raise ValueError("need horizon_min < horizon_prior < horizon_max")
+        if self.far_m <= self.near_m:
+            raise ValueError("far_m must be greater than near_m")
+        if self.lane_width_max_m <= self.lane_width_min_m or self.gap_max <= self.gap_min:
+            raise ValueError("lane width and gap ranges must be min < max")
+        if self.scale_max <= self.scale_min:
+            raise ValueError("scale_max must be greater than scale_min")
+        if self.lane_change_mps <= self.drift_min_mps:
+            raise ValueError("lane_change_mps must be greater than drift_min_mps")
+        return self
+
+
 class MemoryConfig(_Strict):
     """Scene memory for "what was that sign?" (state/memory.py, V2-M4)."""
 
@@ -678,6 +748,7 @@ class AppConfig(_Strict):
     parking: ParkingConfig = ParkingConfig()
     memory: MemoryConfig = MemoryConfig()
     sign_alerts: SignAlertsConfig = SignAlertsConfig()
+    lanes: LanesConfig = LanesConfig()
 
     @property
     def effective_hfov_deg(self) -> float:

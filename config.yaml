@@ -139,6 +139,28 @@ memory:                     # V2 "what was that sign?" (state/memory.py)
   frames: 5
   signs: 4                  # ...plus the most recent sign close-ups
 
+lanes:                      # V2 YOLOPv2 lanes (perception/lanes.py) + lane tracker and drift warning (state/lanes.py)
+  enabled: true
+  fps: 12.0                 # the lane model runs at most this often, on the newest frame (its own thread)
+  weights: models/lanes/yolopv2.pt  # official TorchScript release (github.com/CAIC-AD/YOLOPv2, MIT)
+  half: true
+  cuda_graph: true          # replay the forward pass as a CUDA graph (eager TorchScript is launch-bound here)
+  camera_height_m: 1.3      # only a prior: our own lane's measured width sets the metric scale
+  camera_offset_m: 0.0      # camera right of the car's center line (left: negative)
+  horizon_prior: 0.5        # horizon row / frame height until measured from the lines' vanishing point
+  lane_width_m: 3.6         # nominal lane width (the scale); our lane must measure 2.6-4.6 m after that
+  gap_min: 0.75             # a neighbouring lane is 0.75-1.3 of our lane's width...
+  gap_max: 1.3
+  edge_drivable_max: 0.35   # ...and the road ends at a line the drivable area doesn't reach past (by > 0.35 lanes)
+  vote_window_s: 1.5        # lane count and index: the majority of the last 1.5 s (>= 5 frames, >= 70 %)
+  min_speed_mps: 11.18      # PLAN.md: drift warnings only above 25 mph (GPS speed; no GPS = no warnings)
+  drift_gap_m: 0.3          # "Careful, you're drifting right.": the car's side within 0.3 m of the line...
+  drift_min_mps: 0.08       # ...closing in at 0.08-0.5 m/s (faster is a lane change: we can't see the signal)...
+  lane_change_mps: 0.5
+  drift_window_s: 2.5       # ...steadily for 2.5 s, by at least 0.25 m
+  drift_min_shift_m: 0.25
+  cooldown_s: 10.0          # once per drift; re-armed back near the lane center or after a lane change
+
 vision_model: claude       # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
 vision:
   frames: 3                 # latest frame at full width + 2 earlier, smaller ones (motion, things just passed)
