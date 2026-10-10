@@ -1,0 +1,18 @@
+# DrivePilot configuration. API keys are NOT stored here; they come from environment variables (.env).
+# Sections are filled in milestone by milestone; see PROGRESS.md.
+
+video:
+  source: file            # "camera" (phone via scrcpy) or "file" (recorded drive)
+  video_path: data/videos/dev_clip.mov
+  gpx_path: null          # optional GPX recorded with the clip (file mode only)
+  gpx_offset_s: 0.0       # GPX time at video t=0 minus the GPX start, if the clocks differ
+  realtime: true          # file mode plays at real-time speed (drops frames if processing falls behind)
+
+gps:
+  source: auto            # "auto" = GPX in file mode, phone page in camera mode; or "gpx", "phone", "none"
+
+vision_model: gemini      # provider for scene questions: gemini | claude | ollama | mock
+
+logging:
+  level: INFO
+  runs_dir: runs          # every run writes frames, detections, questions, answers and timings here

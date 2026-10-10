@@ -1,0 +1,51 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Videos, audio and GPS recordings (large, personal or licensed data)
+data/videos/
+data/gps/
+data/audio/
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+
+# Model weights and downloaded model caches
+models/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+*.safetensors
+
+# Run output and logs
+runs/
+logs/
+*.log
+
+# Generated audio clips (rebuilt by scripts)
+assets/generated/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

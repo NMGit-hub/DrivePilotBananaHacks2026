@@ -1,0 +1,45 @@
+# DrivePilot: pinned top-level dependencies (Python 3.11, Windows 11, NVIDIA GPU with CUDA 12 driver).
+# Full transitive lock: requirements-lock.txt. Install steps: see README.md.
+#
+# CUDA 12.6 PyTorch build. CUDA 12 (not 13) on purpose: faster-whisper's CTranslate2 needs
+# cublas64_12.dll and cudnn64_9.dll, which this torch wheel ships.
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.14.1+cu126
+torchvision==0.29.1+cu126
+
+# Detection + tracking (YOLO26s + ByteTrack)
+ultralytics==8.4.175
+lap==0.5.13
+opencv-python==5.0.0.93
+numpy==2.4.6
+scipy==1.17.1
+
+# Voice: wake word, speech-to-text, text-to-speech, audio I/O
+openwakeword==0.6.0
+onnxruntime==1.31.0
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+piper-tts==1.8.0
+sounddevice==0.5.6
+soundfile==0.14.0
+
+# Server and UI
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+websockets==16.1.1
+
+# Config, HTTP and cloud APIs
+PyYAML==6.0.3
+pydantic==2.14.0
+python-dotenv==1.2.4
+httpx==0.28.1
+google-genai==2.29.0
+anthropic==1.13.0
+gpxpy==1.6.2
+
+# GPU monitoring
+nvidia-ml-py==13.615.71
+
+# Tests
+pytest==9.1.1
+pytest-asyncio==1.4.0
