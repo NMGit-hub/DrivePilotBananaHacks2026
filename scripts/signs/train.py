@@ -31,7 +31,7 @@ def train_det(args: argparse.Namespace) -> Path:
     """Fine-tune YOLO26s on data/signs/det; returns the best weights."""
     from ultralytics import YOLO
 
-    run = RUNS / "det"
+    run = RUNS / args.name
     last = run / "weights" / "last.pt"
     if args.resume:
         model = YOLO(str(last))
@@ -50,7 +50,7 @@ def train_det(args: argparse.Namespace) -> Path:
             device=0,
             cache=False,  # the shared machine has no RAM to spare for the whole dataset
             project=str(RUNS),
-            name="det",
+            name=args.name,
             exist_ok=True,
             save_period=1,
             patience=args.patience,
@@ -62,8 +62,11 @@ def train_det(args: argparse.Namespace) -> Path:
             plots=True,
             seed=0,
             fraction=args.fraction,
+            val=args.val,
         )
     best = run / "weights" / "best.pt"
+    if args.no_copy:
+        return best
     MODELS.mkdir(parents=True, exist_ok=True)
     shutil.copy2(best, MODELS / "signs_yolo26s.pt")
     print(f"best detector weights -> {MODELS / 'signs_yolo26s.pt'}")
@@ -74,7 +77,7 @@ def train_cls(args: argparse.Namespace) -> Path:
     """Train the speed-value classifier on data/signs/cls; returns the best weights."""
     from ultralytics import YOLO
 
-    run = RUNS / "cls"
+    run = RUNS / args.name
     if args.resume:
         model = YOLO(str(run / "weights" / "last.pt"))
         model.train(resume=True)
@@ -89,12 +92,13 @@ def train_cls(args: argparse.Namespace) -> Path:
             device=0,
             cache=False,
             project=str(RUNS),
-            name="cls",
+            name=args.name,
             exist_ok=True,
             save_period=1,
             patience=args.patience,
             fliplr=0.0,
             erasing=0.0,
+            dropout=args.dropout,  # fewer overconfident readings of blurred numbers
             auto_augment=None,
             scale=0.1,  # RandomResizedCrop keeps >= 90% of the crop: the digits must stay in view
             hsv_h=0.01,
@@ -104,6 +108,8 @@ def train_cls(args: argparse.Namespace) -> Path:
             seed=0,
         )
     best = run / "weights" / "best.pt"
+    if args.no_copy:
+        return best
     MODELS.mkdir(parents=True, exist_ok=True)
     shutil.copy2(best, MODELS / "speed_value_cls.pt")
     print(f"best classifier weights -> {MODELS / 'speed_value_cls.pt'}")
@@ -124,7 +130,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fraction", type=float, default=1.0, help="det: train on this fraction of the tiles")
     p.add_argument("--base", default=None, help="det: starting weights (default: COCO yolo26s.pt)")
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--dropout", type=float, default=0.2, help="cls: dropout before the classifier head")
+    p.add_argument("--name", default=None, help="run folder under runs/signs (default: det / cls)")
+    p.add_argument("--no-copy", action="store_true", help="don't copy the best weights to models/signs")
+    p.add_argument("--val", action=argparse.BooleanOptionalAction, default=True)
     args = p.parse_args(argv)
+    args.name = args.name or args.what
     if args.imgsz is None:
         args.imgsz = 640 if args.what == "det" else 96
     if args.what == "det":

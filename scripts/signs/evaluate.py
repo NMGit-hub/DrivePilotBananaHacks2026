@@ -33,10 +33,9 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from core.config import load_config  # noqa: E402
 from core.types import Frame  # noqa: E402
-from perception.sign_classes import KINDS, VALUE_KINDS, kind_from_label  # noqa: E402
+from perception.sign_classes import KINDS, VALUE_KINDS  # noqa: E402
 
 BDD_IMAGES = REPO_ROOT / "data" / "signs" / "raw" / "bdd100k_det" / "data" / "images"
-CTACKE = REPO_ROOT / "data" / "signs" / "raw" / "ctacke" / "data"
 HELDOUT = REPO_ROOT / "eval" / "sign_labels_bdd.json"
 METRICS = REPO_ROOT / "models" / "signs" / "metrics.json"
 IOU_HIT = 0.5
@@ -267,21 +266,18 @@ def bdd_items() -> list[tuple[str, Path, list[Gt], list[Any]]]:
 
 
 def public_items() -> list[tuple[str, Path, list[Gt], list[Any]]]:
-    """ctacke "val": every speed-limit box with its value (all treated as readable labels by the dataset)."""
+    """ctacke "val" (public, 1920x1080): its speed-limit boxes with the re-read checks of verify_ctacke.py.
+
+    Boxes whose kind can't be told (dark/blurred blobs) are ignore regions; a box whose number can't be read is
+    a labeled sign but not "readable" (it counts for detection, not for the value rate).
+    """
+    from scripts.signs.prepare_data import ctacke_samples
+
     items: list[tuple[str, Path, list[Gt], list[Any]]] = []
-    for lab in sorted((CTACKE / "labels" / "val").glob("*/*.txt")):
-        mapped = kind_from_label(lab.parent.name)
-        img = CTACKE / "images" / "val" / lab.parent.name / (lab.stem + ".png")
-        if mapped is None or not img.exists():
-            continue
-        gts = []
-        for line in lab.read_text().splitlines():
-            p = line.split()
-            if len(p) == 5:
-                cx, cy, bw, bh = (float(v) for v in p[1:])
-                box = ((cx - bw / 2) * 1920, (cy - bh / 2) * 1080, (cx + bw / 2) * 1920, (cy + bh / 2) * 1080)
-                gts.append(Gt(box, mapped[0], mapped[1], True))
-        items.append((f"{lab.parent.name}/{lab.stem}", img, gts, []))
+    for s in ctacke_samples("val"):
+        gts = [Gt(b.xyxy, b.kind, b.value, b.cls_label is None) for b in s.boxes if b.kind is not None]
+        ignore = [b.xyxy for b in s.boxes if b.kind is None]
+        items.append((f"{s.image.parent.name}/{s.image.stem}", s.image, gts, ignore))
     return items
 
 

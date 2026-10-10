@@ -59,11 +59,16 @@ SIGN_CLASS = 9
 
 @dataclass
 class Box:
-    """One labeled box in source-image pixels. kind None = mask it (unknown sign)."""
+    """One labeled box in source-image pixels.
+
+    kind None = mask it in detector images (sign of unknown kind). cls_label overrides the value classifier's label
+    for the crop (e.g. "none" for a speed limit too blurred to identify, which is masked for the detector).
+    """
 
     xyxy: tuple[float, float, float, float]
     kind: str | None
     value: int | None = None
+    cls_label: str | None = None
 
 
 @dataclass
@@ -149,22 +154,58 @@ def bdd_sign_boxes(split: str) -> dict[str, dict[str, tuple[float, float, float,
     return out
 
 
+# The mph25 sequence shows S5-1 SCHOOL SPEED LIMIT 25 signs (yellow-green SCHOOL panel; checked by eye and by
+# Claude on every crop), not plain R2-1 speed limits.
+CTACKE_KIND = {"mph25": "school_speed_limit"}
+CTACKE_CHECK = DATA / "ctacke_readable.jsonl"  # scripts/signs/verify_ctacke.py
+CTACKE_CHECK_RAW = DATA / "ctacke_readable.raw.jsonl"
+
+
+def ctacke_checks() -> tuple[dict[str, bool], dict[str, str]]:
+    """(key -> value readable, key -> kind as re-read by Claude) from scripts/signs/verify_ctacke.py, if run."""
+    readable: dict[str, bool] = {}
+    kinds: dict[str, str] = {}
+    if CTACKE_CHECK.exists():
+        for line in CTACKE_CHECK.read_text(encoding="utf-8").splitlines():
+            r = json.loads(line)
+            readable[r["key"]] = bool(r["readable"])
+    if CTACKE_CHECK_RAW.exists():
+        for line in CTACKE_CHECK_RAW.read_text(encoding="utf-8").splitlines():
+            r = json.loads(line)
+            kinds[r["key"]] = r["kind"]
+    return readable, kinds
+
+
 def ctacke_samples(split: str) -> list[Sample]:
-    """ctacke speed-limit frames (value from the folder name)."""
+    """ctacke speed-limit frames (value from the folder name), with the re-read checks applied.
+
+    A box whose kind Claude couldn't tell ("unclear": a dark or blurred blob) is masked for the detector and is a
+    reject ("none") crop for the value classifier; a box of clear kind whose number can't be read keeps its
+    detector label and is a reject crop too.
+    """
+    readable, kinds = ctacke_checks()
     out = []
     for lab in sorted((CTACKE / "labels" / split).glob("*/*.txt")):
-        value = kind_from_label(lab.parent.name)
+        mapped = kind_from_label(lab.parent.name)
         img = CTACKE / "images" / split / lab.parent.name / (lab.stem + ".png")
-        if not img.exists() or value is None:
+        if not img.exists() or mapped is None:
             continue
-        h, w = 1080, 1920  # every ctacke frame is 1920x1080 (checked in prepare); boxes are normalized
+        kind, value = CTACKE_KIND.get(lab.parent.name, mapped[0]), mapped[1]
+        h, w = 1080, 1920  # every ctacke frame is 1920x1080 (checked); boxes are normalized
         boxes = []
-        for line in lab.read_text().splitlines():
+        for k, line in enumerate(lab.read_text().splitlines()):
             parts = line.split()
             if len(parts) != 5:
                 continue
             cx, cy, bw, bh = (float(v) for v in parts[1:])
-            boxes.append(Box(((cx - bw / 2) * w, (cy - bh / 2) * h, (cx + bw / 2) * w, (cy + bh / 2) * h), *value))
+            xyxy = ((cx - bw / 2) * w, (cy - bh / 2) * h, (cx + bw / 2) * w, (cy + bh / 2) * h)
+            key = f"ctacke/{split}/{lab.parent.name}/{lab.stem}/{k}"
+            if kinds.get(key) == "unclear":
+                boxes.append(Box(xyxy, None, value, cls_label="none"))
+            elif key in readable and not readable[key]:
+                boxes.append(Box(xyxy, kind, value, cls_label="none"))
+            else:
+                boxes.append(Box(xyxy, kind, value))
         if boxes:
             out.append(Sample(img, boxes, "ctacke"))
     return out
@@ -283,7 +324,10 @@ def load_scaled(sample: Sample) -> tuple[np.ndarray, Sample] | None:
     s = min(1.0, WIDTH / w)
     if s < 1.0:
         img = cv2.resize(img, (round(w * s), round(h * s)), interpolation=cv2.INTER_AREA)
-    boxes = [Box((b.xyxy[0] * s, b.xyxy[1] * s, b.xyxy[2] * s, b.xyxy[3] * s), b.kind, b.value) for b in sample.boxes]
+    boxes = [
+        Box((b.xyxy[0] * s, b.xyxy[1] * s, b.xyxy[2] * s, b.xyxy[3] * s), b.kind, b.value, b.cls_label)
+        for b in sample.boxes
+    ]
     for b in boxes:
         if b.kind is None:
             mask_box(img, b.xyxy)
@@ -467,11 +511,10 @@ def _real_crops(samples: list[Sample], copies: int, seed: int, min_h: float) -> 
         if img is None:
             continue
         for b in s.boxes:
-            if b.kind is None or b.xyxy[3] - b.xyxy[1] < min_h:
+            if b.xyxy[3] - b.xyxy[1] < min_h or (b.kind is None and b.cls_label is None):
                 continue
-            label = value_class(b.value) if b.kind in VALUE_KINDS else "none"
-            if b.kind in VALUE_KINDS and b.value is None:
-                continue  # a speed limit whose value nobody could read: no value label
+            # A speed limit whose number nobody could read is a reject crop: the classifier must learn to say so.
+            label = b.cls_label or (value_class(b.value) if b.kind in VALUE_KINDS else "none")
             for _ in range(copies if label != "none" else 1):
                 crop = jitter_crop(img, b.xyxy, rng)
                 if crop is not None:
@@ -511,7 +554,7 @@ def _synth_cls_job(args: tuple[int, int, list[str], int]) -> list[tuple[str, np.
     while len(out) < count:
         bg = bgs[int(rng.integers(len(bgs)))]
         h, w = bg.shape[:2]
-        size = float(np.exp(rng.uniform(np.log(14), np.log(130))))
+        size = float(np.exp(rng.uniform(np.log(16), np.log(130))))  # the app reads no value below 16 px
         if value:
             school = value in (15, 20, 25) and rng.random() < 0.25
             sign = renderer.speed(value, school, rng)
