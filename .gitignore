@@ -62,3 +62,9 @@ desktop.ini
 
 # The trained wake-word model is small and slow to regenerate: tracked (must come after the *.onnx rule)
 !models/wakeword/hey_drivepilot.onnx
+
+# Sign fine-tune (V2-M6): datasets stay local; the evaluation metrics are tracked
+data/signs/
+!models/signs/
+models/signs/*
+!models/signs/metrics.json

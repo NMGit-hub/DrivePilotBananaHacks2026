@@ -177,3 +177,17 @@ logging:
   level: INFO
   runs_dir: runs            # each run writes frames, detections, questions, answers and timings here
   frame_log_interval_s: 1.0
+
+signs:                      # V2-M6 fine-tuned US sign detector (perception/signs.py; scripts/signs/README.md)
+  weights: models/signs/signs_yolo26s.pt          # detector (13 MUTCD kinds); engine built next to it
+  classifier_weights: models/signs/speed_value_cls.pt  # speed-limit value (5-85 mph) or "none"
+  engine: tensorrt          # tensorrt | pytorch (eager, much slower on Windows)
+  device: 0
+  half: true
+  imgsz: [736, 1280]        # whole frame at 1280 px wide: distant signs stay ~15-40 px tall
+  classifier_imgsz: 96
+  conf: 0.4                 # minimum detection confidence (per-kind overrides in class_conf)
+  class_conf: {}
+  iou: 0.6
+  value_conf: 0.9           # a speed value is reported only above this classifier probability...
+  value_min_px: 16.0        # ...and only for signs at least this tall (pixels at 1280 px frame width)
