@@ -300,6 +300,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
+- **V2 build plan proposed** (`V2_BUILD_PLAN.md`, 2026-10-10): milestones V2-M0..M8 with "done when" tests and how
+  each feature is tested without a live drive; waiting for the user's approval and answers (parking design, sign
+  fine-tune go/no-go, Monday's deadline) before building.
 - **Before calling V1 done (needs the team):** check the CPU throttling (below) and re-run
   `scripts/bench_app.py --silent` (all targets were met at 10:01; at 10:20 the CPU was stuck at ~0.75 GHz);
   ask a few questions live by voice with the phone camera (`python -m app --camera`) and try the phone GPS page;
