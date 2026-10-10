@@ -8,7 +8,9 @@ mark the answer against the expected one, and report accuracy per category and a
 
 The sheet is a CSV in PLAN.md's format: clip (a file name, or part of one, under data/videos/), time_s, question,
 expected, type (the category), notes. An expected answer starting with "ALERT@<seconds>:" also requires the
-alert to be spoken within ±1.5 s of that video time ("tell me when it's green").
+alert to be spoken within ±1.5 s of that video time ("tell me when it's green"; unrequested safety warnings such
+as a pedestrian in our path don't count as it). The clips are BDD100K dashcam videos, ~60° across: the geometry
+of V2 features (parking, pedestrians) uses that field of view (`--hfov`).
 
 Each clip is processed frame by frame from its start (every frame, so results don't depend on machine speed), so
 the tracker has its full history at each row's time. Questions go through the same `Assistant` as the app: local
@@ -42,7 +44,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from answers.assistant import Assistant  # noqa: E402
 from answers.scene import SceneHandler  # noqa: E402
-from answers.speech import TextSpeaker  # noqa: E402
+from answers.speech import Priority, TextSpeaker  # noqa: E402
 from answers.vision import VisionError, VisionModel, VisionRequest, create_vision_model  # noqa: E402
 from capture.file_source import FileSource  # noqa: E402
 from core.config import AppConfig, load_config  # noqa: E402
@@ -261,8 +263,10 @@ def run_clip(
     for row in pending:  # past the end of the clip
         row.answer, row.source = None, "past the end of the clip"
     for row in rows:
-        if row.alert_at is not None:
-            said = [u.t for u in speaker.said if u.kind == "alert" and u.t >= row.time_s]
+        if row.alert_at is not None:  # the alert a watch promised (not an unrequested safety warning)
+            said = [
+                u.t for u in speaker.said if u.kind == "alert" and u.priority < Priority.SAFETY and u.t >= row.time_s
+            ]
             row.alert_said_at = round(said[0], 2) if said else None
 
 
@@ -400,9 +404,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--previous", type=Path, default=None, help="An earlier results.csv: keep its manual verdicts.")
     parser.add_argument("--no-judge", action="store_true")
     parser.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    parser.add_argument("--hfov", type=float, default=60.0, help="Field of view of the clips (BDD100K: ~60°).")
     args = parser.parse_args(argv)
 
-    cfg = load_config(REPO_ROOT / "config.yaml", overrides=args.overrides)
+    cfg = load_config(REPO_ROOT / "config.yaml", overrides=[f"video.file.hfov_deg={args.hfov}", *args.overrides])
     rows = load_sheet(args.sheet)
     if args.rows:
         picked = parse_selection(args.rows)
