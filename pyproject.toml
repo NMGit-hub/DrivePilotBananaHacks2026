@@ -1,0 +1,35 @@
+[project]
+name = "drivepilot"
+version = "0.1.0"
+description = "Dashcam voice co-pilot (Banana Hacks 2026)"
+requires-python = ">=3.11,<3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = [
+    "gpu: needs the CUDA GPU (skipped automatically when unavailable)",
+    "slow: takes more than a few seconds",
+    "network: calls a live external API (skipped unless DRIVEPILOT_NETWORK_TESTS=1)",
+]
+filterwarnings = ["ignore::DeprecationWarning:ultralytics.*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", ".venv-*", "runs", "models", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "BLE", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # allow typographic characters (→, ×, –) in strings and comments
+
+[tool.mypy]
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+exclude = ['^tests/', '^scripts/wakeword/', '^\.venv']

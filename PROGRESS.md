@@ -4,6 +4,18 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### M0: core foundations (2026-10-10)
+- `core/config.py`: `config.yaml` → strict, immutable pydantic settings. Unknown keys and uncoerced types fail
+  with the dotted field path; YAML 1.2 scalar rules; dotted overrides (`--set video.source=camera`); secrets
+  from env/.env as `SecretStr` (real env wins over .env); `gps_source` resolution; non-UTF-8 files → clear error.
+- `core/logging_setup.py`: structured logger (any field name), console + JSON lines, secret redaction
+  everywhere (re-setup keeps it), numpy/NaN-safe JSON.
+- `core/clock.py`: `WallClock` (camera) and thread-safe pausable/seekable `MediaClock` (file playback).
+- `core/runlog.py`: per-run review folder (config, events, detections, perf, frames). Text never blocks or drops;
+  frames drop when the writer is behind; clean drain on close/atexit.
+- `core/types.py`: read-only, identity-compared `Frame` with a `segment` counter for seeks.
+- `app.py --print-config` (keys masked). Independent review found 12 issues; all fixed, with tests.
+
 ### Step 2: V1 build plan approved (2026-10-09)
 - BUILD_PLAN.md: milestones M0–M9 with "done when" tests, plus a V1 feature coverage table (all features, not
   just the 4-way stop; "tell me when the light is green" added at the user's request).
@@ -19,6 +31,8 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - Dev footage: BDD100K validation clips in `data/videos/` (gitignored). See "Test data" below.
 
 ## Verified (and how)
+- **M0:** 64 pytest tests pass (config, clocks, logging, run folder incl. stalled-writer and concurrent-close
+  cases, Frame, CLI); ruff and mypy clean. `python -m app --print-config` shows keys only as set/missing.
 - **API keys work** (live calls, 2026-10-09): Anthropic `claude-haiku-4-5` answered a text prompt in 1.06 s;
   the Mapbox public token works for Geocoding v6 and Directions v5 `driving-traffic` (a 12.7 km Redmond →
   Seattle route came back with lane data on 116 intersections). Keys are in `.env` (gitignored).
@@ -34,7 +48,7 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   imports work with `torch.cuda.is_available() == True`.
 
 ## Next
-- M0: core foundations (config, logging, clocks). Then M1.
+- M1: video sources (file + scrcpy camera), YOLO26s + ByteTrack, ego motion, headless benchmark.
 - In the background: "Hey DrivePilot" wake-word training.
 
 ## Test data

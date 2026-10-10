@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -65,11 +66,13 @@ def check_yolo() -> bool:
     torch.cuda.synchronize()
     start = time.perf_counter()
     n = 30
+    result: Any = None
     for _ in range(n):
-        result = model.predict(frame, device=0, half=True, verbose=False)[0]
+        result = model.predict(frame, device=0, half=True, verbose=False)[0]  # type: ignore[index]
     torch.cuda.synchronize()
     per_frame_ms = (time.perf_counter() - start) / n * 1000
     # AutoBackend wraps the real network as `.model`; check the actual weights, not a wrapper attribute.
+    assert model.predictor is not None
     param = next(model.predictor.model.model.parameters())
     ok = param.device.type == "cuda" and param.dtype == torch.float16
     print(
@@ -81,14 +84,15 @@ def check_yolo() -> bool:
 
 def check_ctranslate2() -> bool:
     """Confirm CTranslate2 (faster-whisper's backend) sees the GPU and supports float16."""
-    import torch  # noqa: F401 - importing torch first puts its CUDA DLLs on the search path
-
+    # Import torch first: it puts its bundled cuBLAS/cuDNN DLLs on the search path that CTranslate2 needs.
+    import torch  # noqa: F401, I001
     import ctranslate2
 
     count = ctranslate2.get_cuda_device_count()
     types = ctranslate2.get_supported_compute_types("cuda") if count else set()
     ok = count > 0 and "float16" in types
-    print(f"{'OK' if ok else 'FAIL'}: CTranslate2 {ctranslate2.__version__}, CUDA devices={count}, types={sorted(types)}")
+    status = "OK" if ok else "FAIL"
+    print(f"{status}: CTranslate2 {ctranslate2.__version__}, CUDA devices={count}, types={sorted(types)}")
     return ok
 
 

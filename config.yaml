@@ -1,18 +1,49 @@
-# DrivePilot configuration. API keys are NOT stored here; they come from environment variables (.env).
-# Sections are filled in milestone by milestone; see PROGRESS.md.
+# DrivePilot configuration. API keys are NOT stored here: they come from environment variables / .env
+# (ANTHROPIC_API_KEY, MAPBOX_ACCESS_TOKEN, GEMINI_API_KEY). Relative paths resolve against this file's folder.
+# Unknown keys are rejected at startup, so typos fail loudly. Sections grow milestone by milestone.
 
 video:
-  source: file            # "camera" (phone via scrcpy) or "file" (recorded drive)
-  video_path: data/videos/dev_clip.mov
-  gpx_path: null          # optional GPX recorded with the clip (file mode only)
-  gpx_offset_s: 0.0       # GPX time at video t=0 minus the GPX start, if the clocks differ
-  realtime: true          # file mode plays at real-time speed (drops frames if processing falls behind)
+  source: file              # the one switch: "camera" (phone via scrcpy) or "file" (recorded drive)
+  file:
+    path: data/videos/dev_clip.mov
+    gpx_path: null          # optional GPX track recorded with the clip
+    gpx_offset_s: 0.0       # GPX time at video t=0 minus the first GPX point time
+    realtime: true          # play at real-time speed; drop frames if processing falls behind
+    start_s: 0.0
+    loop: false
+  camera:
+    scrcpy_dir: null        # folder with adb.exe + scrcpy-server; null = auto-detect the winget install
+    camera_id: 0            # OnePlus 12: 0 = logical back camera (zoom 0.6 = ultrawide)
+    camera_zoom: 0.6
+    width: 1920
+    height: 1080
+    fps: 30
+    bitrate_mbps: 8.0
 
 gps:
-  source: auto            # "auto" = GPX in file mode, phone page in camera mode; or "gpx", "phone", "none"
+  source: auto              # auto = GPX in file mode (if gpx_path is set), phone page in camera mode
 
-vision_model: claude      # provider for scene questions: claude (Haiku, default) | gemini | ollama | mock
+vision_model: claude        # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
+vision:
+  claude:
+    model: claude-haiku-4-5
+    max_tokens: 300
+    timeout_s: 8.0
+  gemini:
+    model: gemini-3.8-flash
+    thinking_level: low
+    max_tokens: 300
+    timeout_s: 8.0
+  ollama:
+    model: qwen2.5vl:7b
+    host: http://localhost:11434
+    timeout_s: 15.0
+
+ui:
+  host: 127.0.0.1
+  port: 8000
 
 logging:
   level: INFO
-  runs_dir: runs          # every run writes frames, detections, questions, answers and timings here
+  runs_dir: runs            # each run writes frames, detections, questions, answers and timings here
+  frame_log_interval_s: 1.0

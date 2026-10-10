@@ -1,0 +1,349 @@
+"""Load and validate `config.yaml` plus secrets from the environment / `.env`.
+
+Usage:
+    cfg = load_config()                                   # repo config.yaml + .env
+    cfg = load_config(overrides=["video.source=camera"])  # dotted-key overrides (CLI style)
+
+Every section is a strict, immutable pydantic model: unknown keys are errors, scalars are not coerced (`fps: true`
+or `realtime: "no"` fail), and YAML is read with YAML 1.2 scalar rules (no `yes/no` booleans, no base-60 numbers
+like `1:30`). A typo in config.yaml fails loudly at startup instead of silently falling back to a default.
+Secrets never live in config.yaml: they are read from environment variables (optionally populated from `.env`)
+into `SecretStr` fields that mask themselves in reprs, logs and dumps.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+from typing import Annotated, Any, ClassVar, Literal
+
+import yaml
+from dotenv import dotenv_values
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    Strict,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG_PATH = REPO_ROOT / "config.yaml"
+DEFAULT_ENV_PATH = REPO_ROOT / ".env"
+
+
+class ConfigError(Exception):
+    """Raised when the configuration file is missing, malformed or fails validation."""
+
+
+# Paths come from YAML as strings, so they are the one type allowed to be converted.
+ConfigPath = Annotated[Path, Strict(False)]
+
+
+class _Strict(BaseModel):
+    """Base for all config sections: unknown keys rejected, no type coercion, immutable after loading."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+
+class _Yaml12Loader(yaml.SafeLoader):
+    """SafeLoader with YAML 1.2 core-schema scalars: only true/false are booleans, no octal-by-leading-zero,
+    no base-60 numbers."""
+
+
+_BOOL, _INT, _FLOAT = "tag:yaml.org,2002:bool", "tag:yaml.org,2002:int", "tag:yaml.org,2002:float"
+_Yaml12Loader.yaml_implicit_resolvers = {
+    first: [(tag, rx) for tag, rx in resolvers if tag not in (_BOOL, _INT, _FLOAT)]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_Yaml12Loader.add_implicit_resolver(_BOOL, re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF"))
+_Yaml12Loader.add_implicit_resolver(
+    _INT, re.compile(r"^(?:[-+]?(?:0|[1-9][0-9]*)|0x[0-9a-fA-F]+|0o[0-7]+)$"), list("-+0123456789")
+)
+_Yaml12Loader.add_implicit_resolver(
+    _FLOAT,
+    re.compile(
+        r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
+    ),
+    list("-+0123456789."),
+)
+
+
+def _yaml_load(text: str) -> Any:
+    return yaml.load(text, Loader=_Yaml12Loader)
+
+
+# --------------------------------------------------------------------------------------------- video
+
+
+class FileVideoConfig(_Strict):
+    """Recorded-drive input (`video.source: file`)."""
+
+    path: ConfigPath = Path("data/videos/dev_clip.mov")
+    gpx_path: ConfigPath | None = None
+    gpx_offset_s: float = Field(0.0, description="GPX time at video t=0 minus the first GPX point time.")
+    realtime: bool = Field(True, description="Play at real-time speed, dropping frames if processing lags.")
+    start_s: float = Field(0.0, ge=0.0, description="Start playback this many seconds into the clip.")
+    loop: bool = False
+
+
+class CameraVideoConfig(_Strict):
+    """Live phone camera through scrcpy-server (`video.source: camera`)."""
+
+    scrcpy_dir: ConfigPath | None = Field(
+        None, description="Folder with adb.exe and scrcpy-server; auto-detected if null."
+    )
+    camera_id: int = Field(0, ge=0)
+    camera_zoom: float = Field(0.6, gt=0.0, description="0.6 on a logical camera = ultrawide field of view.")
+    width: int = Field(1920, gt=0)
+    height: int = Field(1080, gt=0)
+    fps: int = Field(30, gt=0, le=60)
+    bitrate_mbps: float = Field(8.0, gt=0.0)
+
+
+class VideoConfig(_Strict):
+    """Video input. `source` is the single switch between live camera and recorded file."""
+
+    source: Literal["camera", "file"] = "file"
+    file: FileVideoConfig = FileVideoConfig()
+    camera: CameraVideoConfig = CameraVideoConfig()
+
+
+# ----------------------------------------------------------------------------------------------- gps
+
+
+class GpsConfig(_Strict):
+    """GPS input: GPX replay in file mode, the phone web page in camera mode."""
+
+    source: Literal["auto", "gpx", "phone", "none"] = "auto"
+
+
+# ------------------------------------------------------------------------------------------- vision
+
+
+class ClaudeVisionConfig(_Strict):
+    """Anthropic Claude provider settings."""
+
+    model: str = "claude-haiku-4-5"
+    max_tokens: int = Field(300, gt=0)
+    timeout_s: float = Field(8.0, gt=0.0)
+
+
+class GeminiVisionConfig(_Strict):
+    """Google Gemini provider settings."""
+
+    model: str = "gemini-3.8-flash"
+    thinking_level: Literal["low", "medium", "high"] = "low"
+    max_tokens: int = Field(300, gt=0)
+    timeout_s: float = Field(8.0, gt=0.0)
+
+
+class OllamaVisionConfig(_Strict):
+    """Local Ollama provider settings."""
+
+    model: str = "qwen2.5vl:7b"
+    host: str = "http://localhost:11434"
+    timeout_s: float = Field(15.0, gt=0.0)
+
+
+class VisionConfig(_Strict):
+    """Per-provider settings for the vision-language model (the provider itself is `vision_model`)."""
+
+    claude: ClaudeVisionConfig = ClaudeVisionConfig()
+    gemini: GeminiVisionConfig = GeminiVisionConfig()
+    ollama: OllamaVisionConfig = OllamaVisionConfig()
+
+
+# ------------------------------------------------------------------------------------- ui / logging
+
+
+class UiConfig(_Strict):
+    """The local web page (video + question/answer text) and the phone GPS endpoint."""
+
+    host: str = "127.0.0.1"
+    port: int = Field(8000, gt=0, lt=65536)
+
+
+class LoggingConfig(_Strict):
+    """Console/file logging and the per-run review folder."""
+
+    level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    runs_dir: ConfigPath = Path("runs")
+    frame_log_interval_s: float = Field(1.0, gt=0.0, description="Save one frame per this many seconds.")
+
+
+# --------------------------------------------------------------------------------------------- root
+
+
+class Secrets(BaseModel):
+    """API keys, read from environment variables. Values are `SecretStr` so they never print."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    anthropic_api_key: SecretStr | None = None
+    mapbox_access_token: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
+
+    ENV_NAMES: ClassVar[dict[str, str]] = {
+        "anthropic_api_key": "ANTHROPIC_API_KEY",
+        "mapbox_access_token": "MAPBOX_ACCESS_TOKEN",
+        "gemini_api_key": "GEMINI_API_KEY",
+    }
+
+    def configured(self) -> dict[str, bool]:
+        """Map each secret name to whether it is set (never exposes values)."""
+        return {name: getattr(self, name) is not None for name in self.ENV_NAMES}
+
+    def values(self) -> list[str]:
+        """Return the raw secret values that are set (for log redaction only)."""
+        return [s.get_secret_value() for s in (getattr(self, n) for n in self.ENV_NAMES) if s is not None]
+
+
+class AppConfig(_Strict):
+    """The whole validated configuration."""
+
+    video: VideoConfig = VideoConfig()
+    gps: GpsConfig = GpsConfig()
+    vision_model: Literal["claude", "gemini", "ollama", "mock"] = "claude"
+    vision: VisionConfig = VisionConfig()
+    ui: UiConfig = UiConfig()
+    logging: LoggingConfig = LoggingConfig()
+
+    # Not read from YAML: filled in by load_config.
+    root: ConfigPath = Field(default=REPO_ROOT, exclude=True)
+    secrets: Secrets = Field(default_factory=Secrets, exclude=True)
+
+    @field_validator("root")
+    @classmethod
+    def _root_is_absolute(cls, value: Path) -> Path:
+        return value.resolve()
+
+    @model_validator(mode="after")
+    def _check_cross_field(self) -> AppConfig:
+        if self.gps.source == "gpx" and self.video.file.gpx_path is None:
+            raise ValueError("gps.source is 'gpx' but video.file.gpx_path is not set")
+        return self
+
+    @property
+    def gps_source(self) -> Literal["gpx", "phone", "none"]:
+        """The effective GPS source: 'auto' means GPX replay in file mode (if a track is set), the phone otherwise."""
+        if self.gps.source != "auto":
+            return self.gps.source
+        if self.video.source == "file":
+            return "gpx" if self.video.file.gpx_path is not None else "none"
+        return "phone"
+
+    def resolve_path(self, path: Path) -> Path:
+        """Resolve a config path relative to the repo root (absolute paths pass through)."""
+        return path if path.is_absolute() else (self.root / path).resolve()
+
+    def redacted_dump(self) -> dict[str, Any]:
+        """Return the config as plain data with secrets reduced to set/unset flags (safe to log or print)."""
+        data = self.model_dump(mode="json")
+        data["secrets"] = {name: ("set" if ok else "missing") for name, ok in self.secrets.configured().items()}
+        return data
+
+
+# ------------------------------------------------------------------------------------------ loading
+
+
+def _parse_override(item: str) -> tuple[list[str], Any]:
+    """Parse "a.b.c=value" into (["a","b","c"], value), with the value parsed as YAML (so 3 → int, null → None)."""
+    if "=" not in item:
+        raise ConfigError(f"override {item!r} must look like section.key=value")
+    key, raw = item.split("=", 1)
+    parts = [p for p in key.strip().split(".") if p]
+    if not parts:
+        raise ConfigError(f"override {item!r} has an empty key")
+    try:
+        value = _yaml_load(raw) if raw.strip() else ""
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"override {item!r}: value is not valid YAML ({exc})") from exc
+    return parts, value
+
+
+def _apply_override(data: dict[str, Any], parts: list[str], value: Any) -> None:
+    node = data
+    for part in parts[:-1]:
+        child = node.get(part)
+        if child is None:
+            child = node[part] = {}
+        if not isinstance(child, dict):
+            raise ConfigError(f"override path {'.'.join(parts)!r}: {part!r} is not a section")
+        node = child
+    node[parts[-1]] = value
+
+
+def load_secrets(env_file: Path | None = DEFAULT_ENV_PATH, environ: dict[str, str] | None = None) -> Secrets:
+    """Read secrets from the process environment, falling back to `env_file` (real env vars win).
+
+    The `.env` file is read without modifying `os.environ`, so nothing leaks into child processes.
+    """
+    env = dict(os.environ if environ is None else environ)
+    file_values: dict[str, str | None] = {}
+    if env_file is not None and Path(env_file).is_file():
+        try:
+            file_values = dotenv_values(env_file, encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise ConfigError(f"cannot read {env_file} (save it as UTF-8): {exc}") from exc
+    found: dict[str, SecretStr] = {}
+    for field_name, env_name in Secrets.ENV_NAMES.items():
+        raw = env.get(env_name) or file_values.get(env_name) or ""
+        if raw.strip():
+            found[field_name] = SecretStr(raw.strip())
+    return Secrets(**found)
+
+
+def load_config(
+    path: Path | str | None = None,
+    overrides: list[str] | dict[str, Any] | None = None,
+    env_file: Path | str | None = DEFAULT_ENV_PATH,
+    environ: dict[str, str] | None = None,
+) -> AppConfig:
+    """Load, override and validate the configuration.
+
+    Args:
+        path: YAML file; defaults to the repo's config.yaml. Relative paths inside it resolve against its folder.
+        overrides: dotted-key overrides, either ["video.source=camera", ...] or {"video.source": "camera"}.
+        env_file: `.env` file for secrets (None = environment only).
+        environ: environment mapping to read secrets from (defaults to os.environ; for tests).
+
+    Raises:
+        ConfigError: the file is missing/unparseable or any value fails validation. The message lists every
+            offending field with its dotted path.
+    """
+    config_path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
+    if not config_path.is_file():
+        raise ConfigError(f"config file not found: {config_path}")
+    try:
+        data = _yaml_load(config_path.read_text(encoding="utf-8")) or {}
+    except (OSError, UnicodeError) as exc:
+        raise ConfigError(f"cannot read {config_path} (save it as UTF-8): {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{config_path}: invalid YAML: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ConfigError(f"{config_path}: top level must be a mapping, got {type(data).__name__}")
+
+    items = overrides.items() if isinstance(overrides, dict) else [_parse_override(o) for o in overrides or []]
+    for key, value in items:
+        parts = key.split(".") if isinstance(key, str) else key
+        _apply_override(data, parts, value)
+
+    for reserved in ("root", "secrets"):
+        if reserved in data:
+            raise ConfigError(f"{config_path}: '{reserved}' cannot be set in the config file")
+
+    try:
+        cfg = AppConfig(
+            **data,
+            root=config_path.resolve().parent,
+            secrets=load_secrets(Path(env_file) if env_file else None, environ),
+        )
+    except ValidationError as exc:
+        problems = "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in exc.errors())
+        raise ConfigError(f"{config_path}: invalid configuration: {problems}") from None
+    return cfg

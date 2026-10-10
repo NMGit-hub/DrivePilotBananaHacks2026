@@ -40,6 +40,9 @@ gpxpy==1.6.2
 # GPU monitoring
 nvidia-ml-py==13.615.71
 
-# Tests
+# Tests and code quality
 pytest==9.1.1
 pytest-asyncio==1.4.0
+ruff==0.17.0
+mypy==2.4.0
+types-PyYAML==6.0.12.20260906
