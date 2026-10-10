@@ -11,7 +11,8 @@ One thread feeds 80 ms chunks (`feed`, also used directly by tests and the synth
 - if the wake word fired early (inside "...pilot"), the rest of the wake phrase can pass for the question and the
   pause after it for its end: the transcript is then empty (the wake phrase is stripped). Audio is held from the
   end of every question until its transcript is known; an empty one resumes listening on that audio, so the
-  question said after the pause is still heard (within `no_speech_timeout_s` of the wake word).
+  question said after the pause is still heard (within `no_speech_timeout_s` of the wake word, or of a repeat of
+  it: a wake word during a question restarts that window but not the question).
 Timing for every question (wake, end of speech, end detected, transcript ready) goes with it, for latency
 measurements against PLAN.md's targets.
 """
@@ -45,7 +46,7 @@ class HeardQuestion:
     wake_t: float  # stream time the wake word fired (s)
     speech_end_t: float | None  # stream time the speaker stopped talking
     end_t: float  # stream time the end of the question was detected
-    end_detected_at: float  # perf_counter at that moment
+    end_detected_at: float  # perf_counter when the audio that ended the question arrived
     transcript_at: float  # perf_counter when the transcript was ready
     stt_ms: float
     speculative: bool  # the speculative transcript was used
@@ -59,7 +60,8 @@ class _Held:
     """Audio since a question ended, kept until its transcript is known (it may have been only the wake phrase)."""
 
     since: float  # stream time the question ended
-    chunks: list[tuple[np.ndarray, float]] = field(default_factory=list)  # (chunk, stream time at its end)
+    # (chunk, stream time at its end, perf_counter when it arrived: an end found on replay is dated by its audio)
+    chunks: list[tuple[np.ndarray, float, float]] = field(default_factory=list)
     state: str = "waiting"  # "waiting" | "resume" (the transcript was empty) | "superseded" (a new wake word)
 
 
@@ -88,7 +90,8 @@ class VoicePipeline:
         self._ring: deque[np.ndarray] = deque(maxlen=max(1, round(cfg.endpoint.pre_roll_s * SAMPLE_RATE / CHUNK) + 1))
         self._stt_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt")
         self._speculation: Future[tuple[str, float]] | None = None
-        self._wake_t = 0.0
+        self._wake_t = 0.0  # stream time of the wake word that started the question
+        self._window_t = 0.0  # ...or of a repeat of it: the listening window counts from the latest one
         self._samples = 0
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -118,6 +121,7 @@ class VoicePipeline:
 
     def feed(self, chunk: np.ndarray) -> None:
         """Process one 80 ms int16 chunk at 16 kHz."""
+        arrived = time.perf_counter()
         self._samples += len(chunk)
         t = self.t
         fired = self.wake.process(chunk, t)
@@ -126,8 +130,10 @@ class VoicePipeline:
         self._ring.append(chunk)
         if fired is not None and not self._endpointer.active:
             self._woke(t)
-        else:
-            self._take(chunk, t)
+            return
+        if fired is not None:
+            self._rewoke(t)
+        self._take(chunk, t, arrived)
 
     def _woke(self, t: float) -> None:
         with self._lock:
@@ -135,7 +141,7 @@ class VoicePipeline:
                 self._held.state = "superseded"
                 self._held = None
         self.wakes += 1
-        self._wake_t = t
+        self._wake_t = self._window_t = t
         self._resumed = False
         pre_roll = (
             np.concatenate(self._ring)[-round(self.cfg.endpoint.pre_roll_s * SAMPLE_RATE) :]
@@ -150,18 +156,26 @@ class VoicePipeline:
             except Exception:
                 log.exception("on_wake failed")
 
-    def _take(self, chunk: np.ndarray, t: float) -> None:
+    def _rewoke(self, t: float) -> None:
+        """The wake word fired again while a question is being collected: the driver repeated it (maybe after an
+        early wake). It doesn't start a new question: a wake at the end of one ("is it safe, DrivePilot?") would
+        lose it, and the app would count the question as superseded. The listening window restarts from it."""
+        log.info("wake word again while listening", t=round(t, 2))
+        self._window_t = t
+        self._endpointer.rewoke(t)
+
+    def _take(self, chunk: np.ndarray, t: float, arrived: float) -> None:
         """Give a chunk to the question being collected, or hold it while the last transcript is pending."""
         if self._endpointer.active:
             event = self._endpointer.feed(chunk, t)
             if event is not None:
-                self._handle(event, t)
+                self._handle(event, t, arrived)
             return
         with self._lock:
             held = self._held
             if held is None:
                 return
-            held.chunks.append((chunk, t))
+            held.chunks.append((chunk, t, arrived))
             if held.state != "resume":
                 if t - held.since > self.cfg.endpoint.max_utterance_s:  # the transcript never came: stop holding
                     self._held = None
@@ -174,16 +188,16 @@ class VoicePipeline:
         self.resumes += 1
         self._resumed = True
         log.info("only the wake phrase so far, still listening", t=round(held.since, 2))
-        self._endpointer.resume(held.since, self._wake_t)
-        for chunk, t in held.chunks:  # catches up at once; chunks after a new end are held again
-            self._take(chunk, t)
+        self._endpointer.resume(held.since, self._window_t)
+        for chunk, t, arrived in held.chunks:  # catches up at once; chunks after a new end are held again
+            self._take(chunk, t, arrived)
 
     def _transcribe(self, audio: np.ndarray) -> Future[tuple[str, float]]:
         if self._resumed:  # the audio starts after the wake phrase: only a repeat of it is stripped
             return self._stt_pool.submit(self.stt.transcribe, audio, pre_roll=False)
         return self._stt_pool.submit(self.stt.transcribe, audio)
 
-    def _handle(self, event: EndpointEvent, t: float) -> None:
+    def _handle(self, event: EndpointEvent, t: float, arrived: float) -> None:
         if event.kind == "speculate":
             self._speculation = self._transcribe(event.audio)
             self._speculated_t = t
@@ -193,14 +207,14 @@ class VoicePipeline:
             log.info("no question after the wake word", t=round(t, 2))
             self._nothing("timeout")
             return
-        end_detected_at = time.perf_counter()
+        end_detected_at = arrived  # (replayed audio: when it arrived, not when the replay reached it)
         speculative = self._speculation is not None and self._endpointer.speculation_still_valid()
         future = self._speculation if speculative and self._speculation is not None else self._transcribe(event.audio)
         self._speculation = None
         wake_t, speech_end_t, resumed = self._wake_t, event.speech_end_t, self._resumed
         speculated_t = self._speculated_t if speculative else None
         # Until the transcript is known, keep what comes next: if it was only the wake phrase, the question follows.
-        held = _Held(t) if t - wake_t < self.cfg.endpoint.no_speech_timeout_s else None
+        held = _Held(t) if t - self._window_t < self.cfg.endpoint.no_speech_timeout_s else None
         with self._lock:
             self._held = held
 

@@ -105,6 +105,11 @@ class Endpointer:
         self._in_wake_tail = False
         self._started_at = wake_t
 
+    def rewoke(self, t: float) -> None:
+        """The wake word fired again while collecting (the driver repeated it): the no-speech timeout now counts
+        from `t`. (The wake-tail rule is long over: the wake word can't fire twice within its debounce.)"""
+        self._started_at = t
+
     def feed(self, chunk: np.ndarray, t: float) -> EndpointEvent | None:
         """Add a chunk ending at stream time `t`; returns an event when something should happen."""
         if not self.active:

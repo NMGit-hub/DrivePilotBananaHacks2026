@@ -24,9 +24,12 @@ log = get_logger(__name__)
 # within the first few words.
 _WAKE_FRAGMENT = re.compile(r"^\W*(?:\S+\s+){0,4}?\S*?(?:pilot|pylot|pilots|pilate)\b[\s,.!?:;-]*", re.IGNORECASE)
 # The wake phrase said again while still listening ("...pilot. Hey DrivePilot, is it clear?"): only a whole wake
-# phrase right at the start, so a question that ends with the name ("can I go now, DrivePilot?") is kept.
+# phrase right at the start, so a question that ends with the name ("can I go now, DrivePilot?") is kept. Up to
+# three short lead-ins ("uh, hey", "it's a") and Whisper's versions of "drive" ("driver's", "Dr.") count.
 _REPEATED_WAKE = re.compile(
-    r"^\W*(?:(?:hey|hi|okay|ok)\W+)?drive\W*(?:pilot|pylot|pilots|pilate)\b[\s,.!?:;-]*", re.IGNORECASE
+    r"^\W*(?:(?:uh|um|hey|hi|okay|ok|it['’]?s|a)\W+){0,3}(?:drive|driver['’]?s?|dr\.?)\W*(?:pilot|pylot|pilots|pilate)\b"
+    r"[\s,.!?:;-]*",
+    re.IGNORECASE,
 )
 _HALLUCINATIONS = {"", "you", "thank you", "thanks for watching", "thank you for watching", "bye", "."}
 

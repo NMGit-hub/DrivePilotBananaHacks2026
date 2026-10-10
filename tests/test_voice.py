@@ -48,10 +48,25 @@ def test_wake_fragment_is_removed(text: str, expected: str) -> None:
     assert strip_wake_fragment(text) == expected
 
 
-def test_a_resumed_question_loses_only_a_repeated_wake_phrase() -> None:
-    # Resumed audio starts after the wake phrase: the loose pattern would eat "is it my turn," here.
-    assert strip_wake_fragment("is it my turn, DrivePilot?", pre_roll=False) == "is it my turn, DrivePilot?"
-    assert strip_wake_fragment("Hey DrivePilot, is it my turn?", pre_roll=False) == "is it my turn?"
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Resumed audio starts after the wake phrase: the loose pattern would eat "is it my turn," here.
+        ("is it my turn, DrivePilot?", "is it my turn, DrivePilot?"),
+        ("Can I go now, Drive Pilot?", "Can I go now, Drive Pilot?"),
+        ("A driver is stopped ahead, why?", "A driver is stopped ahead, why?"),
+        # A repeated wake phrase, as Whisper writes it (review finding: these were kept).
+        ("Hey DrivePilot, is it my turn?", "is it my turn?"),
+        ("It's a driver's pilot, who got here first?", "who got here first?"),
+        ("It’s a driver’s pilot, who got here first?", "who got here first?"),
+        ("Hey driver pilot, stop.", "stop."),
+        ("A DrivePilot, can I go?", "can I go?"),
+        ("Hey Dr. Pilot, can I go?", "can I go?"),
+        ("Uh, hey DrivePilot, can I go?", "can I go?"),
+    ],
+)
+def test_a_resumed_question_loses_only_a_repeated_wake_phrase(text: str, expected: str) -> None:
+    assert strip_wake_fragment(text, pre_roll=False) == expected
 
 
 def test_audio_helpers() -> None:
@@ -250,14 +265,14 @@ def test_the_question_audio_has_no_gap_after_the_wake_word() -> None:
 
 
 def test_wake_during_a_question_is_ignored_and_empty_transcripts_are_dropped() -> None:
-    # The question runs past the listening window (no_speech_timeout_s after the wake): an empty transcript then
-    # ends it, instead of listening on.
+    # The question runs past the listening window (no_speech_timeout_s after the latest wake word, here the one
+    # at 1.5 s inside the question): an empty transcript then ends it, instead of listening on.
     cfg = load_config().voice
     heard: list[HeardQuestion] = []
     pipe = VoicePipeline(
-        cfg, FakeWake([1.0, 1.5]), FakeStt(text=""), heard.append, vad=FakeVad([(0.2, 4.8)]), answer_in_thread=False
+        cfg, FakeWake([1.0, 1.5]), FakeStt(text=""), heard.append, vad=FakeVad([(0.2, 6.0)]), answer_in_thread=False
     )  # type: ignore[arg-type]
-    feed_seconds(pipe, 7.0)
+    feed_seconds(pipe, 8.0)
     pipe.flush()
     assert pipe.wakes == 1 and heard == [] and pipe.empty_transcripts == 1 and pipe.resumes == 0
 
@@ -342,12 +357,21 @@ def wake_only_pipeline(wakes: list[float], stt: QuestionStt) -> tuple[VoicePipel
 @pytest.mark.parametrize("live", [True, False])
 def test_a_question_after_a_wake_phrase_only_transcript_is_still_heard(live: bool) -> None:
     # Wake fires at 1.04 s; "...pilot" goes on to 1.5 s (past wake_tail_s, so it counts as the question); the pause
-    # ends that "question" at ~2.0 s; the real question is 2.4-3.6 s.
-    stt = QuestionStt()
+    # ends that "question" at ~2.0 s; the real question is 2.4-3.6 s. Live: the transcript is ready before the
+    # next chunk, which resumes. Batch: the transcript is held back until all the audio is in, so only `flush`
+    # can resume, and the end found while replaying must be dated when its audio arrived, not at the replay.
+    gate = None if live else threading.Event()
+    stt = QuestionStt(gate)
     pipe, heard, nothing = wake_only_pipeline([1.0], stt)
     feed_pcm(pipe, speech_stream(7.0, (0.6, 1.5, WAKE_TAIL), (2.4, 3.6, QUESTION)), live=live)
+    fed_at = time.perf_counter()
+    if gate is not None:
+        time.sleep(0.2)
+        gate.set()
     pipe.flush()
     assert [q.text for q in heard] == ["stop watching the light"] and nothing == []
+    if not live:
+        assert heard[0].end_detected_at <= fed_at  # (the replay ran after the 0.2 s wait)
     assert pipe.wakes == 1 and pipe.resumes == 1 and heard[0].resumed
     assert heard[0].speech_end_t == pytest.approx(3.6, abs=0.05)
     assert heard[0].end_t == pytest.approx(3.6 + pipe.cfg.endpoint.end_silence_s, abs=0.15)
@@ -355,6 +379,35 @@ def test_a_question_after_a_wake_phrase_only_transcript_is_still_heard(live: boo
     assert int(question.sum()) == round(1.2 * SAMPLE_RATE)  # all of the question went to Whisper
     assert stt.pre_roll[0] and not stt.pre_roll[-1]  # the resumed audio has no wake phrase to strip loosely
     assert not pipe.listening
+
+
+def test_a_repeated_wake_phrase_restarts_the_listening_window() -> None:
+    # No answer after an early wake, so the driver says "Hey DrivePilot" again (3.5-4.2 s, the wake fires at 4.24),
+    # pauses, and asks at 5.3 s: more than no_speech_timeout_s after the first wake, but within it of the repeat.
+    # (Review finding: the repeat was swallowed and the window still ran from the first wake: question lost.)
+    wakes: list[float] = []
+    pipe, heard, nothing = wake_only_pipeline([1.0, 4.2], QuestionStt())
+    pipe.on_wake = lambda: wakes.append(pipe.t)
+    feed_pcm(
+        pipe,
+        speech_stream(10.0, (0.6, 1.5, WAKE_TAIL), (3.5, 4.2, WAKE_TAIL), (5.3, 6.3, QUESTION)),
+        live=True,
+    )
+    pipe.flush()
+    assert [q.text for q in heard] == ["stop watching the light"] and nothing == []
+    assert len(wakes) == 1 and pipe.wakes == 1  # one question: the repeat doesn't start (or supersede) another
+
+
+def test_the_name_at_the_end_of_a_resumed_question_does_not_lose_it() -> None:
+    # "...is it safe, DrivePilot?" after a wake-phrase-only end: the wake word fires at the question's end (3.7 s).
+    # Restarting the question there would drop it; it must be heard, without a second on_wake (which would make
+    # the app count it as superseded by a newer question).
+    wakes: list[float] = []
+    pipe, heard, nothing = wake_only_pipeline([1.0, 3.6], QuestionStt())
+    pipe.on_wake = lambda: wakes.append(pipe.t)
+    feed_pcm(pipe, speech_stream(8.0, (0.6, 1.5, WAKE_TAIL), (2.4, 3.6, QUESTION)), live=True)
+    pipe.flush()
+    assert [q.text for q in heard] == ["stop watching the light"] and nothing == [] and len(wakes) == 1
 
 
 def test_after_a_wake_phrase_only_transcript_listening_still_ends_at_the_wake_timeout() -> None:
