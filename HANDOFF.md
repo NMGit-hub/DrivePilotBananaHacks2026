@@ -1,4 +1,4 @@
-# Handoff: DrivePilot, V2 in progress (2026-10-10, ~13:45 PDT)
+# Handoff: DrivePilot, V2 in progress (2026-10-10, ~15:00 PDT)
 
 For the next Claude Code session. Read this first, then CLAUDE.md (standing rules), V2_BUILD_PLAN.md (the V2
 milestones + the user's decisions), PROGRESS.md (detailed status, measurements, known issues), PLAN.md (product
@@ -47,29 +47,34 @@ if time runs short (V2_BUILD_PLAN.md "Order and cut line").
 - PLAN.md was deleted from the working tree by something other than this session (not the user); it was restored
   from git. If it disappears again, say so.
 
-## 2. Next steps (in order)
-1. **Run the parking feature on the labeled clips** (the big unknown: real YOLO boxes at 384x640, frame-edge cars,
-   the horizon/speed estimates). Write `scripts/eval_parking.py`: for each usable clip in `eval/parking_labels.yaml`,
-   run perception + `WorldState` in lock-step (`--set video.file.hfov_deg=60`; BDD dashcams ~60°, the app default is
-   the phone's 114°), arm the watch at t=0 (or only use the tracker's `spot` events), and score: recall of clear open
-   spots (a spot event on the right side between ~t_visible−1 s and t_pass), false alarms (spot events matching no
-   labeled spot; ambiguous ones neither count nor fail; any hit on a look-alike is a false alarm), lot events vs
-   `in_lot`, parked events vs `parked_at`, pulling-out events. Plan targets: ≥ 70 % recall, ≤ 1 false spot per 10 min
-   of lot driving (V2_BUILD_PLAN.md V2-M1). Then tune (`min_visible_depth_m`, `gap_ratio`, `confirm_s`, tolerances)
-   and look at failures frame by frame (`scripts/contact_sheet.py`). With the vision check on (Claude Haiku), also
-   measure what it rejects/accepts.
-2. Spot-check ~6 labeled spots on full-resolution frames before trusting the numbers.
-3. Add the `parking:` section to `config.yaml` (values currently only as defaults in `core/config.py`: CLAUDE.md
-   wants them in config.yaml), and parking rows with `ALERT@<t>` to the test sheet.
-4. V2-M1 strict self-review + independent subagent review, fixes, PROGRESS.md, push.
-5. Then V2-M2 overlays → M3 pedestrians → M4 memory/highlight → M5 YOLOPv2 lanes/drift (V2_BUILD_PLAN.md), the sign
-   detector merge when `v2-signs` is ready, V2-M8 integration.
+## 2. This session (2026-10-10, 13:30-15:00 PDT): done
+- **V2-M1 parking measured on real footage** (`scripts/cache_perception.py`, `scripts/eval_parking.py`): after fixes
+  (scale clamp, cut-off boxes/hood, GPS speed, lot hold, strict pull-outs) **recall 1/30 clear spots, 0.7 false /
+  10 min**: below the bar on recall, precise. Labels spot-checked (6 frames: real). A Claude Haiku periodic scan was
+  measured by a subagent (`eval/parking_scan.py`): 47 % recall at 26.6 false / 10 min: not shipped. Details and
+  causes in PROGRESS.md (V2-M1, Known issues). Needs our own lot footage to tune. No `ALERT@` parking sheet rows
+  (they would fail).
+- **V2-M2 overlay page** (part 1) and **V2-M4 memory + highlight** built, tested, checked live (PROGRESS.md).
+- **V2-M6 integration part 1** (`state/signs.py`, `perception/sign_worker.py`, `sign_alerts:` config): sightings,
+  "Speed limit is now 35." after two agreeing frames, school zone, context lines; app wiring waits for the merge.
+- `config.yaml` has `parking:`, `memory:`, `sign_alerts` defaults, `ui:` overlay keys, `vision.mark_objects`.
 
-## 3. Known gaps of the parking feature (also in PROGRESS.md)
-- Never run on real footage yet (step 1). Street mode untested. No overlay yet (V2-M2 draws the spot).
-- On a 60° camera a spot is confirmed only ~6 m ahead (the stall must be seen 1 m deep past its neighbour); the
-  phone's 114° ultrawide sees deeper earlier. The model check starts earlier to keep the alert timely.
-- The lot offer needs the vision model (no model, no offer). The 5-minute timeout runs on media time.
+## 3. In flight / next steps (in order)
+1. **Independent review** of 9da882c..75447f2 (parking fixes, M2, M4): a subagent is running; fix its findings with
+   regression tests, then push.
+2. **V2-M3 pedestrians**: a subagent builds it in worktree `.claude/worktrees/agent-a646a9a46d39b56d8` (branch
+   `worktree-agent-a646a9a46d39b56d8`): review its report and diff, merge into main (conflicts expected in
+   `app.py`, `core/config.py`, `state/world.py`, `answers/alerts.py`), run everything, push.
+3. **V2-M5 YOLOPv2 lanes/drift**: needs the user's OK to download `yolopv2.pt` (156 MB, official GitHub release
+   CAIC-AD/YOLOPv2 V0.0.1, MIT): asked on 2026-10-10 ~15:00.
+4. **V2-M6 sign detector**: merge `v2-signs` when `scripts/signs/STATUS.md` (in `C:\ClaudeProjects\DrivePilot_signs`)
+   says ready (due Sunday 11:00); then wire `SignWorker` + `SignTracker` into the app (world thread offers frames;
+   alerts through `assistant.say`; pre-render `state.signs.alert_texts`; HUD speed-limit badge; `memory.add_sign`
+   with the reading; `tracker.context()` into the vision prompt's extra context).
+5. M2 leftovers: screenshots of each overlay for the README; frame-to-screen and perception fps measured without the
+   sign training on the GPU. Known small bug: two quick back-to-back seeks don't add up (the second starts from
+   the old position).
+6. V2-M8 integration (`scripts/bench_app.py` with everything on), README, PROGRESS.
 
 ## 4. Working notes
 - Run everything with `.venv/Scripts/python`; tests `.venv/Scripts/python -m pytest` (~3 min); `ruff check .`,
