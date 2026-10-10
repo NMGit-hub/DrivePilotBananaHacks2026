@@ -142,7 +142,8 @@ def progress(current: Step, nxt: Step | None, along: float) -> Progress:
 
 
 def test_hud_has_the_banner_with_lanes_the_speed_and_the_roundabout() -> None:
-    assert hud_packet(None, 10.0) == {"speed_mph": 22}
+    assert hud_packet(None, 10.0) == {"speed_mph": 22, "speed_limit": None, "school_limit": None}
+    assert hud_packet(None, None, 35)["speed_limit"] == 35
     lanes = (Lane(("left",), True), Lane(("straight",), False), Lane(("straight", "right"), False))
     turn = step(lanes=lanes)
     hud = hud_packet(progress(step(index=0, maneuver="depart"), turn, 100.0), None)

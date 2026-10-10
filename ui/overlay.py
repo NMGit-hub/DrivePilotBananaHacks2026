@@ -140,9 +140,19 @@ def frame_packet(
     return {"items": items, "you": you}
 
 
-def hud_packet(progress: Progress | None, speed_mps: float | None) -> dict[str, Any]:
-    """The navigation banner (next step, distance, lanes), our speed, and the roundabout diagram when one is near."""
-    hud: dict[str, Any] = {"speed_mph": None if speed_mps is None else round(speed_mps * MPS_TO_MPH)}
+def hud_packet(
+    progress: Progress | None,
+    speed_mps: float | None,
+    speed_limit: int | None = None,
+    school_limit: int | None = None,
+) -> dict[str, Any]:
+    """The navigation banner (next step, distance, lanes), our speed, the speed limit read last (the badge), and
+    the roundabout diagram when one is near."""
+    hud: dict[str, Any] = {
+        "speed_mph": None if speed_mps is None else round(speed_mps * MPS_TO_MPH),
+        "speed_limit": speed_limit,
+        "school_limit": school_limit,
+    }
     if progress is None or progress.arrived:
         return hud
     step, to_next = progress.next_step, progress.to_next_m

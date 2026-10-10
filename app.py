@@ -55,7 +55,10 @@ from perception.detector import Detector, Track
 from perception.ego_motion import EgoMotionEstimator
 from perception.gpu_monitor import GpuMonitor
 from perception.pipeline import AsyncListener, PerceptionResult, PerceptionWorker
+from perception.sign_worker import SignWorker
 from state.memory import SceneMemory
+from state.signs import SignTracker
+from state.signs import alert_texts as sign_alert_texts
 from state.world import WorldEvent, WorldSnapshot, WorldState
 from ui.hub import UiHub
 from ui.overlay import frame_packet, hud_packet
@@ -73,7 +76,7 @@ CAMERA_RETRY_S = 3.0  # first wait after a failed reconnect (doubles, up to CAME
 CAMERA_RETRY_MAX_S = 30.0
 CAMERA_HEALTHY_S = 30.0  # running this long after a reconnect resets the backoff
 STALE_AFTER_NAV = {"nav_rerouted", "nav_not_this_exit", "nav_arrived", "nav_roundabout"}
-FIXED_ALERT_TEXTS = (YOUR_TURN, LIGHT_GREEN, *FIXED_ALERTS)
+FIXED_ALERT_TEXTS = (YOUR_TURN, LIGHT_GREEN, *FIXED_ALERTS, *sign_alert_texts(list(range(5, 90, 5))))
 
 
 def parse_ask(item: str) -> tuple[float, str]:
@@ -206,6 +209,8 @@ class DrivePilotApp:
 
         self.world = WorldState(cfg, on_event=self._on_world_event, speed_source=self._gps_speed_at)
         self.memory = SceneMemory(cfg.memory)  # V2: "what was that sign?"
+        self.signs = SignTracker(cfg.sign_alerts)  # V2-M6: what the sign detector read (limits, school zones)
+        self.sign_worker: SignWorker | None = None
         self._latest_tracks: Sequence[Track] = ()
         self._last_result: PerceptionResult | None = None  # the latest frame the world state took in
         self._highlight: tuple[int, float] | None = None  # (track id, until perf_counter): pulsed on the page
@@ -225,7 +230,7 @@ class DrivePilotApp:
                 cfg,
                 vision,
                 self._model_frames,
-                self.nav.extra_context if self.nav else None,
+                self._extra_context,
                 tracks=lambda: self._latest_tracks,
                 memory=self.memory,
                 on_highlight=self.highlight,
@@ -333,6 +338,10 @@ class DrivePilotApp:
         except Exception:
             log.exception("scene memory failed")
         self._last_result = result
+        if self.sign_worker is not None:
+            if result.new_segment:
+                self.signs.reset()
+            self.sign_worker.offer(result.frame)
         if self.hub is not None and self.cfg.ui.overlays:
             self.hub.offer_frame(result.frame, self._overlay(result))
 
@@ -602,22 +611,63 @@ class DrivePilotApp:
         self.hub.put_image(image_id, encode_jpeg(frame.image, 480, 80))
         self.hub.publish("thumbnail", image=image_id, t=round(frame.t, 1))
 
+    def _extra_context(self) -> list[str]:
+        """What the vision model's prompt adds: navigation and speed, and what the sign detector read."""
+        lines = self.nav.extra_context() if self.nav is not None else []
+        return lines + self.signs.context(self.media_time())
+
     def _hud(self) -> dict[str, Any] | None:
-        """The V2 page's banner, speed and roundabout diagram."""
+        """The V2 page's banner, speed, speed limit and roundabout diagram."""
         try:
             fix = self.gps_fix()
             progress = self.nav.progress if self.nav is not None and self.nav.route is not None else None
-            return hud_packet(progress, fix.speed_mps if fix is not None else None)
+            signs = self.signs.snapshot()
+            school_t = signs.school_limit_t
+            recent = school_t is not None and self.media_time() - school_t <= self.cfg.sign_alerts.repeat_s
+            school = signs.school_limit if recent else None  # (a school limit applies near the school only)
+            return hud_packet(progress, fix.speed_mps if fix is not None else None, signs.limit, school)
         except Exception:
             log.exception("hud failed")
             return None
 
     # ---------------------------------------------------------------------------------- lifecycle
 
+    def _start_signs(self) -> None:
+        """The fine-tuned sign detector (V2-M6) on its own thread, if it is installed (`signs:` config and its
+        models, from the v2-signs branch); otherwise sign alerts are off and everything else runs."""
+        signs_cfg = getattr(self.cfg, "signs", None)
+        if not self.cfg.sign_alerts.enabled or signs_cfg is None:
+            self.status["signs"] = "off"
+            return
+        weights = self.cfg.resolve_path(signs_cfg.weights)
+        if not weights.is_file():
+            self.status["signs"] = "off (no model)"
+            return
+
+        def factory() -> Any:
+            from perception.signs import SignDetector
+
+            return SignDetector(signs_cfg, self.cfg.root)
+
+        self.sign_worker = SignWorker(factory, self._on_signs, self.cfg.sign_alerts.fps).start()
+        self.status["signs"] = "on"
+
+    def _on_signs(self, frame: Frame, detections: Sequence[Any]) -> None:
+        """Sign thread: what the detector read becomes alerts, memory close-ups and the page's limit badge."""
+        events = self.signs.update(frame.t, detections)
+        for view in self.signs.last_frame:
+            text = f"{view.value} mph" if view.value is not None else None
+            self.memory.add_sign(frame, view.id, view.kind, view.box, text=text)
+        for event in events:
+            if self.recorder is not None:
+                self.recorder.event("sign", t=event.t, sign=event.kind, value=event.value, text=event.text)
+            self.assistant.say(Utterance(event.text, "alert", Priority.INFO, t=event.t))
+
     def start(self) -> None:
         """Start every thread."""
         if self.hub is not None:
             self.hub.start()
+        self._start_signs()
         self._world_thread.start()
         self.source.start()
         self.worker = self._make_worker()
@@ -712,6 +762,8 @@ class DrivePilotApp:
         """Stop every thread and write the summary."""
         self._stop.set()
         self.parking.close()
+        if self.sign_worker is not None:
+            self.sign_worker.stop()
         if self.voice is not None:
             self.voice.stop()
         if self._mic is not None:
