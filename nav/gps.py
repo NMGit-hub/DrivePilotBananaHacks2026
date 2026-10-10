@@ -2,19 +2,21 @@
 
 `GpxReplay.fix_at(t)` interpolates the recorded track at video time `t`. The GPX clock is aligned with
 `video.file.gpx_offset_s` = GPX time at video t=0 minus the first point's time, or, when the file has a waypoint
-named `video_start` (written by `scripts/bdd_info_to_gpx.py`), video t=0 is that waypoint's time (plus
-`gpx_offset_s` as a further correction). Speed and heading come from the file when recorded, otherwise from the
-neighbouring points; nothing is interpolated across track segments (a gap in the recording is reported as no
-fix). `PhoneGps` keeps the latest fix posted by the phone (M7 serves the page over `adb reverse`) and reports
-nothing once it is stale.
+named `video_start` (written by `scripts/bdd_info_to_gpx.py` and `scripts/route_to_gpx.py`), video t=0 is that
+waypoint's time (plus `gpx_offset_s` as a further correction). Speed and heading come from the file when
+recorded, otherwise from the neighbouring points; nothing is interpolated across track segments (a gap in the
+recording is reported as no fix). `write_gpx` writes such files (GPX 1.0, which has <speed> and <course>).
+`PhoneGps` keeps the latest fix posted by the phone (M7 serves the page over `adb reverse`) and reports nothing
+once it is stale.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -23,6 +25,67 @@ import numpy as np
 from nav.geo import LatLon, bearing_deg, haversine_m
 
 VIDEO_START = "video_start"  # name of a GPX waypoint whose time is the video's first frame
+
+
+class GpxPoint(Protocol):
+    """A timed position for `write_gpx` (read-only fields, so frozen dataclasses fit)."""
+
+    @property
+    def time(self) -> datetime:
+        """When (timezone-aware)."""
+
+    @property
+    def lat(self) -> float:
+        """Latitude in degrees."""
+
+    @property
+    def lon(self) -> float:
+        """Longitude in degrees."""
+
+    @property
+    def speed_mps(self) -> float | None:
+        """Speed in m/s (None: unknown)."""
+
+    @property
+    def course_deg(self) -> float | None:
+        """Course over ground, degrees clockwise from north (None: unknown)."""
+
+
+@dataclass(frozen=True, slots=True)
+class TrackPoint:
+    """A plain `GpxPoint`."""
+
+    time: datetime
+    lat: float
+    lon: float
+    speed_mps: float | None = None
+    course_deg: float | None = None
+
+
+def write_gpx(
+    segments: Sequence[Sequence[GpxPoint]], video_start: datetime, name: str, description: str, track_name: str
+) -> str:
+    """GPX 1.0 text: one track with a segment per list of points (a replay never joins two segments), and a
+    `video_start` waypoint at the first point's position whose time is the video's t=0."""
+    import gpxpy.gpx
+
+    if not segments or not segments[0]:
+        raise ValueError("a GPX track needs at least one point")
+    gpx = gpxpy.gpx.GPX()
+    gpx.name = name
+    gpx.description = description
+    first = segments[0][0]
+    gpx.waypoints.append(gpxpy.gpx.GPXWaypoint(first.lat, first.lon, time=video_start, name=VIDEO_START))
+    gpx_track = gpxpy.gpx.GPXTrack(name=track_name)
+    gpx.tracks.append(gpx_track)
+    for points in segments:
+        segment = gpxpy.gpx.GPXTrackSegment()
+        for p in points:
+            point = gpxpy.gpx.GPXTrackPoint(p.lat, p.lon, time=p.time, speed=p.speed_mps)
+            point.course = p.course_deg  # type: ignore[assignment]  # (gpxpy annotates it None; GPX 1.0 writes it)
+            segment.points.append(point)
+        gpx_track.segments.append(segment)
+    return str(gpx.to_xml(version="1.0"))
 
 
 @dataclass(frozen=True, slots=True)
