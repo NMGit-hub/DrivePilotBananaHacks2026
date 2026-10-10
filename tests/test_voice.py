@@ -38,10 +38,20 @@ ROOT = Path(__file__).resolve().parents[1]
         ("Who got here first?", "Who got here first?"),
         ("A lot of traffic ahead?", "A lot of traffic ahead?"),
         ("Hey DrivePilot.", ""),
+        ("Pilot. Hey DrivePilot, is the intersection clear?", "is the intersection clear?"),  # said again
+        ("Hey DrivePilot, hey Drive Pilot, can I go?", "can I go?"),
+        ("Hey DrivePilot, can I go now, DrivePilot?", "can I go now, DrivePilot?"),  # the name at the end stays
+        ("Can I go now, Drive Pilot?", "Can I go now, Drive Pilot?"),
     ],
 )
 def test_wake_fragment_is_removed(text: str, expected: str) -> None:
     assert strip_wake_fragment(text) == expected
+
+
+def test_a_resumed_question_loses_only_a_repeated_wake_phrase() -> None:
+    # Resumed audio starts after the wake phrase: the loose pattern would eat "is it my turn," here.
+    assert strip_wake_fragment("is it my turn, DrivePilot?", pre_roll=False) == "is it my turn, DrivePilot?"
+    assert strip_wake_fragment("Hey DrivePilot, is it my turn?", pre_roll=False) == "is it my turn?"
 
 
 def test_audio_helpers() -> None:
@@ -138,6 +148,29 @@ def test_a_question_that_never_ends_is_cut_at_the_maximum_length() -> None:
     assert events[-1][1] == "end" and events[-1][0] == pytest.approx(5.0, abs=0.1)
 
 
+def test_a_resumed_endpointer_has_no_wake_tail_and_keeps_the_wake_timeout() -> None:
+    # Resumed at 2.0 s after a wake at 1.0 s: speech right away is the question (it ends after end_silence_s,
+    # not wake_pause_s), and with nothing said it gives up 4 s after the wake, not 4 s after the resume.
+    cfg = EndpointConfig()
+    chunk = np.zeros(CHUNK, np.int16)
+
+    def run(speech: list[tuple[float, float]]) -> tuple[float, str, float | None]:
+        ep = Endpointer(cfg, FakeVad(speech))  # type: ignore[arg-type]
+        ep.resume(2.0, wake_t=1.0)
+        for i in range(1, 100):
+            t = 2.0 + i * CHUNK / SAMPLE_RATE
+            event = ep.feed(chunk, t)
+            if event is not None and event.kind != "speculate":
+                return t, event.kind, event.speech_end_t
+        raise AssertionError("no end")
+
+    end_t, kind, speech_end = run([(0.0, 0.3)])
+    assert kind == "end" and speech_end == pytest.approx(2.3, abs=0.04)
+    assert end_t == pytest.approx(2.3 + cfg.end_silence_s, abs=0.15)
+    end_t, kind, _ = run([])
+    assert kind == "timeout" and end_t == pytest.approx(1.0 + cfg.no_speech_timeout_s, abs=0.1)
+
+
 # ------------------------------------------------------------------------------------------ pipeline
 
 
@@ -217,14 +250,135 @@ def test_the_question_audio_has_no_gap_after_the_wake_word() -> None:
 
 
 def test_wake_during_a_question_is_ignored_and_empty_transcripts_are_dropped() -> None:
+    # The question runs past the listening window (no_speech_timeout_s after the wake): an empty transcript then
+    # ends it, instead of listening on.
     cfg = load_config().voice
     heard: list[HeardQuestion] = []
     pipe = VoicePipeline(
-        cfg, FakeWake([1.0, 1.5]), FakeStt(text=""), heard.append, vad=FakeVad([(0.2, 1.8)]), answer_in_thread=False
+        cfg, FakeWake([1.0, 1.5]), FakeStt(text=""), heard.append, vad=FakeVad([(0.2, 4.8)]), answer_in_thread=False
     )  # type: ignore[arg-type]
-    feed_seconds(pipe, 5.0)
+    feed_seconds(pipe, 7.0)
     pipe.flush()
-    assert pipe.wakes == 1 and heard == [] and pipe.empty_transcripts == 1
+    assert pipe.wakes == 1 and heard == [] and pipe.empty_transcripts == 1 and pipe.resumes == 0
+
+
+# The wake word fired early, inside "...pilot": the rest of the wake phrase passes for the question and the pause
+# after it for its end, so Whisper hears only the wake phrase (stripped to ""). Seen on synthetic voices at
+# threshold 0.15 ("Stop watching the light": woke, nothing heard).
+
+WAKE_TAIL = 3000  # amplitude of the fake "...pilot" (int16)
+QUESTION = 6000  # amplitude of the fake question: the fake Whisper hears the question only where it is
+
+
+class LoudVad:
+    """Speech wherever the audio is loud (the fake speech is a constant amplitude), on the real VAD's 32 ms grid."""
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.pending = np.zeros(0, np.float32)
+
+    def process(self, audio: np.ndarray) -> list[float]:
+        self.pending = np.concatenate((self.pending, to_float(audio)))
+        out = []
+        while len(self.pending) >= VAD_CHUNK:
+            chunk, self.pending = self.pending[:VAD_CHUNK], self.pending[VAD_CHUNK:]
+            out.append(0.9 if float(np.abs(chunk).mean()) > 0.02 else 0.05)
+        return out
+
+
+class QuestionStt:
+    """Hears "stop watching the light" in audio that contains the question; only the wake phrase gives ""."""
+
+    def __init__(self, gate: threading.Event | None = None) -> None:
+        self.gate = gate  # holds back the wake-phrase-only transcript until set
+        self.calls: list[np.ndarray] = []
+        self.pre_roll: list[bool] = []  # per call: does the audio start with the wake phrase's pre-roll?
+
+    def transcribe(self, audio: np.ndarray, pre_roll: bool = True) -> tuple[str, float]:
+        self.calls.append(audio)
+        self.pre_roll.append(pre_roll)
+        if float(np.abs(audio).max(initial=0.0)) > (WAKE_TAIL + QUESTION) / 2 / 32768:
+            return "stop watching the light", 5.0
+        if self.gate is not None:
+            self.gate.wait(5.0)
+        return "", 5.0
+
+
+def speech_stream(seconds: float, *segments: tuple[float, float, int]) -> np.ndarray:
+    """int16 audio, silent except for (start s, end s, amplitude) segments; whole chunks."""
+    pcm = np.zeros(round(seconds * SAMPLE_RATE / CHUNK) * CHUNK, np.int16)
+    for start, end, amplitude in segments:
+        pcm[round(start * SAMPLE_RATE) : round(end * SAMPLE_RATE)] = amplitude
+    return pcm
+
+
+def feed_pcm(pipe: VoicePipeline, pcm: np.ndarray, live: bool = False) -> None:
+    """Feed whole chunks. `live`: every transcript is ready before the next chunk (a fast Whisper on a live mic),
+    so a resume is picked up by the next chunk; otherwise chunks go in at once and `flush` picks it up (the
+    benchmarks)."""
+    for k in range(0, len(pcm), CHUNK):
+        pipe.feed(pcm[k : k + CHUNK])
+        if live:
+            pipe._stt_pool.submit(lambda: None).result(timeout=5.0)
+
+
+def wake_only_pipeline(wakes: list[float], stt: QuestionStt) -> tuple[VoicePipeline, list[HeardQuestion], list[str]]:
+    heard: list[HeardQuestion] = []
+    nothing: list[str] = []
+    pipe = VoicePipeline(
+        load_config().voice,
+        FakeWake(wakes),  # type: ignore[arg-type]
+        stt,  # type: ignore[arg-type]
+        heard.append,
+        vad=LoudVad(),  # type: ignore[arg-type]
+        answer_in_thread=False,
+        on_nothing=nothing.append,
+    )
+    return pipe, heard, nothing
+
+
+@pytest.mark.parametrize("live", [True, False])
+def test_a_question_after_a_wake_phrase_only_transcript_is_still_heard(live: bool) -> None:
+    # Wake fires at 1.04 s; "...pilot" goes on to 1.5 s (past wake_tail_s, so it counts as the question); the pause
+    # ends that "question" at ~2.0 s; the real question is 2.4-3.6 s.
+    stt = QuestionStt()
+    pipe, heard, nothing = wake_only_pipeline([1.0], stt)
+    feed_pcm(pipe, speech_stream(7.0, (0.6, 1.5, WAKE_TAIL), (2.4, 3.6, QUESTION)), live=live)
+    pipe.flush()
+    assert [q.text for q in heard] == ["stop watching the light"] and nothing == []
+    assert pipe.wakes == 1 and pipe.resumes == 1 and heard[0].resumed
+    assert heard[0].speech_end_t == pytest.approx(3.6, abs=0.05)
+    assert heard[0].end_t == pytest.approx(3.6 + pipe.cfg.endpoint.end_silence_s, abs=0.15)
+    question = np.abs(stt.calls[-1]) > (WAKE_TAIL + QUESTION) / 2 / 32768
+    assert int(question.sum()) == round(1.2 * SAMPLE_RATE)  # all of the question went to Whisper
+    assert stt.pre_roll[0] and not stt.pre_roll[-1]  # the resumed audio has no wake phrase to strip loosely
+    assert not pipe.listening
+
+
+def test_after_a_wake_phrase_only_transcript_listening_still_ends_at_the_wake_timeout() -> None:
+    pipe, heard, nothing = wake_only_pipeline([1.0], QuestionStt())
+    feed_pcm(pipe, speech_stream(8.0, (0.6, 1.5, WAKE_TAIL)), live=True)
+    pipe.flush()
+    assert heard == [] and nothing == ["timeout"] and pipe.resumes == 1
+    assert pipe.empty_transcripts == 0 and pipe.timeouts == 1
+
+
+def test_a_new_wake_word_replaces_a_pending_resume() -> None:
+    # The wake-phrase-only transcript is still being made when "Hey DrivePilot" is said again (2.24 s): the new
+    # wake takes over, and the old empty transcript neither resumes nor reports "nothing" (which would switch
+    # off the page's listening light during the new question).
+    gate = threading.Event()
+    pipe, heard, nothing = wake_only_pipeline([1.0, 2.2], QuestionStt(gate))
+    pcm = speech_stream(7.0, (0.6, 1.5, WAKE_TAIL), (2.6, 3.6, QUESTION))
+    split = round(2.4 * SAMPLE_RATE / CHUNK) * CHUNK
+    feed_pcm(pipe, pcm[:split])
+    gate.set()
+    feed_pcm(pipe, pcm[split:])
+    pipe.flush()
+    assert [q.text for q in heard] == ["stop watching the light"] and not heard[0].resumed
+    assert nothing == [] and pipe.wakes == 2 and pipe.resumes == 0
 
 
 # -------------------------------------------------------------------------------------------- speaker
@@ -359,30 +513,16 @@ def test_navigation_alerts_are_synthesized_not_saved(tmp_path: Path) -> None:
 
 
 def test_pipeline_reports_when_no_question_follows_the_wake_word() -> None:
-    cfg = load_config().voice
-    nothing: list[str] = []
-    silent = VoicePipeline(
-        cfg,
-        FakeWake([1.0]),
-        FakeStt(),
-        lambda q: None,
-        vad=FakeVad([]),
-        answer_in_thread=False,
-        on_nothing=nothing.append,
-    )  # type: ignore[arg-type]
-    feed_seconds(silent, 8.0)
-    empty = VoicePipeline(
-        cfg,
-        FakeWake([1.0]),
-        FakeStt(text=""),
-        lambda q: None,
-        vad=FakeVad([(0.2, 1.8)]),
-        answer_in_thread=False,
-        on_nothing=nothing.append,
-    )  # type: ignore[arg-type]
-    feed_seconds(empty, 5.0)
-    empty.flush()
-    assert nothing == ["timeout", "empty"]
+    # Nothing said: "timeout". Only noise after the wake word (an empty transcript): it listens on, then "timeout".
+    # Sound that outlasts the listening window and transcribes to nothing: "empty".
+    reports = []
+    for segments in ([], [(1.2, 1.8, WAKE_TAIL)], [(1.2, 6.0, WAKE_TAIL)]):
+        pipe, heard, nothing = wake_only_pipeline([1.0], QuestionStt())
+        feed_pcm(pipe, speech_stream(9.0, *segments), live=True)
+        pipe.flush()
+        assert heard == []
+        reports.append(nothing)
+    assert reports == [["timeout"], ["timeout"], ["empty"]]
 
 
 # --------------------------------------------------------------------------------- real models (GPU)

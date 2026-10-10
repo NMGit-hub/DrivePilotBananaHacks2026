@@ -23,6 +23,11 @@ log = get_logger(__name__)
 # The wake phrase, or Whisper's misheard version of its tail ("It's a driver's pilot, who got here first?"),
 # within the first few words.
 _WAKE_FRAGMENT = re.compile(r"^\W*(?:\S+\s+){0,4}?\S*?(?:pilot|pylot|pilots|pilate)\b[\s,.!?:;-]*", re.IGNORECASE)
+# The wake phrase said again while still listening ("...pilot. Hey DrivePilot, is it clear?"): only a whole wake
+# phrase right at the start, so a question that ends with the name ("can I go now, DrivePilot?") is kept.
+_REPEATED_WAKE = re.compile(
+    r"^\W*(?:(?:hey|hi|okay|ok)\W+)?drive\W*(?:pilot|pylot|pilots|pilate)\b[\s,.!?:;-]*", re.IGNORECASE
+)
 _HALLUCINATIONS = {"", "you", "thank you", "thanks for watching", "thank you for watching", "bye", "."}
 
 
@@ -40,9 +45,16 @@ def _use_torch_cuda_libraries() -> None:
         os.environ["PATH"] = str(lib) + os.pathsep + os.environ.get("PATH", "")  # CTranslate2 uses LoadLibrary
 
 
-def strip_wake_fragment(text: str) -> str:
-    """Remove a leading (partial) wake phrase picked up from the pre-roll."""
-    return _WAKE_FRAGMENT.sub("", text.strip(), count=1).strip()
+def strip_wake_fragment(text: str, pre_roll: bool = True) -> str:
+    """Remove a leading (partial) wake phrase picked up from the pre-roll, and a repeat of it right after.
+
+    `pre_roll=False`: the audio starts after the wake phrase (a resumed question), so only a whole wake phrase
+    said again is removed ("is it my turn, DrivePilot?" must not lose its first words to the loose pattern).
+    """
+    text = text.strip()
+    if pre_roll:
+        text = _WAKE_FRAGMENT.sub("", text, count=1).strip()
+    return _REPEATED_WAKE.sub("", text, count=1).strip()
 
 
 class Transcriber:
@@ -90,10 +102,11 @@ class Transcriber:
         text = " ".join(segment.text.strip() for segment in segments).strip()
         return text, (time.perf_counter() - start) * 1000.0
 
-    def transcribe(self, audio: np.ndarray) -> tuple[str, float]:
-        """Text of a float32 16 kHz utterance (wake fragment removed) and the time it took (ms)."""
+    def transcribe(self, audio: np.ndarray, pre_roll: bool = True) -> tuple[str, float]:
+        """Text of a float32 16 kHz utterance (wake fragment removed, see `strip_wake_fragment`) and the time it
+        took (ms)."""
         text, ms = self.transcribe_raw(audio, self.cfg.initial_prompt)
-        cleaned = strip_wake_fragment(text)
+        cleaned = strip_wake_fragment(text, pre_roll)
         if cleaned.lower().strip(" .!?") in _HALLUCINATIONS:
             cleaned = ""  # Whisper's stock outputs for silence/noise
         return cleaned, ms

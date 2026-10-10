@@ -4,6 +4,29 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### V2 start (2026-10-10): throttle check, the early-wake voice bug fixed
+- **Throttle check** (HANDOFF.md section 3 item 2): not throttled. On the charger; under a 4-thread load the busy
+  cores ran at ~135% of rated speed (~3.9 GHz); all 20 threads busy: 89% (2.66 GHz, the package power limit,
+  not the 31% stuck state seen earlier); GPU fp16 matmul 22.9 TFLOPS at P0. The Windows power mode overlay is
+  not the "Best performance" one, though: set it before timing runs and drives.
+- **Wake word fired early, question ended at the pause after "Hey DrivePilot"** (HANDOFF.md section 3 item 1):
+  fixed in `voice/pipeline.py`. Audio is now held from the end of every question until its transcript is known;
+  an empty transcript (only the wake phrase was heard) resumes listening on that audio, so the question after
+  the pause is still heard; the no-speech timeout still counts from the wake word. A new wake word while a
+  transcript is pending takes over (and doesn't switch off the page's listening light). Resumed audio has no
+  wake phrase at its start, so only a whole repeated wake phrase is stripped there ("is it my turn,
+  DrivePilot?" keeps its words); a repeated "Hey DrivePilot" at the start of any transcript is now stripped.
+  The benchmarks (`voice_eval.py`, `check_real.py`, `run_sheet.py --voice`) feed silence until the pipeline is
+  idle, so a question still being waited for can't spill into the next clip. 10 new test cases (the pipeline ones fail on the old code).
+- **Measured:** `scripts/voice_eval.py --limit 40` (`runs/20261010-111819_voice`, before:
+  `runs/20261010-110459_voice`): the "woke, heard nothing" rows went from 4 (3 clear voices + Reza) to 1 (Reza
+  only); heard and routed right of all rows 82.5% / 85% (clean / car noise) before, 87.5-90% / 90-92.5% after
+  (two runs); 0 false wakes in 10 min; local answer audio 0.49 s / 0.52 s median. Real voices
+  (`check_real.py --evaluate data/wakeword/real`): 14/20 wake, **14/14 heard and routed right** (unchanged).
+  Note: Piper synthesis is random (same sentence, different audio each run), so per-row wake results on the
+  borderline Reza voice, and rarely another voice, change from run to run; the wake score itself depends only
+  on the audio (checked: in-stream = fresh model on the same audio).
+
 ### M9 (in progress, 2026-10-10): hardware bring-up with the team
 - **GPU throttling fixed** (the team plugged in the charger and set Best performance): fp16 matmul 22.4 TFLOPS
   (was 2.1). Re-measured the full pipeline (`scripts/bench_app.py --silent`,
@@ -283,9 +306,6 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   record more voices with `scripts/wakeword/check_real.py`, ideally in the car; recorded drives with GPX
   (4-way stops with other cars, a roundabout, the 405/520 interchange, parking signs) so the test sheet gets
   navigation / 4-way / roundabout rows; then the live drive (PLAN.md's V1 definition).
-- **Open bug (diagnosed, not fixed):** at threshold 0.15 the wake word can fire before "...pilot" ends; the rest
-  of the wake phrase then counts as the question and the pause after it ends the question with nothing heard
-  (synthetic "Stop watching the light": woke, empty transcript). Fix suggested in HANDOFF.md section 3.
 - **2026-10-10: the user approved V2 without the live drive** (deferred), plus a new V2 feature, "find me a
   parking spot". HANDOFF.md has the decisions, a starting design, and how to get recorded drives + GPS at home.
 - M9 (needs the team): fix the GPU throttling and re-measure latency; live phone camera + GPS page;
@@ -302,6 +322,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   tested with synthetic GPX files in tests until real drives are recorded.
 
 ## Known issues / compromises
+- **The synthetic voice benchmark varies from run to run** (`scripts/voice_eval.py`): Piper's synthesis is random,
+  so the same question is different audio each run; on 40 questions a run can lose or gain a wake on the
+  borderline Reza voice and, rarely, on a clear voice (a bad synthesis). Compare several runs, not single rows.
 - **CPU throttling seen at 10:20 on 2026-10-10** (after a fast run at 10:01): on the charger, the CPU ran at ~31%
   of its rated speed under load (~0.75 GHz), so perception fell to 7-8 fps and answers to 3-5 s. Likely heat or
   the power source (a lower-wattage charger, e.g. in a car); check before measuring or driving.

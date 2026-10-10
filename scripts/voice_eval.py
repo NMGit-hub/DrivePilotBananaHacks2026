@@ -186,6 +186,9 @@ def main(argv: list[str] | None = None) -> int:
             for k in range(0, len(pcm), CHUNK):
                 pipe.feed(pcm[k : k + CHUNK])
             pipe.flush(timeout=120.0)
+            while pipe.listening:  # still waiting for a question: let it end here, not in the next clip
+                pipe.feed(np.zeros(CHUNK, np.int16))
+                pipe.flush(timeout=120.0)
             woke = pipe.wakes > before_wakes
             got = heard[before] if len(heard) > before else None
             expected = route(question)

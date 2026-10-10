@@ -95,6 +95,16 @@ class Endpointer:
         self._vad_t = self._t0 + (len(pre_roll) // 512) * 512 / SAMPLE_RATE
         self.active = True
 
+    def resume(self, t: float, wake_t: float) -> None:
+        """Listen again from stream time `t`: what ended before was only the wake phrase (its transcript was empty).
+
+        The wake phrase is over, so any speech now is the question and ends after `end_silence_s`; the
+        no-speech timeout still counts from the wake word (`wake_t`), so a resume never extends it.
+        """
+        self.start(np.zeros(0, np.float32), t)
+        self._in_wake_tail = False
+        self._started_at = wake_t
+
     def feed(self, chunk: np.ndarray, t: float) -> EndpointEvent | None:
         """Add a chunk ending at stream time `t`; returns an event when something should happen."""
         if not self.active:

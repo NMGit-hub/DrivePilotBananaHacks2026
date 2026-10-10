@@ -123,6 +123,9 @@ def evaluate(paths: list[Path]) -> int:
             pipeline.feed(pcm[k : k + CHUNK])
             best = max(best, wake.last_score)
         pipeline.flush(timeout=120.0)
+        while pipeline.listening:  # still waiting for a question: let it end here, not in the next take
+            pipeline.feed(np.zeros(CHUNK, np.int16))
+            pipeline.flush(timeout=120.0)
         wake.reset()
         text = heard[before].text if len(heard) > before else None
         routed = route(text) if text else None

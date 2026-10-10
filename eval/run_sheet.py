@@ -189,6 +189,9 @@ class SpokenQuestions:
         for k in range(0, len(pcm), CHUNK):
             self.pipeline.feed(pcm[k : k + CHUNK])
         self.pipeline.flush(timeout=120.0)
+        while self.pipeline.listening:  # still waiting for a question: let it end here, not in the next row
+            self.pipeline.feed(np.zeros(CHUNK, np.int16))
+            self.pipeline.flush(timeout=120.0)
         if len(self.heard) == before:
             return None, None, None
         got = self.heard[before]
