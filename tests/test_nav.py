@@ -158,6 +158,11 @@ def fixes(**kwargs: object) -> list[GpsFix]:
     return [GpsFix(t, p[0], p[1], 15.0, heading) for t, p, heading in track(LINE, **kwargs)]  # type: ignore[arg-type]
 
 
+def at(metres: float) -> GpsFix:
+    """One fix at a distance along the route, at the time a car at 15 m/s from the start would get there."""
+    return fixes(start_m=metres, until_m=metres, t0=metres / 15.0)[0]
+
+
 def test_progress_along_the_route() -> None:
     tracker = RouteTracker(ROUTE, NavConfig())
     progress = [tracker.update(f) for f in fixes(until_m=1500.0)]
@@ -260,7 +265,7 @@ def test_off_route_reroutes_once_and_says_so() -> None:
 def test_route_questions() -> None:
     nav, gps, _ = handler()
     nav.set_destination("Redmond Town Center")
-    gps.fix = fixes(start_m=1000.0, until_m=1000.0)[0]
+    gps.fix = at(1000.0)
     snap = empty_snapshot()
     assert nav.answer(ask("What's my next turn?"), snap) == "Take exit 14 onto SR 520 East toward Redmond in 1.4 miles."
     assert (
@@ -273,7 +278,7 @@ def test_route_questions() -> None:
         nav.answer(ask("Where am I going?"), snap)
         == "We're going to Redmond Town Center, 7525 166th Ave NE, Redmond, WA."
     )
-    gps.fix = fixes(start_m=3000.0, until_m=3000.0)[0]
+    gps.fix = at(3000.0)
     assert nav.answer(ask("Which exit?"), snap) == "This one: exit 14 toward Redmond, in 700 feet."
     assert nav.answer(ask("Cancel the navigation"), snap) == "Okay, navigation is off."
 
@@ -281,7 +286,7 @@ def test_route_questions() -> None:
 def test_lane_questions_with_and_without_a_lane_count() -> None:
     nav, gps, _ = handler()
     nav.set_destination("Redmond Town Center")
-    gps.fix = fixes(start_m=1500.0, until_m=1500.0)[0]
+    gps.fix = at(1500.0)
     text = nav.answer(ask("Which lane for 520 east?"), empty_snapshot())
     assert text == "For SR 520 in a mile, use the two right lanes."
     nav.lane_reader = lambda: (4, 1)

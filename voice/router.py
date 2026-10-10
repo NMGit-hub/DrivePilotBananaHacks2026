@@ -114,6 +114,7 @@ def normalize(text: str) -> str:
     text = _CONTRACTION.sub(lambda m: _CONTRACTIONS[m.group(1)], text)
     text = re.sub(r"[^\w\s']", " ", text)
     text = _FILLER.sub(" ", text)
+    text = re.sub(r"\bbreak(s|ing)?\b", r"brake\1", text)  # Whisper's usual spelling of "brake" in a car
     text = re.sub(r"\s+", " ", text).strip(" '")
     previous = None
     while previous != text:  # "okay so um can i go" -> "can i go"
@@ -134,8 +135,8 @@ _CONTROLS: list[tuple[str, re.Pattern[str]]] = [
             r"^(?:turn on |switch to |go to |go back to |back to |use )?(?:normal|regular|loud) mode(?: on| now)?$",
             r"^(?:turn off|exit|disable|leave|stop|end|cancel|no more) (?:the )?(?:quiet|silent) mode$",
             r"^(?:quiet|silent) mode off$",
-            r"^(?:unmute|turn on|enable) (?:the )?alerts$",
-            r"^alerts on$",
+            r"^(?:unmute|turn on|enable) (?:the )?alerts?$",
+            r"^alerts? on$",
             r"^back to normal$",
         ),
     ),
@@ -144,7 +145,7 @@ _CONTROLS: list[tuple[str, re.Pattern[str]]] = [
         _rx(
             r"^(?:turn on |switch to |go to |go into |enter |use |enable |activate )?(?:quiet|silent) mode"
             r"(?: on| now)?$",
-            r"^(?:mute|silence|turn off|disable|stop) (?:the |all )?alerts$",
+            r"^(?:mute|silence|turn off|disable|stop) (?:the |all )?alerts?$",
             r"^go quiet$",
         ),
     ),
@@ -184,7 +185,10 @@ _CONTROLS: list[tuple[str, re.Pattern[str]]] = [
 # ----------------------------------------------------------------------------------------- navigation
 
 _NAV_FIRST: list[tuple[str, re.Pattern[str]]] = [
-    ("cancel_route", _rx(r"\b(?:cancel|stop|end|clear|quit) (?:the |my )?(?:navigation|route|directions|nav|trip)\b")),
+    (
+        "cancel_route",
+        _rx(r"\b(?:cancel|stop|end|clear|quit) (?:the |my )?(?:navigation|navigating|route|directions|nav|trip)\b"),
+    ),
     (
         "missed_turn",
         _rx(
@@ -208,6 +212,14 @@ _NAV_FIRST: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 _NAV_LATE: list[tuple[str, re.Pattern[str]]] = [
+    (
+        "turn_distance",
+        _rx(
+            r"\bhow (?:far|long) (?:to|until|till|is it to|away is|before) (?:my|the|our) (?:next )?(?:turn|exit)\b",
+            r"\bhow (?:far|long) (?:is|until) (?:my|the|our) (?:next )?(?:turn|exit)\b",
+            r"\bwhen (?:is|do i get to|will i get to) (?:my|the|our) (?:next )?(?:turn|exit)\b",
+        ),
+    ),
     (
         "exit",
         _rx(
@@ -234,8 +246,7 @@ _NAV_LATE: list[tuple[str, re.Pattern[str]]] = [
     (
         "eta",
         _rx(
-            r"\bhow (?:far|long) (?:to|until|till|is it to|away is) (?:my|the|our) (?:turn|exit|destination|"
-            r"next turn|next exit)\b",
+            r"\bhow (?:far|long) (?:to|until|till|is it to|away is) (?:my|the|our) destination\b",
             r"\bhow (?:much )?(?:longer|farther|further)\b(?! (?:has|have|is|are|was|were|did)\b)",
             r"\bhow (?:far|long) (?:until|till|to|before) (?:we|i) (?:get there|arrive|get home|are there)\b",
             r"\bhow (?:far|long) (?:to go|away|left)$",
@@ -371,8 +382,9 @@ _RIGHT_OF_WAY: list[tuple[str, re.Pattern[str]]] = [
     (
         "can_i_go",
         _rx(
-            r"^(?:can|may|should|could|do|shall) (?:i|we) (?:still )?go(?:$| (?:now|yet|first|ahead|already|next|"
-            r"here|then|now then|yet or not|or not|or what|now or not|now that\b.*|since\b.*))",
+            r"^(?:can|may|should|could|do|shall|can not) (?:i|we) (?:still )?go"
+            r"(?:$| (?:now|yet|first|ahead|already|next|here|then|now then|yet or not|or not|or what|now or not|"
+            r"now that\b.*|since\b.*))",
             r"^(?:can|may|should|do) (?:i|we) go(?: now)? or (?:not|wait|should i wait)$",
             r"\b(?:is it|it is|is this) (?:my|our) turn\b",
             r"^(?:it is |is it )?(?:my|our) turn(?: yet| now)?$",
@@ -421,8 +433,36 @@ _LANE = _rx(
 )
 
 
+_LEADING_CLAUSE = re.compile(r"^[^.,!?;:]*[.,!?;:]+\s*")
+MAX_DROPPED_CLAUSES = 3
+
+
 def route(text: str) -> Route:
-    """Route one transcribed question (see the module docstring for the rule order)."""
+    """Route one transcribed question (see the module docstring for the rule order).
+
+    Whisper sometimes keeps junk before the question: a garbled wake word ("Hi-LUT, stop talking."), a stray
+    word ("Get it. Stop now.") or a lead-in ("The light just changed, should I go?"). If the whole text would go
+    to the vision model, it is routed again without up to three leading clauses, and the first remainder with a
+    specific handler wins. This only ever turns a model answer into a local, navigation or control one: every
+    rule, including the gap-check safety rules, has already been tried on the whole text.
+    """
+    result = _route_once(text)
+    if result.kind is not RouteKind.MODEL:
+        return result
+    rest = strip_wake_word(text)
+    for _ in range(MAX_DROPPED_CLAUSES):
+        shorter = _LEADING_CLAUSE.sub("", rest, count=1)
+        if shorter == rest or not shorter.strip():
+            break
+        rest = shorter
+        again = _route_once(rest)
+        if again.kind not in (RouteKind.MODEL, RouteKind.EMPTY):
+            return again
+    return result
+
+
+def _route_once(text: str) -> Route:
+    """One pass of the rules over the whole text."""
     norm = normalize(text)
     question = strip_wake_word(text)
 

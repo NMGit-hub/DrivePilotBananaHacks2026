@@ -138,7 +138,17 @@ class NavConfig(_Strict):
     reroute_cooldown_s: float = Field(20.0, ge=0.0)
     snap_window_m: float = Field(500.0, gt=0.0, description="Snap near where we were (routes can loop back).")
     max_backtrack_m: float = Field(50.0, ge=0.0, description="A bigger jump backwards along the route is noise.")
-    arrival_m: float = Field(30.0, gt=0.0)
+    arrival_m: float = Field(30.0, gt=0.0, description="Arrived when this close to the end of the route line...")
+    arrival_radius_m: float = Field(
+        60.0, gt=0.0, description="...or this close (straight line) to it (parking lots, the far side of the road)."
+    )
+    near_end_m: float = Field(
+        150.0, ge=0.0, description="Leaving the route this close to the end means we turned in: arrived, no reroute."
+    )
+    join_slack_m: float = Field(
+        100.0, ge=0.0, description="Starting off the road (a parking lot): off route only this much further away."
+    )
+    home: str | None = Field(None, description='Address for "take me home" (null: ask for the address).')
     lane_reminders_m: Annotated[tuple[float, ...], Strict(False)] = Field(  # YAML gives a list
         (1609.0, 402.0), description="PLAN.md: lane reminders about 1 mile and 0.25 mile before a junction."
     )

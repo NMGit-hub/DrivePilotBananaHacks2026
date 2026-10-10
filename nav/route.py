@@ -61,6 +61,15 @@ class Step:
         return self.maneuver in ROUNDABOUT_TYPES
 
     @property
+    def exits_counted(self) -> bool:
+        """Our count of the exits passed agrees with the exit number Mapbox gives (so "not this one" is safe)."""
+        return (
+            self.is_roundabout
+            and self.roundabout_exit is not None
+            and (len(self.roundabout_exits_m) == self.roundabout_exit - 1)
+        )
+
+    @property
     def needs_lanes(self) -> bool:
         """Only some lanes lead to this maneuver."""
         return (
@@ -147,7 +156,7 @@ def parse_directions(response: dict[str, Any], destination: str = "") -> Route:
             exits_m = tuple(
                 line.snap(_latlon(x["location"]), near_m=start_m, window_m=300.0).along_m
                 for x in intersections[1:]
-                if _is_exit(x)
+                if _is_exit(x) and x.get("location")
             )
         steps.append(
             Step(
@@ -161,15 +170,15 @@ def parse_directions(response: dict[str, Any], destination: str = "") -> Route:
                 exit_ref=s.get("exits") or None,
                 roundabout_exit=maneuver.get("exit"),
                 start_m=start_m,
-                distance_m=float(s.get("distance", 0.0)),
-                duration_s=float(s.get("duration", 0.0)),
+                distance_m=float(s.get("distance") or 0.0),
+                duration_s=float(s.get("duration") or 0.0),
                 location=location,
                 lanes=lanes,
                 roundabout_exits_m=exits_m,
             )
         )
-        start = start_m + float(s.get("distance", 0.0))
+        start = start_m + float(s.get("distance") or 0.0)
     name = destination or str((response.get("waypoints") or [{}])[-1].get("name", ""))
     return Route(
-        line, steps, float(route.get("distance", line.length_m)), float(route.get("duration", 0.0)), name, response
+        line, steps, float(route.get("distance") or line.length_m), float(route.get("duration") or 0.0), name, response
     )

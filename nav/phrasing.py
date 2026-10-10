@@ -95,5 +95,8 @@ def maneuver_phrase(step: Step) -> str:
     if step.is_roundabout and step.roundabout_exit:
         onto = f" onto {step.name}" if step.name else ""
         return f"at the roundabout, take the {ordinal(step.roundabout_exit)} exit{onto}"
+    if step.maneuver == "arrive":  # Mapbox says "You have arrived..." for a destination still ahead
+        side = f" on the {step.modifier}" if step.modifier in ("left", "right") else ""
+        return f"you'll reach your destination{side}"
     text = step.instruction.rstrip(".")
     return text[:1].lower() + text[1:] if text else "continue"

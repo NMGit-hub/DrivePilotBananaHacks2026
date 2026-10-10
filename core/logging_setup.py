@@ -188,3 +188,16 @@ def setup_logging(level: str = "INFO", log_file: Path | None = None, secrets: It
     noisy_level = logging.DEBUG if level == "DEBUG" else logging.WARNING
     for name in ("ultralytics", "httpx", "httpcore", "anthropic", "urllib3", "PIL", "matplotlib", "faster_whisper"):
         logging.getLogger(name).setLevel(noisy_level)
+
+    # An exception that escapes a thread would otherwise be printed raw to stderr, past the redaction.
+    threading.excepthook = _log_thread_exception
+
+
+def _log_thread_exception(args: threading.ExceptHookArgs) -> None:
+    """Uncaught thread exceptions go through the (redacting) logger."""
+    if args.exc_type is SystemExit or args.exc_value is None:
+        return
+    name = args.thread.name if args.thread is not None else "?"
+    logging.getLogger("threads").error(
+        "uncaught exception in thread %s", name, exc_info=(args.exc_type, args.exc_value, args.exc_traceback)
+    )

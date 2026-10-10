@@ -36,6 +36,21 @@ class NavError(RuntimeError):
     """Geocoding or routing failed."""
 
 
+class PlaceNotFound(NavError):
+    """No place matches what was said."""
+
+
+PARSE_ERRORS = (RouteError, KeyError, TypeError, ValueError, IndexError)  # a reply we can't use
+
+
+def _route_from(data: dict[str, Any], destination: str) -> Route:
+    """Parse a directions reply; anything unusable in it becomes a NavError."""
+    try:
+        return parse_directions(data, destination)
+    except PARSE_ERRORS as exc:
+        raise NavError(f"unusable route ({type(exc).__name__}: {exc})") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class Place:
     """A geocoded destination."""
@@ -155,7 +170,9 @@ class MapboxClient:
             except NavError as exc:
                 errors.append(str(exc))
         if not candidates:
-            raise NavError(errors[0] if errors else f"no place found for {query!r}")
+            if errors:
+                raise NavError(errors[0])
+            raise PlaceNotFound(f"no place found for {query!r}")
         return pick_place(query, candidates, near)
 
     def directions(self, origin: LatLon, destination: LatLon, heading: float | None = None) -> dict[str, Any]:
@@ -171,17 +188,13 @@ class MapboxClient:
             "voice_units": "imperial",
             "roundabout_exits": "true",  # the ring is its own step, ending where we leave it (exit counting)
         }
-        if heading is not None:
+        if heading is not None and math.isfinite(heading):
             params["bearings"] = f"{round(heading) % 360},60;"
         return self._get(DIRECTIONS_URL.format(profile=self.profile, coordinates=coordinates), params)
 
     def route(self, origin: LatLon, destination: Place, heading: float | None = None) -> Route:
         """A route from `origin` to `destination`."""
-        data = self.directions(origin, destination.location, heading)
-        try:
-            return parse_directions(data, destination.name)
-        except RouteError as exc:
-            raise NavError(str(exc)) from exc
+        return _route_from(self.directions(origin, destination.location, heading), destination.name)
 
     def close(self) -> None:
         """Close the HTTP client."""
@@ -216,12 +229,12 @@ class FixtureClient:
         for key, place in self.places.items():
             if q in key or key in q or q in place.name.lower():
                 return place
-        raise NavError(f"no place found for {query!r}")
+        raise PlaceNotFound(f"no place found for {query!r}")
 
     def route(self, origin: LatLon, destination: Place, heading: float | None = None) -> Route:
         """The saved route to that place."""
         self.requests.append((origin, destination.name))
         for key, response in self.routes.items():
             if key in destination.name.lower() or destination.name.lower() in key:
-                return parse_directions(response, destination.name)
+                return _route_from(response, destination.name)
         raise NavError(f"no saved route to {destination.name!r}")

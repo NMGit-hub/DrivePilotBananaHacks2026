@@ -109,7 +109,7 @@ TABLE: list[tuple[str, RouteKind, str]] = [
     ("What's after this light?", N, "next_step"),
     ("What's my next turn?", N, "next_step"),
     ("Where do I turn?", N, "next_step"),
-    ("How far to my turn?", N, "eta"),
+    ("How far to my turn?", N, "turn_distance"),
     ("How long until we get there?", N, "eta"),
     ("When will we arrive?", N, "eta"),
     ("Are we there yet?", N, "eta"),
@@ -386,3 +386,45 @@ def test_destination_phrasings(text: str, place: str) -> None:
 )
 def test_not_destinations(text: str) -> None:
     assert route(text).kind is not RouteKind.DESTINATION
+
+
+# Real Whisper transcripts from the synthetic voice benchmark (runs/*_voice) that used to reach the vision model:
+# junk before the question (a garbled wake word, a stray word, a lead-in) and common mishearings.
+TRANSCRIPTS: list[tuple[str, RouteKind, str]] = [
+    ("Hi-LUT, stop talking.", C, "stop"),
+    ("Get it. Stop now.", C, "stop"),
+    ("hey drive, pilot, quiet mode.", C, "quiet"),
+    ("turn off alert.", C, "quiet"),
+    ("Hi Alact. Can you watch the light?", W, "light_watch"),
+    ("Hi, lad, when can I go?", R, "can_i_go"),
+    ("can't I go now that the truck left?", R, "can_i_go"),
+    ("should I break?", G, "gap_check"),
+    ("The light just changed, should I go?", R, "can_i_go"),
+    ("stop navigating", N, "cancel_route"),
+    ("How long until my next turn?", N, "turn_distance"),
+    ("How far to my destination?", N, "eta"),
+]
+
+
+@pytest.mark.parametrize(("text", "kind", "intent"), TRANSCRIPTS, ids=[t for t, _, _ in TRANSCRIPTS])
+def test_router_real_transcripts(text: str, kind: RouteKind, intent: str) -> None:
+    result = route(text)
+    assert (result.kind, result.intent) == (kind, intent), result.text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What does that sign say, the one on the right?",
+        "Is that a bike lane, or a parking lane?",
+        "Why can't I go?",
+        "The car on the left, is it parked?",
+    ],
+)
+def test_dropping_a_lead_in_keeps_real_scene_questions(text: str) -> None:
+    assert route(text).kind is RouteKind.MODEL
+
+
+def test_a_lead_in_never_hides_a_gap_check() -> None:
+    # The whole text is checked first: a split-second question stays a gap check whatever comes before it.
+    assert route("Okay, the truck is slow, can I pass it now?").kind is RouteKind.GAP_CHECK

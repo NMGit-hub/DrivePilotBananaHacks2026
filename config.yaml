@@ -35,7 +35,11 @@ nav:                        # Mapbox routing, rerouting and spoken guidance
   reroute_cooldown_s: 20.0
   snap_window_m: 500.0      # snap near where we were (routes can loop back on themselves)
   max_backtrack_m: 50.0     # a bigger jump backwards along the route is GPS noise
-  arrival_m: 30.0
+  arrival_m: 30.0           # arrived within 30 m of the route's end, or 60 m in a straight line (parking lots)
+  arrival_radius_m: 60.0
+  near_end_m: 150.0         # leaving the route this close to the end = we turned in (arrived, no reroute)
+  join_slack_m: 100.0       # starting off the road: "off route" only when this much further from it than at the start
+  home: null                # address for "take me home" (null: it asks for the address)
   lane_reminders_m: [1609.0, 402.0]  # PLAN.md: lane reminders ~1 mile and ~0.25 mile before a junction
 
 perception:
