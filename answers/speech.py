@@ -30,6 +30,7 @@ class Utterance:
     priority: Priority
     clip: str | None = None  # pre-rendered audio clip for alerts (instant playback, M4)
     t: float = 0.0  # media time it refers to
+    drops_answers: bool = False  # an alert that changes the situation ("You're up"): answers in progress are stale
 
 
 class Speaker(Protocol):

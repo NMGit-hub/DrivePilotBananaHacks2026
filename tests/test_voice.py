@@ -231,6 +231,24 @@ def test_alerts_interrupt_answers_and_the_answer_resumes(tmp_path: Path) -> None
     speaker.close()
 
 
+def test_an_alert_that_changes_the_situation_drops_stale_answers(tmp_path: Path) -> None:
+    speaker, _ = make_speaker(tmp_path)
+    speaker.say(Utterance("Not yet, the light's red. " * 8, "answer", Priority.ANSWER))
+    speaker.say(Utterance("I'll tell you when it turns green.", "answer", Priority.ANSWER))
+    time.sleep(0.3)
+    green = Utterance("Light's green, check the intersection and go.", "alert", Priority.REQUESTED, drops_answers=True)
+    speaker.say(green)
+    speaker.say(Utterance("A newer answer.", "answer", Priority.ANSWER))  # said after the alert: kept
+    assert speaker.wait_idle(10.0)
+    said = [(r.kind, r.text[:15], r.interrupted) for r in speaker.records]
+    assert said == [
+        ("answer", "Not yet, the li", True),
+        ("alert", "Light's green, ", False),
+        ("answer", "A newer answer.", False),
+    ]
+    speaker.close()
+
+
 def test_stop_silences_everything(tmp_path: Path) -> None:
     speaker, _ = make_speaker(tmp_path)
     for text in ("x" * 400, "y" * 400, "z" * 400):

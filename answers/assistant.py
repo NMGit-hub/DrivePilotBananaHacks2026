@@ -108,9 +108,16 @@ class Assistant:
     # ------------------------------------------------------------------------------------ output
 
     def say(self, utterance: Utterance) -> None:
-        """Speak, and remember it for "repeat that"."""
+        """Speak, and remember it for "repeat that". An alert that makes answers stale also cuts off the one
+        still streaming (the speaker drops what it has queued)."""
+        cancel = None
         with self._lock:
             self._last = utterance
+            if utterance.drops_answers:
+                self._turn += 1
+                cancel, self._cancel = self._cancel, None
+        if cancel is not None:
+            cancel.set()
         self.speaker.say(utterance)
 
     @property

@@ -176,7 +176,8 @@ class AlertEngine:
             return None
         self._last_fired[kind] = t
         log.info("alert", kind=kind, t=round(t, 2), priority=priority.name)
-        return Utterance(text=text, kind="alert", priority=priority, clip=kind, t=t)
+        # "You're up" / "Light's green": whatever was being said about waiting is now out of date.
+        return Utterance(text=text, kind="alert", priority=priority, clip=kind, t=t, drops_answers=True)
 
     def _expire(self, t: float) -> None:
         cfg = self.cfg

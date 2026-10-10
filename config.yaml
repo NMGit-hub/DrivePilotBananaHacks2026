@@ -139,6 +139,7 @@ vision:
 voice:
   input_device: null        # sounddevice name or index; null = system default
   output_device: null
+  output_volume: 1.0        # 0-1; benchmarks run quieter
   wakeword:                 # "Hey DrivePilot" (openWakeWord model trained by scripts/wakeword)
     model: models/wakeword/hey_drivepilot.onnx
     threshold: 0.25         # chosen on validation data (models/wakeword/metrics.json)

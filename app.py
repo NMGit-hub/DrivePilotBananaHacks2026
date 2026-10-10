@@ -102,6 +102,7 @@ class QuestionRecord:
     answer: str | None = None
     answer_ms: float | None = None  # routing + answering until the whole answer was handed to the speaker
     first_audio_s: float | None = None  # end of the question → first sound of the answer
+    ended_at: float | None = None  # perf_counter when the question ended (the driver stopped talking / pressed Enter)
     voice: dict[str, Any] = field(default_factory=dict)  # wake/end/STT timings for spoken questions
 
 
@@ -187,6 +188,7 @@ class DrivePilotApp:
         self.camera_restarts = 0
         self.camera_state = ""
         self._last_fix_t: float | None = None
+        self._last_wake_at = 0.0  # perf_counter of the latest wake word
         self._fps_mark: tuple[float, int] = (time.perf_counter(), 0)
         self._started_at: float | None = None
 
@@ -286,10 +288,29 @@ class DrivePilotApp:
             "speculative": heard.speculative,
             "transcript_s": round(heard.transcript_at - origin, 3),
         }
+        if self._last_wake_at > origin:
+            # The driver said the wake word again after this question ended (it took long to transcribe): they've
+            # moved on, and an answer now would talk over the new question.
+            self._superseded(heard.text, origin, timings)
+            return
         self._answer(heard.text, "voice", origin, timings)
+
+    def _superseded(self, text: str, origin: float, timings: dict[str, Any]) -> None:
+        qid = next(self._qids)
+        t = self.media_time()
+        record = QuestionRecord(qid, text, "voice", t, source="superseded", voice=timings, ended_at=origin)
+        with self._lock:
+            self.questions[qid] = record
+        log.info("question superseded by a newer one", text=text)
+        if self.recorder is not None:
+            self.recorder.event("question", t=t, qid=qid, text=text, via="voice", superseded=True, **timings)
+        if self.hub is not None:
+            self.hub.publish("question", text=text, via="voice", t=round(t, 2))
+            self.hub.publish("note", text="(skipped: you asked something else)")
 
     def on_wake(self) -> None:
         """The wake word fired: stop talking (so "Hey DrivePilot, stop" works) and show that we're listening."""
+        self._last_wake_at = time.perf_counter()
         self.assistant.interrupt()
         listening = getattr(self.speaker, "listening", None)
         if callable(listening):
@@ -314,7 +335,7 @@ class DrivePilotApp:
     def _answer(self, text: str, via: str, origin: float, timings: dict[str, Any]) -> None:
         qid = next(self._qids)
         t = self.media_time()
-        record = QuestionRecord(qid, text, via, t, voice=timings)
+        record = QuestionRecord(qid, text, via, t, voice=timings, ended_at=origin)
         with self._lock:
             self.questions[qid] = record
         if self.hub is not None:
@@ -732,7 +753,7 @@ def _speaker(cfg: AppConfig, args: argparse.Namespace, status: dict[str, str]) -
         tts.warmup()
         clips = ClipCache(tts, cfg.resolve_path(cfg.voice.tts.clips_dir))
         clips.prepare(list(FIXED_ALERT_TEXTS))
-        output = AudioOutput(cfg.voice.output_device)
+        output = AudioOutput(cfg.voice.output_device, volume=cfg.voice.output_volume)
         output.start()
         t = cfg.voice.tts
         return AudioSpeaker(tts, output, clips, t.chime_volume, t.listen_chime).start()
@@ -742,30 +763,37 @@ def _speaker(cfg: AppConfig, args: argparse.Namespace, status: dict[str, str]) -
         return TextSpeaker()
 
 
+def make_voice_pipeline(app: DrivePilotApp, cfg: AppConfig) -> Any:
+    """Wake word + Whisper (warmed up) feeding this app's question handlers (a `VoicePipeline`)."""
+    from voice.pipeline import VoicePipeline
+    from voice.stt import Transcriber
+    from voice.wakeword import WakeWordDetector
+
+    stt = Transcriber(cfg.voice.stt, cfg.root)
+    stt.warmup()
+    wake = WakeWordDetector(cfg.voice.wakeword, cfg.root)
+    return VoicePipeline(cfg.voice, wake, stt, app.on_heard, on_wake=app.on_wake, on_nothing=app.on_nothing)
+
+
 def _voice(app: DrivePilotApp, cfg: AppConfig, status: dict[str, str]) -> None:
     try:
         from voice.audio import MicStream
-        from voice.pipeline import VoicePipeline
-        from voice.stt import Transcriber
-        from voice.wakeword import WakeWordDetector
 
-        stt = Transcriber(cfg.voice.stt, cfg.root)
-        stt.warmup()
-        wake = WakeWordDetector(cfg.voice.wakeword, cfg.root)
-        pipeline = VoicePipeline(cfg.voice, wake, stt, app.on_heard, on_wake=app.on_wake, on_nothing=app.on_nothing)
-        app.attach_voice(pipeline, MicStream(cfg.voice.input_device))
+        app.attach_voice(make_voice_pipeline(app, cfg), MicStream(cfg.voice.input_device))
         status["voice"] = "on"
     except Exception as exc:  # noqa: BLE001 - no microphone, model missing...: keep running with typed questions
         log.error("voice input failed to start: type questions on the page instead", error=str(exc))
         status["voice"] = "off"
 
 
-def build_app(cfg: AppConfig, args: argparse.Namespace, recorder: RunRecorder | None) -> DrivePilotApp:
+def build_app(
+    cfg: AppConfig, args: argparse.Namespace, recorder: RunRecorder | None, speaker: Speaker | None = None
+) -> DrivePilotApp:
     """The app with real components (camera or file, GPU detector, Piper, Whisper, Mapbox, vision model)."""
     status: dict[str, str] = {}
     gpu = GpuMonitor(cfg.perception.device)
     detector = Detector(cfg.perception, cfg.root)
-    speaker = _speaker(cfg, args, status)
+    speaker = speaker if speaker is not None else _speaker(cfg, args, status)
     hub = None if args.no_ui else UiHub()
     app = DrivePilotApp(
         cfg,
@@ -818,7 +846,7 @@ def main(argv: list[str] | None = None) -> int:
         if app.hub is not None:
             from ui.server import UiServer, create_server
 
-            server = UiServer(create_server(app.hub, _PageActions(app)), cfg.ui.host, cfg.ui.port)
+            server = UiServer(create_server(app.hub, PageActions(app)), cfg.ui.host, cfg.ui.port)
             try:
                 server.start()
             except RuntimeError as exc:
@@ -833,7 +861,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"run folder: {recorder.dir}", flush=True)
 
 
-class _PageActions:
+class PageActions:
     """`ui.server.UiActions` on top of the app."""
 
     def __init__(self, app: DrivePilotApp) -> None:

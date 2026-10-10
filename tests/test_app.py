@@ -255,6 +255,7 @@ def test_app_runs_a_replay_end_to_end(tmp_path: Path, clip: Path) -> None:
         def speak_later() -> None:  # a spoken question, as the voice pipeline hands it over
             wait_for(lambda: len(app.questions) >= 2)
             app.on_wake()
+            time.sleep(1.0)  # "what's my next turn?" takes a while to say: it ends after the wake word
             now = time.perf_counter()
             app.on_heard(HeardQuestion("what's my next turn?", 1.0, 2.0, 2.6, now, now + 0.2, 200.0, True, "silence"))
 
@@ -285,6 +286,40 @@ def test_app_runs_a_replay_end_to_end(tmp_path: Path, clip: Path) -> None:
     assert ("question", "what does that sign say?") in messages
     assert ("answer", "That sign says Main Street.") in messages
     assert ("listening", None) in messages
+
+
+def test_a_question_overtaken_by_a_newer_wake_word_is_not_answered(clip: Path) -> None:
+    speaker = TextSpeaker()
+    app = DrivePilotApp(load_config(), lambda: FileSource(clip), FakeDetector(), speaker)  # type: ignore[arg-type]
+    ended = time.perf_counter()
+    app.on_wake()  # the driver starts the next question before this one was transcribed
+    app.on_heard(HeardQuestion("who got here first?", 1.0, 2.0, 2.6, ended + 0.6, ended + 1.8, 1700.0, True, "silence"))
+    assert speaker.said == [] and [q.source for q in app.questions.values()] == ["superseded"]
+
+
+def test_light_green_cuts_off_a_streaming_answer() -> None:
+    from answers.alerts import LIGHT_GREEN
+    from answers.assistant import Assistant
+    from answers.speech import Priority
+    from state.world import empty_snapshot
+
+    release = threading.Event()
+
+    class SlowModel:
+        def answer(self, route: Any, snapshot: Any, cancel: Any = None) -> Any:
+            yield "The car ahead is a white SUV."
+            release.wait(2.0)
+            yield "It is waiting at the light."
+
+    speaker = TextSpeaker()
+    assistant = Assistant(load_config(), lambda: empty_snapshot(10.0), speaker, model=SlowModel())  # type: ignore[arg-type]
+    asking = threading.Thread(target=assistant.ask, args=("what's the car ahead doing?",))
+    asking.start()
+    assert wait_for(lambda: len(speaker.said) == 1)
+    assistant.say(Utterance(LIGHT_GREEN, "alert", Priority.REQUESTED, clip="light_green", drops_answers=True))
+    release.set()
+    asking.join(3.0)
+    assert speaker.texts() == ["The car ahead is a white SUV.", LIGHT_GREEN]  # the rest of the old answer is dropped
 
 
 class FlakyCamera(VideoSource):

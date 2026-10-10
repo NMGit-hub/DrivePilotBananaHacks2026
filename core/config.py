@@ -459,6 +459,7 @@ class VoiceConfig(_Strict):
 
     input_device: str | int | None = Field(None, description="sounddevice name/index; null = system default.")
     output_device: str | int | None = None
+    output_volume: float = Field(1.0, gt=0.0, le=1.0, description="Speech and alert volume (1 = full).")
     wakeword: WakeWordConfig = WakeWordConfig()
     endpoint: EndpointConfig = EndpointConfig()
     stt: SttConfig = SttConfig()

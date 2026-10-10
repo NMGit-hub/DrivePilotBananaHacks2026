@@ -32,6 +32,7 @@ class _Item:
     utterance: Utterance
     queued_at: float
     audio: np.ndarray | None = None  # synthesized already (an interrupted answer keeps its audio)
+    epoch: int = 0  # answers from before an alert that made them stale are not resumed
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,7 @@ class _State:
     interrupted: bool = False
     closed: bool = False
     generation: int = 0  # bumped by stop(): items from before it are dropped
+    answer_epoch: int = 0  # bumped by an alert with drops_answers: answers from before it are not resumed
 
 
 class AudioSpeaker:
@@ -95,11 +97,15 @@ class AudioSpeaker:
         with self._cond:
             state = self._state
             if utterance.kind == "alert":
+                if utterance.drops_answers:
+                    state.answer_epoch += 1
+                    state.answers.clear()
                 state.alerts.append(item)
                 if state.playing is not None and state.playing.utterance.kind != "alert":
                     state.interrupted = True
                     self.output.stop()
             else:
+                item.epoch = state.answer_epoch
                 state.answers.append(item)
             self._cond.notify()
 
@@ -166,10 +172,12 @@ class AudioSpeaker:
                     dropped = self._finish(item, None, interrupted=True)
                 elif item.utterance.kind == "answer" and self._state.alerts:
                     item.audio = audio  # an alert arrived during synthesis: it goes first, this answer right after
-                    self._state.answers.appendleft(item)
-                    self._state.playing = None
-                    self._cond.notify_all()
-                    continue
+                    if item.epoch == self._state.answer_epoch:
+                        self._state.answers.appendleft(item)
+                        self._state.playing = None
+                        self._cond.notify_all()
+                        continue
+                    dropped = self._finish(item, None, interrupted=True)  # the alert made it stale
             if dropped is not None:
                 self._report(dropped)
                 continue
@@ -177,8 +185,9 @@ class AudioSpeaker:
             with self._cond:
                 stopped = self._state.generation != generation
                 interrupted = stopped or self._state.interrupted
-                if interrupted and not stopped and item.utterance.kind == "answer":
-                    self._state.answers.appendleft(_Item(item.utterance, item.queued_at, item.audio))
+                fresh = item.epoch == self._state.answer_epoch
+                if interrupted and not stopped and item.utterance.kind == "answer" and fresh:
+                    self._state.answers.appendleft(_Item(item.utterance, item.queued_at, item.audio, item.epoch))
                 record = self._finish(item, sound_at, interrupted)
             self._report(record)
 
