@@ -185,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
             before_wakes, before = pipe.wakes, len(heard)
             for k in range(0, len(pcm), CHUNK):
                 pipe.feed(pcm[k : k + CHUNK])
-            pipe.flush()
+            pipe.flush(timeout=120.0)
             woke = pipe.wakes > before_wakes
             got = heard[before] if len(heard) > before else None
             expected = route(question)
@@ -295,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
         before = pipe.wakes
         for k in range(0, len(pcm) - CHUNK + 1, CHUNK):
             pipe.feed(pcm[k : k + CHUNK])
-        pipe.flush()
+        pipe.flush(timeout=120.0)
         summary["false_wakes"] = {"minutes": round(len(pcm) / SAMPLE_RATE / 60, 2), "wakes": pipe.wakes - before}
 
     if output is not None:

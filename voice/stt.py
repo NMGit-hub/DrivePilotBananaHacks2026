@@ -84,6 +84,8 @@ class Transcriber:
             condition_on_previous_text=False,
             without_timestamps=True,
             vad_filter=False,
+            temperature=0.0,  # no fallback re-decoding: a short question is decoded once (bounded latency)
+            max_new_tokens=self.cfg.max_new_tokens,
         )
         text = " ".join(segment.text.strip() for segment in segments).strip()
         return text, (time.perf_counter() - start) * 1000.0
