@@ -2,9 +2,10 @@
 
 Who. YOLO's "person" and "bicycle" tracks. A person whose box overlaps a bicycle's is a cyclist (their union box
 reaches down to the wheels); one on a motorcycle is a rider (a vehicle: ignored), and one mostly inside a vehicle's
-box but above its bottom edge is in it or hidden behind it (bus passengers, drivers: ignored). Once paired, a
-bicycle stands in for its rider's track when the rider isn't detected (one alert each); a bicycle never seen with a
-rider is parked (at a rack, a pole, the curb: tracked, never warned about).
+box but above its bottom edge is in it or hidden behind it (bus passengers, drivers: ignored). Someone on a bicycle
+for `rider_frames` is its rider: for `rider_memory_s` after (a dropout of the person's detection) the bicycle stands
+in for their track (one alert each). Any other bicycle is parked (at a rack, a pole, the curb; someone who stood
+behind it is no rider): tracked, never warned about.
 
 Where. A pinhole camera at a known height (state/parking.py's `Camera`) places each box on the ground (x right,
 z ahead, metres). Two distance cues: the bottom edge touches the ground, so with the horizon row (estimated from car
@@ -15,7 +16,8 @@ closer, so they seem to drift sideways); the second for children and cut-off box
 (`height_weight`), each alone when the other can't be measured. x is measured from where we're heading: dashcams
 are often aimed a few degrees off the car's axis (one lot clip ~6°: "straight ahead" in the image was the sidewalk
 15 m out), so the image column we head towards is the median focus of expansion of the frame-to-frame homography
-while we drive (`aim_*`). Not placed: a box cut off at a side edge and at the top or bottom (the windshield
+while we drive (`aim_*`; the fitted homography damps the ground's expansion, so it gives the direction, not our
+speed). Not placed: a box cut off at a side edge and at the top or bottom (the windshield
 mount, a reflection, someone right beside our door).
 
 The path zone (`PathZone`, behind a small boundary: YOLOPv2's drivable area replaces it in V2-M5): `half_width`
@@ -26,10 +28,13 @@ is measured (a new track, ~0.3 s) it counts as that slow: beyond `min_length` + 
 track waits for its motion to be known; nearer, anything in our path is warned about at once. It bends with
 our turn rate (the homography's yaw, read at the focus of expansion) over our speed, less `curvature_uncertainty`
 (on straight dev-clip roads the reading is off by up to ~1.5°/s at 10 m/s, growing with speed), and narrows far
-out by ½ · that · z², so what an unknown bend may have taken off our path isn't called in it. Turning faster than
-`turn_dps` is a real turn: no predictions, a shorter path.
+out by ½ · that · z² (never below `min_half_width_m`: what is right in front of our car stays in it), so what an
+unknown bend may have taken off our path isn't called in it. Turning faster than `turn_dps` is a real turn: no
+predictions, a shorter path. Without GPS the turn radius assumes `default_speed_mps` (the homography is no
+speedometer), so slow turns bend too little.
 
-About to enter. Outside the zone, within `predict_max_z_m`, moving towards it fast enough to be inside within
+About to enter. Outside the zone, within `predict_max_z_m` (or `predict_max_s` at our speed, if further), moving
+towards it fast enough to be inside within
 `predict_s` at the lateral speed in excess of what static things seem to do: unmodelled gentle curves (z ×
 `yaw_noise_dps`) and the distance drifting (|x| × `depth_drift`). A box that jumps (an occlusion ending, a
 re-detection: `jump_rel`) restarts its history, so no speed is measured across the jump. No prediction while we turn,
@@ -37,13 +42,15 @@ or for a box cut off at a frame edge (its visible centre moves as it comes into 
 
 Never warned about: a box cut off at a side edge (beside us, its centre unknown), a parked bicycle, and, beyond
 `tall_min_z_m` (nearer, our hood can hide feet), a "person" much taller than one standing where its box touches
-the ground (`max_tall_ratio`: a tree or pole taken for a person, or someone whose legs are hidden behind a car).
+the ground (`max_tall_ratio`: a tree or pole taken for a person, or someone whose legs are hidden behind a car),
+even with the horizon `tall_horizon_slack_deg` higher (a horizon estimated too low makes real people look tall).
 
 When. Only while we move: not stopped by ego motion and, when there is a GPS fix, not slower than `min_speed_mps`
-(people crossing in front of us while we wait at a red light are normal). Someone in the zone when we start moving
+(people crossing in front of us while we wait at a red light are normal); when ego motion can't be measured (it
+holds its last state), GPS at `gps_moving_mps` or more means moving. Someone in the zone when we start moving
 is warned about then. In the zone (or entering) for `confirm_frames` observations in a row, so a one-frame false
-detection says nothing. Once per track; a new track appearing where a warned one was just lost (an ID switch)
-inherits its warning.
+detection says nothing. Once per track; a new track of the same kind appearing where a warned one was just lost
+(an ID switch) inherits its warning.
 
 Called once per frame on the world thread (WorldState); not thread-safe on its own.
 """
@@ -78,9 +85,11 @@ class PathZone:
     max_length: float
     speed: float  # our speed (m/s)
     curvature: float = 0.0
-    turn_rate: float = 0.0  # rad/s (+ = right) we turn at: static things sweep sideways at −turn_rate·z
+    # rad/s (+ = right) the path bends with (the measured turn less its uncertainty): static things sweep sideways at
+    # about −turn_rate·z; the rest of a real turn (up to the uncertainty) is left to the noise floors
+    turn_rate: float = 0.0
     uncertainty: float = 0.0  # how far off the curvature can be (1/m)
-    min_half_width: float = 0.5
+    min_half_width: float = 1.0
 
     def center(self, z: float) -> float:
         """Lateral position of the centreline at depth z."""
@@ -166,6 +175,15 @@ class _Placed:
 
 
 @dataclass(slots=True)
+class _Rider:
+    """Who rides a bicycle track."""
+
+    person: int  # the rider's (person) track id
+    frames: int = 0  # frames seen riding it
+    last_t: float = 0.0  # last seen riding it
+
+
+@dataclass(slots=True)
 class _Person:
     """Per-track history and alert state."""
 
@@ -211,7 +229,7 @@ class PedestrianTracker:
     def reset(self) -> None:
         """Forget everything (new video segment)."""
         self._people: dict[int, _Person] = {}
-        self._rider_of: dict[int, int] = {}  # bicycle track id -> its rider's (person) track id
+        self._rider_of: dict[int, _Rider] = {}  # bicycle track id -> who rides it
         self._yaw: deque[tuple[float, float]] = deque()  # (t, image shift this frame in °: + = we turn left)
         self._aim: deque[float] = deque(maxlen=self.cfg.aim_samples)  # per-frame focus-of-expansion columns
         self._aim_median: float | None = None  # cached median of _aim (None: recompute)
@@ -234,8 +252,10 @@ class PedestrianTracker:
         ego_stopped: bool,
         homography: np.ndarray | None = None,
         gps_speed: float | None = None,
+        ego_confident: bool = True,
     ) -> list[PedestrianEvent]:
-        """Fold one frame in. `horizon`: the horizon row (px); `gps_speed`: our GPS speed (m/s) with a fresh fix."""
+        """Fold one frame in. `horizon`: the horizon row (px); `gps_speed`: our GPS speed (m/s) with a fresh fix;
+        `ego_confident`: ego motion could be measured (otherwise it holds its last state)."""
         cfg = self.cfg
         if self._last_t is not None and t < self._last_t - 1e-6:
             self.reset()  # time went backwards (a seek without a segment change): histories don't apply
@@ -245,11 +265,13 @@ class PedestrianTracker:
 
         if gps_speed is not None:
             speed = max(0.0, gps_speed)
+            if ego_stopped and not ego_confident and speed >= cfg.gps_moving_mps:
+                ego_stopped = False  # ego motion can't see (night, a blank road) and holds "stopped": GPS says moving
             still = "stopped" if ego_stopped else ("slow" if speed < cfg.min_speed_mps else None)
         else:
             speed = 0.0 if ego_stopped else cfg.default_speed_mps
             still = "stopped" if ego_stopped else None
-        aim_x = self._update_aim(homography, cam, horizon, height, dt, ego_stopped)
+        aim_x = self._update_aim(homography, cam, horizon, height, dt, ego_stopped, gps_speed)
         turn_rate = 0.0 if ego_stopped else self._turn_rate(t, homography, cam, aim_x, horizon)  # °/s, + = right
         turning = abs(turn_rate) >= cfg.turn_dps
         # The path's curvature: our turn rate over our speed, less what the reading can be off by (it bends gentle
@@ -273,7 +295,7 @@ class PedestrianTracker:
 
         events: list[PedestrianEvent] = []
         views: list[PersonView] = []
-        candidates = list(self._candidates(tracks))
+        candidates = list(self._candidates(t, tracks))
         present = {track_id for track_id, _, _, _ in candidates}
         for track_id, kind, box, body_h in candidates:
             placed = self._place(box, body_h, cam, aim_x, horizon, width, height)
@@ -289,7 +311,7 @@ class PedestrianTracker:
 
     # ----------------------------------------------------------------------------------- pieces
 
-    def _candidates(self, tracks: Sequence[Track]) -> Iterable[tuple[int, str, Box, float]]:
+    def _candidates(self, t: float, tracks: Sequence[Track]) -> Iterable[tuple[int, str, Box, float]]:
         """(track id, kind, box, body height in m) of every pedestrian and cyclist this frame."""
         cfg = self.cfg
         bikes = [tr for tr in tracks if tr.cls == "bicycle"]
@@ -309,11 +331,15 @@ class PedestrianTracker:
             person = self._people.get(tr.track_id)
             if bike is not None and self._rides(tr.box, bike.box):
                 ridden.add(bike.track_id)
-                self._rider_of[bike.track_id] = tr.track_id
+                rider = self._rider_of.get(bike.track_id)
+                if rider is None or rider.person != tr.track_id:
+                    rider = self._rider_of[bike.track_id] = _Rider(tr.track_id)
+                rider.frames += 1
+                rider.last_t = t
                 if person is not None:
                     person.bike_frames += 1
                 yield tr.track_id, CYCLIST, _union(tr.box, bike.box), cfg.cyclist_height_m
-            elif person is not None and person.bike_frames >= 2:
+            elif person is not None and person.bike_frames >= cfg.rider_frames:
                 yield tr.track_id, CYCLIST, tr.box, cfg.person_height_m  # the bicycle wasn't detected this frame
             else:
                 yield tr.track_id, PEDESTRIAN, tr.box, cfg.person_height_m
@@ -321,14 +347,18 @@ class PedestrianTracker:
             if bike.track_id in ridden:
                 continue
             rider = self._rider_of.get(bike.track_id)
-            if rider is None:
-                # Never seen with a rider: most likely parked (at a rack, a pole, the curb). Tracked, not warned about.
+            if rider is not None and (rider.person in people or t - rider.last_t > cfg.rider_memory_s):
+                del self._rider_of[bike.track_id]  # its rider is seen off it, or long gone: it is parked now
+                rider = None
+            if rider is not None and rider.frames >= cfg.rider_frames:
+                if rider.person not in stood_in:
+                    # Its rider wasn't detected this frame: the bicycle stands in for them (same track, one alert).
+                    stood_in.add(rider.person)
+                    yield rider.person, CYCLIST, bike.box, cfg.bicycle_height_m
+            else:
+                # No rider (or only someone passing it for a frame): most likely parked (at a rack, a pole, the curb).
+                # Tracked, not warned about.
                 yield bike.track_id, BICYCLE, bike.box, cfg.bicycle_height_m
-            elif rider not in people and rider not in stood_in:
-                # Its rider wasn't detected this frame: the bicycle stands in for them (same track, one alert).
-                stood_in.add(rider)
-                yield rider, CYCLIST, bike.box, cfg.bicycle_height_m
-            # (else its rider is seen off it: the bicycle is parked now)
 
     def _rides(self, person: Box, ride: Box) -> bool:
         """The person sits on the bicycle / motorcycle: boxes overlap, the person's centre is over it, their head
@@ -368,7 +398,10 @@ class PedestrianTracker:
         if z_ground is not None and z_height is not None:
             w = cfg.height_weight
             z = math.exp(w * math.log(z_height) + (1.0 - w) * math.log(z_ground))
-            tall = z_ground >= cfg.tall_min_z_m and z_ground > cfg.max_tall_ratio * z_height
+            # Too tall even if the horizon were `tall_horizon_slack_deg` higher (which brings the ground point nearer).
+            slack = cam.f * math.tan(math.radians(cfg.tall_horizon_slack_deg))
+            z_near = cam.f * cam.height_m / (y2 - horizon + slack)
+            tall = z_ground >= cfg.tall_min_z_m and z_near > cfg.max_tall_ratio * z_height
         elif z_ground is not None:
             z = z_ground
         elif z_height is not None:
@@ -381,14 +414,22 @@ class PedestrianTracker:
         return _Placed(x, z, left or right, tall)
 
     def _update_aim(
-        self, homography: np.ndarray | None, cam: Camera, horizon: float, height: int, dt: float, ego_stopped: bool
+        self,
+        homography: np.ndarray | None,
+        cam: Camera,
+        horizon: float,
+        height: int,
+        dt: float,
+        ego_stopped: bool,
+        gps_speed: float | None,
     ) -> float:
         """The image column we're heading towards: the median focus of expansion while driving (image centre
         until enough frames are in). Per frame: the ground's sideways flow on two rows below the horizon is
         expansion × (x − x_foe) plus our rotation (the same on both rows), so their difference is zero at x_foe
         whatever we turn."""
         cfg = self.cfg
-        if homography is not None and not ego_stopped and dt > 0 and height > horizon:
+        driving = not ego_stopped and (gps_speed is None or gps_speed >= cfg.aim_min_speed_mps)
+        if homography is not None and driving and dt > 0 and height > horizon:
             y1, y2 = horizon + 0.35 * (height - horizon), horizon + 0.6 * (height - horizon)
             xs = np.linspace(0.25 * cam.cx, 1.75 * cam.cx, 9)
             pts = np.array([[*xs, *xs], [y1] * 9 + [y2] * 9, [1.0] * 18])
@@ -397,11 +438,10 @@ class PedestrianTracker:
                 flow = q[0] / q[2] - pts[0]
                 d = flow[9:] - flow[:9]  # row 2 minus row 1: rotation cancels, expansion × (x − x_foe) is left
                 xc = xs - xs.mean()
-                da = float((xc * (d - d.mean())).sum() / (xc * xc).sum())
-                # Expansion per row below the horizon is (forward motion) / (f · camera height) per frame.
-                forward_mps = da / (y2 - y1) * cam.f * cam.height_m / dt
-                if forward_mps >= cfg.aim_min_speed_mps:
-                    self._aim.append(float(xs.mean() - d.mean() / da))
+                da = float((xc * (d - d.mean())).sum() / (xc * xc).sum())  # expansion difference per frame
+                foe = float(xs.mean() - d.mean() / da) if da > 0 else -1.0
+                if da / dt >= cfg.aim_min_expansion and 0.0 <= foe <= 2 * cam.cx:
+                    self._aim.append(foe)
                     self._aim_median = None
         if len(self._aim) < cfg.aim_min_samples:
             return cam.cx
@@ -443,7 +483,7 @@ class PedestrianTracker:
         person = self._people.get(track_id)
         if person is None:
             person = self._people[track_id] = _Person(kind)
-            person.alerted = self._relinked(t, x, z, zone, present)
+            person.alerted = self._relinked(t, kind, x, z, zone, present)
         elif t - person.last_seen > cfg.max_gap_s:
             person.streak = 0  # unseen for a while: the confirmation starts over
         if person.bike_frames >= 2 and kind == PEDESTRIAN:
@@ -467,7 +507,8 @@ class PedestrianTracker:
         in_path = zone.contains(x, z, closing)
         entering = False
         vx = person.vx
-        predictable = not in_path and not turning and not placed.clipped and 0.0 < z <= cfg.predict_max_z_m
+        predict_z = max(cfg.predict_max_z_m, cfg.predict_max_s * zone.speed)
+        predictable = not in_path and not turning and not placed.clipped and 0.0 < z <= predict_z
         if predictable and vx is not None and abs(vx) <= cfg.max_lateral_mps and z <= zone.length(closing):
             toward = -math.copysign(1.0, offset) * zone.lateral_speed(vx, z)  # speed towards the centreline
             # What static things seem to do sideways: unmodelled curves (z·ω), the distance drifting (|x|·rate).
@@ -529,18 +570,20 @@ class PedestrianTracker:
         ts = [s[0] for s in samples]
         return _slope(ts, [s[1] for s in samples]), _slope(ts, [s[2] for s in samples])
 
-    def _relinked(self, t: float, x: float, z: float, zone: PathZone, present: set[int]) -> bool:
-        """A new track where an alerted one was lost moments ago (ByteTrack gave the same person a new id). Tracks
-        seen this frame are other people (someone walking next to a warned person is not them)."""
+    def _relinked(self, t: float, kind: str, x: float, z: float, zone: PathZone, present: set[int]) -> bool:
+        """A new track of the same kind where an alerted one was lost moments ago (ByteTrack gave the same person a
+        new id). Tracks seen this frame are other people (someone walking next to a warned person is not them)."""
         cfg = self.cfg
         for track_id, old in self._people.items():
             dt = t - old.last_seen
-            if track_id in present or not old.alerted or not 0.0 < dt <= cfg.relink_s or not old.samples:
+            if track_id in present or not old.alerted or old.kind != kind or not 0.0 < dt <= cfg.relink_s:
+                continue
+            if not old.samples:
                 continue
             _, ox, oz = old.samples[-1]
             closing = zone.speed if old.vz is None else -old.vz
             px, pz = ox + (old.vx or 0.0) * dt, oz - closing * dt
-            if abs(x - px) <= cfg.relink_m and abs(z - pz) <= max(cfg.relink_m, 0.25 * z):
+            if abs(x - px) <= cfg.relink_m and abs(z - pz) <= max(cfg.relink_m, 0.15 * z):
                 return True
         return False
 
@@ -549,5 +592,6 @@ class PedestrianTracker:
         stale = [k for k, p in self._people.items() if t - p.last_seen > keep]
         for k in stale:
             del self._people[k]
-        if len(self._rider_of) > 200:
-            self._rider_of = {b: p for b, p in self._rider_of.items() if p in self._people}
+        gone = [b for b, r in self._rider_of.items() if t - r.last_t > self.cfg.rider_memory_s]
+        for b in gone:
+            del self._rider_of[b]

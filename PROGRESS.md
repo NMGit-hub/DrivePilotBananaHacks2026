@@ -31,23 +31,31 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   event `pedestrian_in_path`, snapshot `pedestrians`), spoken by `AlertEngine` from 10 fixed pre-rendered sentences
   ("Pedestrian stepping into the road on your right.", "Cyclist ahead on your left.", ...), SAFETY priority (kept in
   quiet mode; the speaker now also puts it ahead of queued alerts and cuts off a playing non-safety alert, which is
-  said again after it), once per track, one per 3 s for a group; config `pedestrians:` + `alerts.safety_gap_s`.
+  said again after it), once per track, a group's repeats (same kind and side within 3 s) once; config
+  `pedestrians:` + `alerts.safety_gap_s`.
   Design in the module docstring: distance from ground contact and box height (log-combined); x measured from the
   focus of expansion (one lot clip's dashcam was aimed ~6° off the car's axis: "straight ahead" was the sidewalk);
   path = 1.5 m either side, 6 m + 2 s at our speed (≤ 35 m), bent by the homography turn rate less a curvature
   uncertainty and narrowed far out by it; "about to enter" from the lateral speed in excess of a noise floor
   (within 15 m); only while moving (ego motion + GPS ≥ 0.5 m/s); cyclist riding ahead with us at our speed: not
-  warned (decision, tested). Verified: 46 synthetic tests (pinhole street sim with jitter, dropouts, ID switches,
-  a 150 m curve, a misread turn rate, a 6°-off camera, a tree, the windshield mount, legs hidden behind a car, a
-  motorcyclist; a mutation check confirmed the tests catch each rule being weakened) + 1 speaker test; replayed
-  through the real WorldState + AlertEngine on cached perception (`scripts/eval_pedestrians.py`, frames drawn and
-  looked at): **0 alerts on all 10 dev clips** (the construction-clip crossing and the SF person with the dog
-  happen while we are stopped or 16-20 m ahead of a 9 m path at walking pace: silent, as specified); on 29
-  parking-lot clips 5 alerts: 2 right (a man stepping out between vans into our path; at night, people stepping
-  into the crosswalk just ahead as we roll up to a stop sign), 3 borderline (someone at an aisle edge, a worker
-  beside a truck in the first 0.1 s, someone at the pump island beside the lane we turned into), 0 clearly false
-  (the first version had 9, all false or borderline). Cost on the world thread: 0.08 ms mean, 0.24 ms p99 per
-  frame (dev clips).
+  warned (decision, tested). Verified: 54 synthetic tests (pinhole street sim with jitter, dropouts, ID switches,
+  a 150 m curve, a misread turn rate, a 6°-off camera, a horizon 25-35 px off, a tree, the windshield mount, legs
+  hidden behind a car, a motorcyclist, a parked bicycle; a mutation check confirmed the tests catch each rule
+  being weakened) + 1 speaker test; replayed through the real WorldState + AlertEngine on cached perception
+  (`scripts/eval_pedestrians.py`, frames drawn and looked at): **0 alerts on all 10 dev clips** (the
+  construction-clip crossing and the SF person with the dog happen while we are stopped or 16-20 m ahead of a 9 m
+  path at walking pace: silent, as specified); on 29 parking-lot clips 6 alerts: 2 right (a man stepping out
+  between vans into our path; at night, people stepping into the crosswalk just ahead as we roll up to a stop sign),
+  4 borderline (someone at an aisle edge; a worker beside a truck in the first 0.1 s; at a gas station, a man by a
+  car we turn towards and someone at the pump island beside the lane we turn into), 0 clearly false (the first
+  version had 9, all false or borderline). Cost on the world thread: 0.08 ms mean, 0.3 ms p99 per frame;
+  detection frame → first audio sample handed to the output ~1 ms (real Piper clips, fake device). Independent
+  review: 8 findings + 5 suspicions; fixed: a 3 s gap that silenced a second, unrelated hazard; "too tall" vetoing
+  real people when the horizon is off; a parked bicycle turning "cyclist" after one overlap; the far path narrowing
+  to ±0.5 m (now ≥ ±1 m) and predictions only within 15 m (now 2 s at our speed); relinks across kinds; a mount test
+  that didn't test the mount rule; no warnings when ego motion can't see but GPS says we drive; a cut-off alert
+  replayed after it had finished. The test sheet now ignores safety warnings for `ALERT@` rows and runs its BDD
+  clips at 60°.
 
 ### V1 polish (2026-10-10): throttle check, the early-wake voice bug fixed and reviewed
 - **Throttle check** (HANDOFF.md section 3 item 2): not throttled. On the charger; under a 4-thread load the busy
@@ -393,8 +401,15 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   boxes cut off at a side edge never alert (on a 60° camera that hides someone within ~2.6 m of the bumper's
   corners; the phone's 114° lens sees them); the first ~1.5 s after a reset use the image centre as our heading
   and the prior horizon; a new track beyond 9 m waits ~0.3 s for its motion before it can be "in the path"; a
-  bicycle never seen with a rider is treated as parked; a "person" over 1.4× too tall for where it stands is
-  ignored beyond 8 m (trees, poles; also someone whose legs are hidden behind a car). Tuned on BDD100K footage
+  bicycle not ridden for 2 frames is treated as parked; a "person" over 1.3× too tall for where it stands (with
+  0.8° of horizon slack) is ignored beyond 8 m (trees, poles; also someone whose legs are hidden behind a car).
+  Without GPS the zone length assumes 8 m/s and turns bend as if at 8 m/s (half the bend at 4 m/s). With live
+  1 Hz phone GPS, the speed can read ~0 for up to 1 s after we pull away, which holds back the "someone in our path
+  as we start moving" warning by up to that second (GPS slower than 0.5 m/s overrides ego motion's "moving", to
+  stay silent when ego motion flickers at a red light; the GPX replay interpolates, so the evals don't show it).
+  "Stop" drops a warning queued that instant (the person counts as warned). **The field of view must be right**:
+  BDD100K clips in the app need `--set video.file.hfov_deg=60` (at the 114° default, people 16-20 m away read as
+  6-7 m and two false warnings fire on the dev clips; the evals and the sheet set it). Tuned on BDD100K footage
   only (narrow 60° dashcams); the dev clips have no real case of someone in our path while we move, so true
   positives on real footage come from the lot clips (2) and the synthetic tests.
 - **The parking feature has not been run on real footage yet** (only simulated lots): next step, scored against

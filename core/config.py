@@ -363,8 +363,9 @@ class AlertsConfig(_Strict):
     safety_gap_s: float = Field(
         3.0,
         ge=0.0,
-        description="Pedestrian/cyclist warnings closer together than this are one warning (a group crossing); "
-        "each person is warned about once anyway.",
+        description="A pedestrian/cyclist warning that would repeat the last one this soon (same kind, same side or "
+        "ahead: a group crossing) is not said again; a different kind or the other side is. Each person is warned "
+        "about once anyway.",
     )
 
 
@@ -384,12 +385,18 @@ class PedestriansConfig(_Strict):
     )
     min_box_px: float = Field(14.0, gt=0.0, description="Smaller boxes are too far away to place.")
     max_tall_ratio: float = Field(
-        1.4,
+        1.3,
         gt=1.0,
         description="A box this much taller than a person standing where it touches the ground (ground-contact "
         "distance / box-height distance) is not someone on the road in front of us: a tree or pole taken for a "
         "person, or someone whose legs are hidden behind a car (real people on the dev and lot clips at 8-25 m: "
         "median 0.87, 95th percentile 1.19)...",
+    )
+    tall_horizon_slack_deg: float = Field(
+        0.8,
+        ge=0.0,
+        description="...even with the horizon this much higher than estimated (braking pitch, a rising road: a "
+        "horizon too low makes real people look too tall far out)...",
     )
     tall_min_z_m: float = Field(
         8.0, ge=0.0, description="...checked only this far out (nearer, our hood can hide their feet)."
@@ -425,6 +432,11 @@ class PedestriansConfig(_Strict):
     min_speed_mps: float = Field(
         0.5, ge=0.0, description="GPS slower than this: not moving (a creep or a flicker while waiting at a light)."
     )
+    gps_moving_mps: float = Field(
+        2.0,
+        gt=0.0,
+        description="GPS at least this fast while ego motion can't be measured (it holds its last state): moving.",
+    )
     confirm_frames: int = Field(3, ge=1, description="In (or entering) the path this many observations in a row.")
     max_gap_s: float = Field(0.3, gt=0.0, description="A track unseen for longer starts its streak over.")
     fit_s: float = Field(0.6, gt=0.0, description="Speeds are fitted over this much track history...")
@@ -436,7 +448,10 @@ class PedestriansConfig(_Strict):
         "noise floor below (a lower bound of how fast they really move)...",
     )
     predict_max_z_m: float = Field(
-        15.0, gt=0.0, description="...predicted only this close (sideways speeds further out are depth noise)."
+        15.0, gt=0.0, description="...predicted only this close (sideways speeds further out are depth noise)..."
+    )
+    predict_max_s: float = Field(
+        2.0, ge=0.0, description="...or as far as we drive in this long, if that is further (faster roads)."
     )
     min_lateral_mps: float = Field(0.5, ge=0.0, description="Slower sideways motion is not stepping in...")
     yaw_noise_dps: float = Field(
@@ -463,7 +478,9 @@ class PedestriansConfig(_Strict):
         "~1.5°/s at 10 m/s, growing with speed. The path bends by the measured curvature less this, and narrows far "
         "out by ½·this·z² (0.5 m at 20 m), so what may be off our path on an unknown bend isn't called in it.",
     )
-    min_half_width_m: float = Field(0.5, gt=0.0, description="...but never narrower than this.")
+    min_half_width_m: float = Field(
+        1.0, gt=0.0, description="...but never narrower than this (what is right in front of our car stays in it)."
+    )
     turn_dps: float = Field(
         10.0,
         gt=0.0,
@@ -477,15 +494,30 @@ class PedestriansConfig(_Strict):
         "degrees off the car's axis) is the median over this many frames of driving...",
     )
     aim_min_samples: int = Field(45, ge=1, description="...used once this many are in (until then: image centre)...")
-    aim_min_speed_mps: float = Field(2.0, gt=0.0, description="...from frames moving at least this fast...")
+    aim_min_expansion: float = Field(
+        0.003,
+        gt=0.0,
+        description="...from frames whose ground expands at least this fast (1/s, the lower row's rate minus the "
+        "upper's; the fitted homography damps it: it is no speedometer)...",
+    )
+    aim_min_speed_mps: float = Field(2.0, gt=0.0, description="...and, with a GPS fix, moving at least this fast...")
     max_aim_deg: float = Field(12.0, ge=0.0, description="...and kept within this angle of the image centre.")
     turn_max_length_m: float = Field(15.0, gt=0.0, description="While turning the path reaches at most this far.")
     turn_speed_floor_mps: float = Field(2.0, gt=0.0, description="Turn radius from at least this speed.")
-    min_turn_radius_m: float = Field(5.0, gt=0.0)
+    min_turn_radius_m: float = Field(5.0, gt=0.0, description="The path bends no tighter than this.")
     relink_s: float = Field(
         2.0, gt=0.0, description="A new track where a warned one was lost this recently is the same person..."
     )
-    relink_m: float = Field(1.5, gt=0.0, description="...if it appears within this distance of where it would be.")
+    relink_m: float = Field(
+        1.5, gt=0.0, description="...if it is the same kind and appears within this distance of where it would be."
+    )
+    rider_frames: int = Field(2, ge=1, description="A person on a bicycle this many frames is its rider...")
+    rider_memory_s: float = Field(
+        0.5,
+        ge=0.0,
+        description="...and the bicycle stands in for them (a dropout of the person's detection) up to this long "
+        "after; longer, it is a parked bicycle (someone who stood behind one and was lost is no rider).",
+    )
 
 
 class ParkingConfig(_Strict):

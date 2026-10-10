@@ -268,6 +268,7 @@ class AudioSpeaker:
                     return self._state.generation == generation and not self._state.interrupted
 
                 sound_at = self.output.play(audio, self.tts.rate, should_start=may_start)
+            ended_at = time.perf_counter()
             with self._cond:
                 stopped = self._state.generation != generation
                 interrupted = stopped or self._state.interrupted
@@ -277,9 +278,11 @@ class AudioSpeaker:
                     resumed = _Item(item.utterance, item.queued_at, item.audio, item.epoch)
                     self._state.answers.appendleft(resumed)
                 elif interrupted and not stopped and u.kind == "alert" and u.priority < Priority.SAFETY:
-                    # Cut off by a safety alert: said again right after it.
-                    resumed = _Item(item.utterance, item.queued_at, item.audio, item.epoch)
-                    self._state.alerts.insert(self._after_safety(), resumed)
+                    # Cut off by a safety alert: said again right after it (unless it had just ended by itself).
+                    duration = 0.0 if audio is None else len(audio) / self.tts.rate
+                    if sound_at is None or ended_at - sound_at < duration - 0.05:
+                        resumed = _Item(item.utterance, item.queued_at, item.audio, item.epoch)
+                        self._state.alerts.insert(self._after_safety(), resumed)
                 record = self._finish(item, sound_at, interrupted)
             self._report(record)
 

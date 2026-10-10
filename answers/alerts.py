@@ -16,8 +16,9 @@
 - Quiet mode: only REQUESTED and SAFETY alerts.
 - Pedestrians and cyclists in (or stepping into) our path while we move (state/pedestrians.py): a SAFETY alert
   from a small fixed set of sentences (pre-rendered at startup, so they play at once), spoken at most once per
-  track and not again within `safety_gap_s` of the last one (a group crossing is one warning). Kept in quiet mode;
-  it interrupts answers, which resume afterwards (it doesn't make them stale).
+  track. One that would repeat the last warning within `safety_gap_s` (the same kind, on the same side or ahead: a
+  group crossing) is not said again; another kind, or someone on the other side, is. Kept in quiet mode; it
+  interrupts answers, which resume afterwards (it doesn't make them stale).
 
 Called from the perception thread (world events) and the voice thread (arming, controls): thread-safe.
 """
@@ -87,6 +88,7 @@ class AlertEngine:
         self._turn_silenced = False  # "never mind" at this stop
         self._generation = 0  # bumped on every reset (seek / new segment)
         self._warned: dict[int, float] = {}  # pedestrian/cyclist track id -> when we warned about them
+        self._last_warning: tuple[float, str, str] | None = None  # (t, kind, side) of the last one spoken
 
     # ---------------------------------------------------------------------------------- controls
 
@@ -190,10 +192,11 @@ class AlertEngine:
         return utterance
 
     def _pedestrian(self, event: WorldEvent) -> Utterance | None:
-        """A pedestrian or cyclist in our path (caller holds the lock): once per track, one per `safety_gap_s`.
-        Safety: spoken in quiet mode too."""
+        """A pedestrian or cyclist in our path (caller holds the lock): once per track, and not a repeat of the
+        warning just given (`safety_gap_s`). Safety: spoken in quiet mode too."""
         d, t = event.detail, event.t
-        text = PEDESTRIAN_TEXTS.get((str(d.get("cls")), str(d.get("how")), str(d.get("side"))))
+        cls, side = str(d.get("cls")), str(d.get("side"))
+        text = PEDESTRIAN_TEXTS.get((cls, str(d.get("how")), side))
         track = d.get("track")
         if text is None or not isinstance(track, int):
             log.warning("pedestrian event without a known phrase", **d)
@@ -204,11 +207,13 @@ class AlertEngine:
         self._warned[track] = t
         if len(self._warned) > 500:
             self._warned = {k: v for k, v in self._warned.items() if 0.0 <= t - v <= _WARNED_MEMORY_S}
-        last = self._last_fired.get("pedestrian")
-        if last is not None and 0.0 <= t - last < self.cfg.safety_gap_s:
+        last = self._last_warning
+        recent = last is not None and 0.0 <= t - last[0] < self.cfg.safety_gap_s
+        if recent and last is not None and last[1] == cls and (side == last[2] or "ahead" in (side, last[2])):
+            # The same warning a moment ago (someone in the same group): said once.
             log.info("alert suppressed: just warned", kind="pedestrian", track=track, t=round(t, 2))
             return None
-        self._last_fired["pedestrian"] = t
+        self._last_warning = (t, cls, side)
         log.info("alert", kind="pedestrian", t=round(t, 2), priority=Priority.SAFETY.name, track=track, text=text)
         return Utterance(text=text, kind="alert", priority=Priority.SAFETY, clip="pedestrian", t=t)
 
@@ -247,4 +252,5 @@ class AlertEngine:
             self._last_event.clear()
             self._turn_silenced = False
             self._warned.clear()  # track ids start over with the new segment
+            self._last_warning = None
             self._generation += 1

@@ -112,7 +112,8 @@ traffic_light:              # light color from the lit lamp; "tell me when it's 
 alerts:                     # spoken on their own: "You're up, check and go." / "Light's green, ..." (when asked)
   cooldown_s: 15.0          # never the same alert twice within this time (once per event)
   watch_timeout_s: 300.0    # "tell me when it's green" requests expire after 5 minutes
-  safety_gap_s: 3.0         # pedestrian warnings closer together are one warning (a group crossing)
+  safety_gap_s: 3.0         # a pedestrian warning repeating the last one within 3 s (same kind and side: a group
+                            #   crossing) is said once; another kind or the other side is said
 
 pedestrians:                # "Pedestrian stepping into the road on your right." (V2; state/pedestrians.py)
   half_width_m: 1.5         # our path: 1.5 m either side of where we're heading (half the car + a margin)...

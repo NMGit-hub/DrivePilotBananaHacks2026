@@ -105,7 +105,10 @@ class Street:
         hood_row: float | None = None,
         radius: float | None = None,
         misread_dps: float = 0.0,
+        horizon_error: float = 0.0,
     ) -> None:
+        self.horizon_error = horizon_error  # the tracker is told the horizon is this many px lower than it is
+        self.confident = True  # ego motion could be measured
         self.radius = radius  # the road curves right with this radius (None: straight)
         self.misread_dps = misread_dps  # the homography reads a turn (°/s, + = right) that isn't there
         self.walkers = walkers
@@ -167,7 +170,8 @@ class Street:
         hom = ground_homography(dz, self.yaw, self.radius, misread) if self.homographies and dz > 0 else None
         gps_speed = speed if gps == "speed" else gps
         assert gps_speed is None or isinstance(gps_speed, float | int)
-        events = self.tracker.update(self.t, W, H, self.tracks(), HORIZON, stopped, hom, gps_speed)
+        horizon = HORIZON + self.horizon_error
+        events = self.tracker.update(self.t, W, H, self.tracks(), horizon, stopped, hom, gps_speed, self.confident)
         self.events += events
         self.t = round(self.t + 1 / FPS, 6)
         self.s += dz
@@ -406,9 +410,12 @@ def test_someone_whose_legs_come_into_view_is_not_stepping_into_the_road(hidden_
     assert street.events == []
 
 
-def test_the_windshield_mount_at_the_frame_edge_is_ignored_even_in_a_turn() -> None:
+@pytest.mark.parametrize("bottom", [713.0, 719.0])
+def test_the_windshield_mount_at_the_frame_edge_is_ignored_even_in_a_turn(bottom: float) -> None:
+    # Glued to the right edge (713: as on the rain dev clip, ignored as cut off at a side; 719: in the bottom
+    # corner too, never placed).
     street = Street([])
-    street.extra = [Track(77, "person", 0.7, (1023.0, 276.0, 1279.0, 713.0))]  # glued to the right edge
+    street.extra = [Track(77, "person", 0.7, (1023.0, 276.0, 1279.0, bottom))]
     a = math.radians(-20.0 / FPS)  # turning right at 20°/s (the scene turns left)
     k = np.array([[CAM.f, 0, CAM.cx], [0, CAM.f, HORIZON], [0, 0, 1.0]])
     r = np.array([[math.cos(a), 0, math.sin(a)], [0, 1, 0], [-math.sin(a), 0, math.cos(a)]])
@@ -416,8 +423,13 @@ def test_the_windshield_mount_at_the_frame_edge_is_ignored_even_in_a_turn() -> N
     for _ in range(round(3.0 * FPS)):
         street.events += street.tracker.update(street.t, W, H, street.tracks(), HORIZON, False, turn, 5.0)
         street.t += 1 / FPS
-    assert street.tracker.snapshot().turning
+    snap = street.tracker.snapshot()
+    assert snap.turning
     assert street.events == []
+    if bottom < 716.0:
+        assert [p.ignored for p in snap.people] == ["cut off"]
+    else:
+        assert snap.people == ()
 
 
 # ------------------------------------------------------------------------------------ where we're heading
@@ -509,7 +521,9 @@ def test_time_going_backwards_starts_over() -> None:
     assert len(street.events) == 1
     street.t, street.s = 0.0, 0.0  # replay seek back without a segment change
     street.drive(3.0, 8.0)
-    assert len(street.events) == 2  # a fresh tracker: the same person is warned about again on the replay
+    # The tracker starts over and raises the event again. (In the app every seek or loop also starts a new segment,
+    # which resets the alert engine's memory of who was warned, so it is spoken again.)
+    assert len(street.events) == 2
 
 
 def test_the_update_is_cheap() -> None:
@@ -519,6 +533,70 @@ def test_the_update_is_cheap() -> None:
     street.drive(10.0, 8.0)
     per_frame_ms = (time.perf_counter() - started) * 1000.0 / (10.0 * FPS)
     assert per_frame_ms < 5.0  # includes building the boxes; the update itself measures ~0.1 ms on the dev clips
+
+
+# ----------------------------------------------------------------------- independent review regressions
+
+
+def spoken(street: Street) -> list[str]:
+    """What the alert engine says for the street's events."""
+    alerts, said = engine()
+    for e in street.events:
+        detail = {"track": e.person.track_id, "cls": e.person.kind, "how": e.how, "side": e.side}
+        alerts.on_world_event(WorldEvent("pedestrian_in_path", e.t, detail))
+    return [u.text for u in said]
+
+
+def test_a_second_hazard_moments_after_a_warning_is_still_spoken() -> None:
+    # Someone standing in our lane 30 m ahead is warned about; 1.5 s later a cyclist cuts in from the right: a new
+    # hazard, not the same group, so it is said too.
+    a = Walker(1, standing(-0.6, 30.0))
+    b = Walker(2, lambda t: (2.6 - 1.5 * max(0.0, t - 1.6), 28.0 + 3.0 * t), kind="cyclist")
+    street = Street([a, b])
+    street.drive(3.5, 8.0)
+    texts = spoken(street)
+    assert len(texts) == 2 and texts[0].startswith("Pedestrian") and texts[1].startswith("Cyclist")
+
+
+def test_a_parked_bicycle_someone_stood_behind_is_not_a_cyclist() -> None:
+    # A bicycle left 0.9 m right of our path, 30 m ahead; someone stands just behind it (overlapping it in the image)
+    # for 0.3 s, then their track is lost. Nobody rides it: no warning when we reach it.
+    bike = Walker(1, standing(0.9, 30.0), kind="bicycle")
+    walker = Walker(2, standing(1.2, 30.3), visible=lambda t: t < 0.3)
+    street = Street([bike, walker])
+    street.drive(3.0, 8.0)
+    assert street.events == []
+
+
+@pytest.mark.parametrize(("error_px", "warned_by_m"), [(25.0, 18.0), (35.0, 14.0)])
+def test_a_horizon_estimated_too_low_does_not_hide_someone_in_our_path(error_px: float, warned_by_m: float) -> None:
+    # Braking pitch or a road rising ahead: the horizon is 1.3-1.8° lower than estimated. The ground-contact
+    # distance comes out too far and the person seems too tall for it, but they are still warned about in time.
+    street = Street([Walker(1, standing(0.0, 40.0))], horizon_error=error_px)
+    street.drive(3.5, 10.0)
+    assert len(street.events) == 1
+    assert 40.0 - 10.0 * street.events[0].t >= warned_by_m  # true distance when warned
+
+
+def test_a_cyclist_appearing_where_a_warned_pedestrian_was_lost_is_not_taken_for_them() -> None:
+    ped = Walker(1, standing(0.2, 30.0), visible=lambda t: t < 2.0)
+    cyclist = Walker(2, lambda t: (-0.6, 30.0 + 2.0 * (t - 2.6)), kind="cyclist", visible=lambda t: t >= 2.6)
+    street = Street([ped, cyclist])
+    street.drive(3.4, 8.0)
+    assert [track for track, _, _ in street.kinds()] == [1, 2]
+
+
+def test_ego_motion_that_cannot_see_does_not_mute_warnings_while_gps_says_we_drive() -> None:
+    # At night ego motion can't be measured and holds "stopped" from the last light; GPS says 9 m/s.
+    street = Street([Walker(1, standing(0.3, 30.0))])
+    street.confident = False
+    street.drive(3.0, 9.0, stopped=True)
+    assert street.kinds() == [(1, IN_PATH, "ahead")]
+    # (with a confident "stopped" nothing is said, whatever GPS says: GPS lags when we stop)
+    waiting = Street([Walker(1, standing(0.3, 5.0))])
+    for _ in range(round(2.0 * FPS)):
+        waiting.frame(0.0, stopped=True, gps=2.5)
+    assert waiting.events == []
 
 
 # --------------------------------------------------------------------------------------- the alert engine
@@ -558,8 +636,22 @@ def test_once_per_track_and_one_warning_for_a_group() -> None:
     alerts.on_world_event(ped(10.0, 3))
     alerts.on_world_event(ped(30.0, 3))  # the same person again much later (a re-detection): not again
     alerts.on_world_event(ped(10.5, 4, side="left"))  # someone next to them: one warning for the group
-    alerts.on_world_event(ped(14.0, 5, cls="cyclist", side="left"))  # a new hazard after the gap
+    alerts.on_world_event(ped(11.0, 5, how="entering", side="right"))  # ("ahead" covers either side)
+    alerts.on_world_event(ped(14.0, 6, cls="cyclist", side="left"))  # a new hazard after the gap
     assert [u.text for u in said] == ["Pedestrian ahead.", "Cyclist ahead on your left."]
+
+
+def test_within_the_gap_another_kind_or_the_other_side_is_a_new_warning() -> None:
+    alerts, said = engine(safety_gap_s=3.0)
+    alerts.on_world_event(ped(10.0, 1, how="entering", side="left"))
+    alerts.on_world_event(ped(10.4, 2, how="entering", side="left"))  # the same group: once
+    alerts.on_world_event(ped(10.8, 3, cls="cyclist", side="left"))  # a cyclist: said
+    alerts.on_world_event(ped(11.2, 4, how="entering", side="right"))  # the other side: said
+    assert [u.text for u in said] == [
+        "Pedestrian stepping into the road on your left.",
+        "Cyclist ahead on your left.",
+        "Pedestrian stepping into the road on your right.",
+    ]
 
 
 def test_a_new_segment_forgets_who_was_warned_about() -> None:

@@ -242,6 +242,7 @@ class WorldState:
                 ego.stopped,
                 ego.homography,
                 gps_speed,
+                ego.confident,
             )
         ]
         first = 1 if events and events[0].kind == "segment_reset" else 0
