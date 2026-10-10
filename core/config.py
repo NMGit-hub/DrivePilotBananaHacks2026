@@ -319,6 +319,10 @@ class AlertsConfig(_Strict):
     watch_timeout_s: float = Field(
         300.0, gt=0.0, description="'Tell me when it's green' requests expire after this long."
     )
+    approach_timeout_s: float = Field(
+        45.0, gt=0.0, description="A request made while driving expires if we don't stop within this time."
+    )
+    seek_back_tolerance_s: float = Field(1.0, ge=0.0, description="Video jumping back more than this drops requests.")
 
 
 # ------------------------------------------------------------------------------------------- vision
@@ -352,6 +356,13 @@ class OllamaVisionConfig(_Strict):
 class VisionConfig(_Strict):
     """Per-provider settings for the vision-language model (the provider itself is `vision_model`)."""
 
+    frames: int = Field(3, ge=1, le=6, description="Recent frames sent with each question (latest last).")
+    frame_spacing_s: float = Field(0.7, gt=0.0, description="Time between the frames sent.")
+    latest_width: int = Field(1280, ge=320, description="The latest frame is sent at up to this width...")
+    older_width: int = Field(640, ge=160, description="...earlier frames smaller (motion, things just passed).")
+    jpeg_quality: int = Field(85, ge=30, le=100)
+    first_token_timeout_s: float = Field(4.0, gt=0.0, description="No text by then: spoken fallback.")
+    total_timeout_s: float = Field(9.0, gt=0.0, description="The whole answer must arrive by then.")
     claude: ClaudeVisionConfig = ClaudeVisionConfig()
     gemini: GeminiVisionConfig = GeminiVisionConfig()
     ollama: OllamaVisionConfig = OllamaVisionConfig()

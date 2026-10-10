@@ -2,11 +2,17 @@
 
 - "You're up, check and go." when it becomes our turn at a 4-way stop after waiting for other cars. Spoken on
   its own (INFO); if the user asked ("can I go?" → "I'll tell you"), it is REQUESTED and survives quiet mode.
+  "Never mind" silences it for the current stop.
 - "Light's green, check the intersection and go." only when the user asked ("tell me when it's green").
-- Once per event: the world state emits each event once; on top of that each alert kind has a cooldown, so a
-  flickering state can't repeat it.
-- Watches expire: after `watch_timeout_s`, and when we drive away from the intersection (a stale request must
-  not fire at the next light).
+- Once per event: the world state emits each event once per stop; on top of that each alert kind has a
+  cooldown (reset when we leave the intersection or drive off), so a flickering state can't repeat it. A watch
+  is used up only when its alert is actually spoken.
+- Watches expire: after `watch_timeout_s`; when the video jumps back before the request; when we drive away
+  from where we waited; and, if requested while driving, when we haven't stopped within `approach_timeout_s`
+  (the light turned green before we got there: a later, unrelated light must not be announced).
+- Races: the answer that arms a watch was computed from a snapshot; if the event fired in between, `arm`
+  reports "missed" so the assistant answers again from fresh state instead of promising an alert that won't
+  come. A request made before a seek (`generation` changed) is ignored.
 - Quiet mode: only REQUESTED and SAFETY alerts.
 
 Called from the perception thread (world events) and the voice thread (arming, controls): thread-safe.
@@ -16,6 +22,8 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
+from enum import StrEnum
 
 from answers.local import Watch
 from answers.speech import Priority, Utterance
@@ -27,6 +35,22 @@ log = get_logger(__name__)
 
 YOUR_TURN = "You're up, check and go."
 LIGHT_GREEN = "Light's green, check the intersection and go."
+_EVENT_OF = {Watch.TURN: "your_turn", Watch.LIGHT: "light_green"}
+
+
+class ArmResult(StrEnum):
+    """What happened to a watch request."""
+
+    ARMED = "armed"
+    MISSED = "missed"  # the event already happened after the snapshot the answer was built from
+    STALE = "stale"  # the request was made before a seek / segment reset
+
+
+@dataclass(slots=True)
+class _Watch:
+    armed_at: float
+    while_moving: bool
+    saw_stop: bool = False
 
 
 class AlertEngine:
@@ -37,8 +61,11 @@ class AlertEngine:
         self._emit = emit
         self._lock = threading.Lock()
         self._quiet = False
-        self._watches: dict[Watch, float] = {}  # armed watch -> media time armed
-        self._last_fired: dict[str, float] = {}  # alert kind -> media time
+        self._watches: dict[Watch, _Watch] = {}
+        self._last_fired: dict[str, float] = {}  # alert kind -> media time it was spoken
+        self._last_event: dict[str, float] = {}  # event kind -> media time it happened (spoken or not)
+        self._turn_silenced = False  # "never mind" at this stop
+        self._generation = 0  # bumped on every reset (seek / new segment)
 
     # ---------------------------------------------------------------------------------- controls
 
@@ -48,23 +75,43 @@ class AlertEngine:
         with self._lock:
             return self._quiet
 
+    @property
+    def generation(self) -> int:
+        """Changes on every reset; pass it back to `arm` to detect requests made before a seek."""
+        with self._lock:
+            return self._generation
+
     def set_quiet(self, quiet: bool) -> None:
         """Turn quiet mode on or off."""
         with self._lock:
             self._quiet = quiet
         log.info("quiet mode", on=quiet)
 
-    def arm(self, watch: Watch, t: float) -> None:
-        """The user asked to be told (e.g. "tell me when it's green")."""
+    def arm(self, watch: Watch, t: float, *, moving: bool = False, generation: int | None = None) -> ArmResult:
+        """The user asked to be told (e.g. "tell me when it's green"). `t`: media time of the snapshot the
+        answer was built from; `moving`: we were driving when asked."""
         with self._lock:
-            self._watches[watch] = t
-        log.info("watch armed", watch=watch.value, t=round(t, 2))
+            if generation is not None and generation != self._generation:
+                log.info("watch ignored: made before a seek", watch=watch.value)
+                return ArmResult.STALE
+            last = self._last_event.get(_EVENT_OF[watch])
+            if last is not None and last >= t:
+                log.info("watch not armed: it already happened", watch=watch.value, event_t=round(last, 2))
+                return ArmResult.MISSED
+            self._watches[watch] = _Watch(armed_at=t, while_moving=moving)
+            if watch is Watch.TURN:
+                self._turn_silenced = False  # asking again undoes an earlier "never mind"
+        log.info("watch armed", watch=watch.value, t=round(t, 2), while_moving=moving)
+        return ArmResult.ARMED
 
-    def cancel(self) -> bool:
-        """Drop every watch ("never mind"). Returns True if any was armed."""
+    def cancel(self, t: float | None = None) -> bool:
+        """ "Never mind": drop every watch and keep "you're up" quiet at this stop. True if a watch was armed."""
         with self._lock:
+            if t is not None:
+                self._expire(t)
             had = bool(self._watches)
             self._watches.clear()
+            self._turn_silenced = True
         return had
 
     def armed(self) -> set[Watch]:
@@ -77,26 +124,44 @@ class AlertEngine:
     def on_world_event(self, event: WorldEvent) -> Utterance | None:
         """Handle one world event; returns (and emits) the alert it caused, if any."""
         utterance: Utterance | None = None
+        t = event.t
         with self._lock:
-            self._expire(event.t)
+            self._expire(t)
             if event.kind == "your_turn":
-                requested = self._watches.pop(Watch.TURN, None) is not None
-                utterance = self._fire(
-                    "your_turn", event.t, YOUR_TURN, Priority.REQUESTED if requested else Priority.INFO
-                )
+                self._last_event["your_turn"] = t
+                if self._turn_silenced:
+                    log.info("alert silenced: never mind", kind="your_turn")
+                else:
+                    priority = Priority.REQUESTED if Watch.TURN in self._watches else Priority.INFO
+                    utterance = self._fire("your_turn", t, YOUR_TURN, priority)
+                    if utterance is not None:
+                        self._watches.pop(Watch.TURN, None)
             elif event.kind == "light_green":
-                if self._watches.pop(Watch.LIGHT, None) is not None:
-                    utterance = self._fire("light_green", event.t, LIGHT_GREEN, Priority.REQUESTED)
+                self._last_event["light_green"] = t
+                if Watch.LIGHT in self._watches:
+                    utterance = self._fire("light_green", t, LIGHT_GREEN, Priority.REQUESTED)
+                    if utterance is not None:
+                        self._watches.pop(Watch.LIGHT, None)
             elif event.kind == "left_intersection":
+                # The next stop is a new event: its "you're up" must not be eaten by this one's cooldown.
                 self._watches.pop(Watch.TURN, None)
+                self._last_fired.pop("your_turn", None)
+                self._last_event.pop("your_turn", None)
+                self._turn_silenced = False
+            elif event.kind == "ego_stopped":
+                for record in self._watches.values():
+                    record.saw_stop = True
             elif event.kind == "drove_off":
                 # We drove away from where we were waiting: requests made before we started moving were about
                 # that place (one made while approaching the next light stays).
-                moving_since = event.detail.get("moving_since", event.t)
-                for watch, armed_at in list(self._watches.items()):
-                    if isinstance(moving_since, int | float) and armed_at < moving_since:
+                moving_since = event.detail.get("moving_since", t)
+                for watch, record in list(self._watches.items()):
+                    if isinstance(moving_since, int | float) and record.armed_at < moving_since:
                         del self._watches[watch]
                         log.info("watch dropped: drove off", watch=watch.value)
+                self._last_fired.pop("light_green", None)
+                self._last_event.pop("light_green", None)
+                self._turn_silenced = False
         if utterance is not None:
             self._emit(utterance)
         return utterance
@@ -114,13 +179,24 @@ class AlertEngine:
         return Utterance(text=text, kind="alert", priority=priority, clip=kind, t=t)
 
     def _expire(self, t: float) -> None:
-        for watch, armed_at in list(self._watches.items()):
-            if t - armed_at > self.cfg.watch_timeout_s or t < armed_at - 1.0:  # timed out, or the video jumped back
+        cfg = self.cfg
+        for watch, record in list(self._watches.items()):
+            reason = None
+            if t - record.armed_at > cfg.watch_timeout_s:
+                reason = "timed out"
+            elif t < record.armed_at - cfg.seek_back_tolerance_s:
+                reason = "video jumped back"
+            elif record.while_moving and not record.saw_stop and t - record.armed_at > cfg.approach_timeout_s:
+                reason = "we never stopped"
+            if reason is not None:
                 del self._watches[watch]
-                log.info("watch expired", watch=watch.value)
+                log.info("watch expired", watch=watch.value, reason=reason)
 
     def reset(self) -> None:
-        """New video segment: forget watches and cooldowns (quiet mode is a user setting and stays)."""
+        """New video segment: forget watches, cooldowns and events (quiet mode is a user setting and stays)."""
         with self._lock:
             self._watches.clear()
             self._last_fired.clear()
+            self._last_event.clear()
+            self._turn_silenced = False
+            self._generation += 1

@@ -106,6 +106,7 @@ class WorldState:
         self._ego_moving_since: float | None = None
         self._was_stopped = False  # stopped since the last "drove_off"
         self._lead_this_stop = False  # a car was in front of us at some point during the current stop
+        self._ego_stopped_prev = False  # ego.stopped on the previous frame (for the ego_stopped event)
         self._snapshot: WorldSnapshot | None = None
 
     # ---------------------------------------------------------------------------------- updating
@@ -122,6 +123,7 @@ class WorldState:
         self._ego_moving_since = None
         self._was_stopped = False
         self._lead_this_stop = False
+        self._ego_stopped_prev = False
 
     def on_perception(self, result: PerceptionResult) -> None:
         """PerceptionWorker listener: fold one frame's results into the world state."""
@@ -173,6 +175,8 @@ class WorldState:
         ]
 
         if ego.stopped:
+            if not self._ego_stopped_prev:
+                events.append(WorldEvent("ego_stopped", t, {"since": ego.stopped_since}))
             self._ego_moving_since = None
             self._was_stopped = True
             if lead is not None:
@@ -182,6 +186,7 @@ class WorldState:
             if self._ego_moving_since is None:
                 self._ego_moving_since = t
         moving_for = 0.0 if self._ego_moving_since is None else t - self._ego_moving_since
+        self._ego_stopped_prev = ego.stopped
         if self._was_stopped and moving_for >= cfg.drive_off_s:
             self._was_stopped = False
             events.append(WorldEvent("drove_off", t, {"moving_since": self._ego_moving_since}))

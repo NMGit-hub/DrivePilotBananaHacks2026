@@ -27,7 +27,7 @@ TABLE: list[tuple[str, RouteKind, str]] = [
     ("Go back to normal mode", C, "normal"),
     ("Quiet mode off.", C, "normal"),
     ("Repeat that.", C, "repeat"),
-    ("Can you repeat that?", M, "scene"),  # deliberate: only the short commands are controls...
+    ("Can you repeat that?", C, "repeat"),  # the model has no memory of what was said
     ("Say that again.", C, "repeat"),
     ("What did you just say?", C, "repeat"),
     ("Stop.", C, "stop"),
@@ -87,7 +87,7 @@ TABLE: list[tuple[str, RouteKind, str]] = [
     ("My turn?", R, "can_i_go"),
     ("Am I next?", R, "can_i_go"),
     ("Do I have the right of way?", R, "can_i_go"),
-    ("Should I wait?", R, "can_i_go"),
+    ("Should I wait?", R, "should_wait"),  # not "can I go?": yes/no would mean the opposite
     ("How many cars are ahead of me?", R, "position"),
     ("What number am I?", R, "position"),
     ("Where am I in the line?", R, "position"),
@@ -123,7 +123,7 @@ TABLE: list[tuple[str, RouteKind, str]] = [
     ("Am I in the correct lane?", L, "lane"),
     ("What lane should I be in?", L, "lane"),
     ("Is this the right lane for the exit?", L, "lane"),
-    ("Should I move over to the left?", L, "lane"),
+    ("Should I move over to the left?", G, "gap_check"),  # a lane change now (no route mentioned)
     # --- everything else: the vision model
     ("What's the speed limit?", M, "scene"),
     ("What did that sign say?", M, "scene"),
@@ -180,3 +180,209 @@ def test_model_gets_the_question_as_spoken() -> None:
 @pytest.mark.parametrize("text", ["", "Hey DrivePilot", "Hey DrivePilot...", "um", "  "])
 def test_nothing_said(text: str) -> None:
     assert route(text).kind is RouteKind.EMPTY
+
+
+# ------------------------------------------------------------------------------- adversarial table (M3 review)
+
+# Realistic variants a reviewer wrote without looking at the patterns. A miss in the first block means a
+# split-second question answered while moving, so it is the most important part of this table.
+ADVERSARIAL: list[tuple[str, RouteKind, str]] = [
+    *[
+        (text, G, "gap_check")
+        for text in (
+            "Safe to merge?",
+            "OK to merge?",
+            "Clear to merge?",
+            "Good to merge?",
+            "Is it safe for me to merge?",
+            "Is my lane clear?",
+            "Is the lane next to me clear?",
+            "Is the lane to my left clear?",
+            "Is the right side clear?",
+            "Can I get over?",
+            "Can I move over?",
+            "Can I move into the left lane?",
+            "Can I change to the left lane?",
+            "Can I get in the left lane?",
+            "Can I go left now?",
+            "Can I turn left now?",
+            "Can I still make it?",
+            "Will I make the light?",
+            "Am I going to make the light?",
+            "Am I going to make it?",
+            "Do I have time to make the light?",
+            "Should I stop or go?",
+            "Should I stop?",
+            "Should I brake?",
+            "Is there room to merge?",
+            "Do I have room to merge?",
+            "Am I clear to merge?",
+            "Am I clear?",
+            "Is anyone on my left?",
+            "Is there a car on my left?",
+            "Anyone next to me?",
+            "Is the road ahead clear?",
+            "Is it safe?",
+            "Is it safe now?",
+            "Can I squeeze in?",
+            "Is the left lane open?",
+            "Is that car going to stop?",
+            "Is he going to let me in?",
+            "Can I make this left?",
+            "Can I go before that car?",
+            "Okay, so can I merge now?",
+            "Is it okay if I merge?",
+            "Can I run this yellow?",
+            "Can I go through the yellow?",
+            "Can I pull out?",
+            "Is the intersection clear?",
+            "Can I make the turn before that car?",
+            "Merge now?",
+            "Is it safe to get on the highway?",
+            "OK to go?",
+            "Good to go?",
+            "Am I OK to go?",
+            "Is it OK for me to go?",
+            "I'm going to merge, is that ok?",
+            "I'm going to try to make the light",
+            "I'm going to cut in front of this truck",
+            "Right lane clear?",
+            "Right side clear?",
+        )
+    ],
+    *[
+        (text, G, "gap_watch")
+        for text in (
+            "Tell me when it's safe to merge",
+            "Let me know when I can merge",
+            "Tell me when it's clear",
+            "Tell me when the lane is clear",
+            "Tell me when I can turn left",
+        )
+    ],
+    *[
+        (text, R, "can_i_go")
+        for text in (
+            "Okay, so can I go?",
+            "Um so can I go now?",
+            "Can I go now, DrivePilot?",
+            "Can I go here?",
+            "Can I go yet or not?",
+            "Can I still go?",
+            "When's my turn?",
+            "Is it me next?",
+            "its my turn?",
+            "Hey Dr Pilot, can I go?",
+            "Hey Drive Pylot can I go",
+            "Can I go, or what?",
+            "Can I go now that the truck left?",
+        )
+    ],
+    *[
+        (text, R, "who_first")
+        for text in (
+            "Which car goes first?",
+            "Which car got here first?",
+            "Was I first?",
+            "Did I get here first?",
+            "Does the truck go first?",
+            "Do I go before the truck?",
+        )
+    ],
+    ("How many cars go before me?", R, "position"),
+    ("Should I wait for the pedestrian?", R, "should_wait"),
+    ("Should I keep waiting?", R, "should_wait"),
+    ("Can you watch the light?", W, "light_watch"),
+    ("Can you tell me when it's green?", W, "light_watch"),
+    ("Tell me when the car ahead goes", W, "go_watch"),
+    *[
+        (text, N, "next_step")
+        for text in (
+            "Tell me when to turn",
+            "Tell me where to go",
+            "Show me where to go",
+            "Tell me which way to go",
+            "Tell me about the next turn",
+            "Let me know my next turn",
+            "Tell me when my turn is coming up",
+            "Let me know if I need to go left",
+            "Is it the next light?",
+        )
+    ],
+    ("Remind me to go to the store", M, "scene"),
+    ("Can you tell me if I can turn right here?", M, "scene"),
+    ("Tell me what turns are allowed here", M, "scene"),
+    *[
+        (text, C, "stop")
+        for text in ("Stop, stop", "Stop now", "Stop that", "Shush", "Quiet please", "Okay, stop.", "No, stop")
+    ],
+    *[
+        (text, C, "normal")
+        for text in ("Turn off quiet mode", "Exit quiet mode", "Disable quiet mode", "Back to normal")
+    ],
+    *[(text, C, "quiet") for text in ("Turn off alerts", "Turn off the alerts", "Enable quiet mode")],
+    *[
+        (text, C, "repeat")
+        for text in (
+            "Can you repeat that?",
+            "Could you say that again?",
+            "What?",
+            "What was that?",
+            "Sorry?",
+            "Huh?",
+            "Repeat",
+        )
+    ],
+    *[(text, C, "cancel") for text in ("Stop watching the light", "Cancel the alert", "Don't tell me")],
+    ("Stop sign ahead?", M, "scene"),
+    ("Stop sign?", M, "scene"),
+    ("How much longer until we get there?", N, "eta"),
+    ("How much longer do we have?", N, "eta"),
+    ("Am I next to a fire hydrant?", M, "scene"),
+    ("Am I up against the curb?", M, "scene"),
+    ("Who's next to me?", M, "scene"),
+    ("How long has the car on the left been waiting?", M, "scene"),
+    ("How far is the car on the left?", M, "scene"),
+    ("Should I change lanes for my exit?", L, "lane"),
+    ("Should I switch lanes to get to 520?", L, "lane"),
+]
+
+
+@pytest.mark.parametrize(("text", "kind", "intent"), ADVERSARIAL, ids=[t for t, _, _ in ADVERSARIAL])
+def test_router_adversarial(text: str, kind: RouteKind, intent: str) -> None:
+    result = route(text)
+    assert (result.kind, result.intent) == (kind, intent), result.text
+
+
+@pytest.mark.parametrize(
+    ("text", "place"),
+    [
+        ("Take me home", "home"),
+        ("Navigate home", "home"),
+        ("Go home", "home"),
+        ("I'm going to Maple Lane", "maple lane"),
+        ("Going to Park Avenue", "park avenue"),
+        ("Going to Stop and Shop", "stop and shop"),
+        ("Heading to Seattle, how long?", "seattle"),
+        ("Take us to the next rest stop", "the next rest stop"),
+        ("I'm driving to work", "work"),
+    ],
+)
+def test_destination_phrasings(text: str, place: str) -> None:
+    result = route(text)
+    assert result.kind is RouteKind.DESTINATION and result.place == place, result
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I'm going to speed up",
+        "I'm going to slow down",
+        "I'm going to overtake",
+        "Drive to the stop line",
+        "I'm heading to the exit",
+        "I'm going to turn left here, is that allowed?",
+    ],
+)
+def test_not_destinations(text: str) -> None:
+    assert route(text).kind is not RouteKind.DESTINATION

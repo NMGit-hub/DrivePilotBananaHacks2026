@@ -129,7 +129,7 @@ def test_can_i_go_after_the_others_left() -> None:
     q = queue(12.0, [(1, L, 8.0, "white car")], departed=(1,))
     assert q.your_turn
     answer = local.can_i_go(snap(q))
-    assert answer.text == "Yes, it's your turn. Check the intersection before you go." and not answer.watches
+    assert answer.text == "It's your turn now. Check the intersection before you go." and not answer.watches
     assert_never_bare_go(answer.text)
 
 
@@ -158,7 +158,8 @@ def test_caveats_say_what_cannot_be_seen() -> None:
 
 
 def test_not_at_a_stop() -> None:
-    assert local.can_i_go(snap(ego_stopped=False)).text.startswith("We're moving.")
+    assert local.can_i_go(snap(ego_stopped=False)).text == local.MOVING_REFUSAL
+    assert local.who_first(snap(ego_stopped=False)).text.startswith("We're moving.")
     lead = VehicleView(5, "car", "silver", None, True, True, 3.0, (400.0, 300.0, 800.0, 600.0), False)
     behind = local.can_i_go(snap(lead_vehicle=lead, stop_sign_last_seen=9.0)).text
     assert behind == "You're behind the silver car. Wait for it to go, then pull up to the stop line."
@@ -322,7 +323,7 @@ def test_right_of_way_is_answered_locally_and_fast() -> None:
 def test_can_i_go_then_the_turn_alert_then_repeat() -> None:
     a, speaker = assistant(snap(queue(12.0, [(2, A, 10.0, "gray truck")])))
     a.ask("Can I go?")
-    a.on_world_event(WorldEvent("your_turn", 25.0))
+    a.on_world_event(WorldEvent("your_turn", 20.0))
     assert speaker.said[-1].text == YOUR_TURN and speaker.said[-1].priority is Priority.REQUESTED
     a.ask("Repeat that.")
     assert speaker.texts()[-1] == YOUR_TURN and speaker.stops == 1

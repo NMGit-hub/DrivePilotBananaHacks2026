@@ -1,12 +1,18 @@
 """Instant local answers from the world state: right of way, "tell me when it's green", refusals.
 
 Phrasing follows PLAN.md ("The white SUV on the left, then the pickup across from you. You're third.") and its
-safety rules: never a bare "go" (always "check ... before you go"), say what can't be seen, and refuse
-split-second judgments while moving. Pure functions of a `WorldSnapshot`: no I/O, microseconds per call.
+safety rules:
+- never a bare "go": anything that lets the driver go says to check first, and never starts with "Yes" (a
+  "yes" to "is it safe to pull out?" would vouch for traffic we can't judge, e.g. at a 2-way stop where cross
+  traffic never stops);
+- say what can't be seen (cars out of view, a narrow view, cars we lost track of, pedestrians);
+- refuse split-second and stop-or-go judgments while moving, or when we're not sure we are stopped.
+Pure functions of a `WorldSnapshot`: no I/O, microseconds per call.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -17,6 +23,17 @@ from state.world import WorldSnapshot
 ORDINALS = ("first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth")
 WHERE = {Approach.LEFT: "on your left", Approach.AHEAD: "across from you", Approach.RIGHT: "on your right"}
 CHECK = "check the intersection before you go"
+MOVING_REFUSAL = "I can't judge that safely while we're moving. Check around you."
+UNSURE_REFUSAL = "I'm not sure we're fully stopped, so I can't judge that. Check around you."
+GAP_REFUSAL = "I can't judge that safely while we're moving. Check your mirrors and blind spot."
+GAP_WATCH_MOVING = "I can't judge gaps in traffic safely. Check your mirrors and blind spot."
+GAP_WATCH_STOPPED = "I can't judge gaps in moving traffic. Check both ways yourself before you go."
+PEDESTRIAN_YIELD = "Yes, let them cross first, then check again before you go."
+PEDESTRIANS = re.compile(
+    r"\b(?:pedestrians?|person|people|walkers?|kids?|child|children|cyclists?|bikes?|bikers?|"
+    r"someone crossing|him|her|them|that guy|that lady)\b"
+)
+GO_WORDS = re.compile(r"\b(?:to go|go now|to cross|to turn|to pull out|to proceed|to drive|if i go|for me to go)\b")
 
 
 class Watch(StrEnum):
@@ -106,6 +123,34 @@ def _list(entries: list[QueueEntry]) -> str:
     return ", then ".join(names)
 
 
+def _motion_refusal(snapshot: WorldSnapshot) -> str | None:
+    """Stop-or-go questions need us to be stopped, and to be sure of it."""
+    if not snapshot.ego_stopped:
+        return MOVING_REFUSAL
+    if not snapshot.ego_motion_confident:
+        return UNSURE_REFUSAL
+    return None
+
+
+def _first_text(queue: QueueSnapshot) -> str:
+    """Nobody ahead of us: but say so carefully if a car ahead was only lost from view."""
+    if queue.dropped:
+        return "Nobody I can see is ahead of you."
+    if queue.departed:
+        return "It's your turn now."
+    return "Nobody else is waiting at the stop, so it's your turn."
+
+
+def _not_yet(queue: QueueSnapshot, prefix: str = "Not yet") -> LocalAnswer:
+    ahead = _ahead_of_us(queue)
+    if len(ahead) == 1:
+        text = f"{prefix}, {describe(ahead[0])} is next. I'll tell you."
+    else:
+        text = f"{prefix}, {len(ahead)} cars go before you: {_list(ahead)}. I'll tell you."
+    tie = _tie_note(queue)
+    return LocalAnswer(f"{tie} {text}" if tie else text, (Watch.TURN,))
+
+
 # -------------------------------------------------------------------------------------- right of way
 
 
@@ -119,15 +164,17 @@ def who_first(snapshot: WorldSnapshot) -> LocalAnswer:
     ahead = _ahead_of_us(queue)
     behind = [e for e in queue.order if not e.is_ego][len(ahead) :]
     if not ahead:
-        text = "You got here first." if behind else "Nobody else is waiting. You're first."
+        if queue.dropped:
+            text = "Nobody I can see is ahead of you."
+        else:
+            text = "You got here first." if behind else "Nobody else is waiting. You're first."
         if behind:
             text += f" Then {_list(behind)}."
         tie = _tie_note(queue)
         if tie:
             text = f"{tie} {text}"
         return LocalAnswer(_with_caveats(f"{text} Check before you go.", snapshot))
-    position = len(ahead) + 1
-    text = f"{_sentence(_list(ahead))}. You're {ordinal(position)}."
+    text = f"{_sentence(_list(ahead))}. You're {ordinal(len(ahead) + 1)}."
     tie = _tie_note(queue)
     if tie:
         text = f"{tie} {text}"
@@ -135,29 +182,48 @@ def who_first(snapshot: WorldSnapshot) -> LocalAnswer:
 
 
 def can_i_go(snapshot: WorldSnapshot) -> LocalAnswer:
-    """ "Can I go?" — at a stop sign from the queue, at a light from the light state."""
+    """ "Can I go?" — at a stop sign from the queue, at a light from the light state; refused while moving."""
+    refusal = _motion_refusal(snapshot)
+    if refusal is not None:
+        return LocalAnswer(refusal)
     queue = snapshot.queue
     if queue.active:
         if queue.deadlock:
             return LocalAnswer(_with_caveats(_deadlock_text(), snapshot))
         if queue.your_turn:
-            if queue.dropped:  # the car ahead wasn't seen leaving: don't say "yes"
-                return LocalAnswer(_with_caveats(f"Nobody I can see is ahead of you. {_sentence(CHECK)}.", snapshot))
-            went = len(queue.departed)
-            lead = "Yes, it's your turn" if went else "Yes, nobody else is waiting"
-            return LocalAnswer(_with_caveats(f"{lead}. {_sentence(CHECK)}.", snapshot))
-        ahead = _ahead_of_us(queue)
-        if len(ahead) == 1:
-            text = f"Not yet, {describe(ahead[0])} is next. I'll tell you."
-        else:
-            text = f"Not yet, {len(ahead)} cars go before you: {_list(ahead)}. I'll tell you."
-        tie = _tie_note(queue)
-        if tie:
-            text = f"{tie} {text}"
-        return LocalAnswer(_with_caveats(text, snapshot), (Watch.TURN,))
+            return LocalAnswer(_with_caveats(f"{_first_text(queue)} {_sentence(CHECK)}.", snapshot))
+        answer = _not_yet(queue)
+        return LocalAnswer(_with_caveats(answer.text, snapshot), answer.watches)
     light = _light_answer(snapshot)
     if light is not None:
         return light
+    return LocalAnswer(_not_at_a_stop(snapshot))
+
+
+def should_wait(snapshot: WorldSnapshot, question: str) -> LocalAnswer | None:
+    """ "Should I wait?" — answered as asked ("yes, wait" is safe to say; "no, go" is not). None: the vision
+    model describes the thing to wait for ("should I wait for that truck?") once we are stopped."""
+    if PEDESTRIANS.search(question):
+        return LocalAnswer(PEDESTRIAN_YIELD)
+    refusal = _motion_refusal(snapshot)
+    if re.search(r"\bwait for\b", question):
+        return LocalAnswer(refusal) if refusal is not None else None
+    if refusal is not None:
+        return LocalAnswer(refusal)
+    queue = snapshot.queue
+    if queue.active:
+        if queue.deadlock:
+            return LocalAnswer(_with_caveats(_deadlock_text(), snapshot))
+        if queue.your_turn:
+            lead = "Nobody I can see is ahead of you" if queue.dropped else "By arrival order it's your turn now"
+            return LocalAnswer(_with_caveats(f"{lead}. {_sentence(CHECK)}.", snapshot))
+        answer = _not_yet(queue, prefix="Yes, wait")
+        return LocalAnswer(_with_caveats(answer.text, snapshot), answer.watches)
+    light = snapshot.light
+    if light.confident and light.color in (LightColor.RED, LightColor.YELLOW):
+        return LocalAnswer(f"Yes, the light's {light.color.value}. I'll tell you when it turns green.", (Watch.LIGHT,))
+    if light.confident and light.color is LightColor.GREEN:
+        return _green(snapshot)
     return LocalAnswer(_not_at_a_stop(snapshot))
 
 
@@ -170,7 +236,8 @@ def position(snapshot: WorldSnapshot) -> LocalAnswer:
         return LocalAnswer(_with_caveats(_deadlock_text(), snapshot))
     ahead = _ahead_of_us(queue)
     if not ahead:
-        return LocalAnswer(_with_caveats(f"You're first. {_sentence(CHECK)}.", snapshot))
+        first = "Nobody I can see is ahead of you." if queue.dropped else "You're first."
+        return LocalAnswer(_with_caveats(f"{first} {_sentence(CHECK)}.", snapshot))
     cars = "One car goes" if len(ahead) == 1 else f"{len(ahead)} cars go"
     return LocalAnswer(_with_caveats(f"You're {ordinal(len(ahead) + 1)}. {cars} before you.", snapshot))
 
@@ -200,18 +267,22 @@ def _not_at_a_stop(snapshot: WorldSnapshot) -> str:
 # ------------------------------------------------------------------------------------------- lights
 
 
+def _green(snapshot: WorldSnapshot) -> LocalAnswer:
+    if snapshot.lead_vehicle is not None and snapshot.ego_stopped:
+        return LocalAnswer(f"The light's green; wait for the {snapshot.lead_vehicle.label or 'car'} ahead to move.")
+    return LocalAnswer(_with_caveats(f"The light's green. {_sentence(CHECK)}.", snapshot))
+
+
 def _light_answer(snapshot: WorldSnapshot) -> LocalAnswer | None:
-    """ "Can I go?" at a traffic light (None if no light is read confidently)."""
+    """ "Can I go?" at a traffic light, while stopped (None if no light is read confidently)."""
     light = snapshot.light
     if not light.confident:
         return None
     if light.color in (LightColor.RED, LightColor.YELLOW):
-        color = "red" if light.color is LightColor.RED else "yellow"
-        return LocalAnswer(f"Not yet, the light's {color}. I'll tell you when it turns green.", (Watch.LIGHT,))
+        text = f"Not yet, the light's {light.color.value}. I'll tell you when it turns green."
+        return LocalAnswer(text, (Watch.LIGHT,))
     if light.color is LightColor.GREEN:
-        if snapshot.lead_vehicle is not None and snapshot.ego_stopped:
-            return LocalAnswer(f"The light's green; wait for the {snapshot.lead_vehicle.label or 'car'} ahead to move.")
-        return LocalAnswer(_with_caveats(f"The light's green. {_sentence(CHECK)}.", snapshot))
+        return _green(snapshot)
     return None
 
 
@@ -232,7 +303,7 @@ def go_watch(snapshot: WorldSnapshot) -> LocalAnswer:
     queue = snapshot.queue
     if queue.active:
         if queue.your_turn:
-            return LocalAnswer(_with_caveats(f"It's your turn now. {_sentence(CHECK)}.", snapshot))
+            return LocalAnswer(_with_caveats(f"{_first_text(queue)} {_sentence(CHECK)}.", snapshot))
         return LocalAnswer("Okay, I'll tell you when it's your turn.", (Watch.TURN,))
     light = snapshot.light
     if light.confident and light.color is LightColor.GREEN:
@@ -244,19 +315,45 @@ def go_watch(snapshot: WorldSnapshot) -> LocalAnswer:
     )
 
 
-# ----------------------------------------------------------------------------------------- refusals
-
-
-GAP_REFUSAL = "I can't judge that safely while we're moving. Check your mirrors and blind spot."
+# ------------------------------------------------------------------------------------- gap judgments
 
 
 def gap_check(snapshot: WorldSnapshot, question: str) -> LocalAnswer | None:
-    """Split-second judgments: refused while moving. When stopped, None (the vision model describes the scene),
-    except "is it safe to go?" at a stop sign or light, which is a right-of-way question."""
+    """Split-second judgments: refused unless we are surely stopped. Stopped at a stop or light, "is it safe to
+    go/turn?" gets the right-of-way facts plus "I can't judge moving traffic" (never a "yes"). Otherwise None:
+    the vision model describes what it sees (it never says "go")."""
     if not snapshot.ego_stopped:
         return LocalAnswer(GAP_REFUSAL)
-    if snapshot.queue.active or (snapshot.light.confident and snapshot.light.color is not LightColor.UNKNOWN):
-        go_words = ("to go", "go now", "to cross", "to turn", "to pull out")
-        if any(word in question for word in go_words):
-            return can_i_go(snapshot)
+    if not snapshot.ego_motion_confident:
+        return LocalAnswer(UNSURE_REFUSAL)
+    queue, light = snapshot.queue, snapshot.light
+    if GO_WORDS.search(question) and (queue.active or (light.confident and light.color is not LightColor.UNKNOWN)):
+        if queue.active:
+            if queue.deadlock:
+                return LocalAnswer(_with_caveats(_deadlock_text(), snapshot))
+            if queue.your_turn:
+                lead = "Nobody I can see is ahead of you" if queue.dropped else "By arrival order it's your turn"
+                return LocalAnswer(
+                    _with_caveats(f"{lead}, but I can't judge moving traffic. Check both ways before you go.", snapshot)
+                )
+            answer = _not_yet(queue)
+            return LocalAnswer(_with_caveats(answer.text, snapshot), answer.watches)
+        if light.color in (LightColor.RED, LightColor.YELLOW):
+            return LocalAnswer(
+                f"Not yet, the light's {light.color.value}. I'll tell you when it turns green.", (Watch.LIGHT,)
+            )
+        return LocalAnswer(
+            _with_caveats("The light's green, but I can't judge oncoming traffic. Check before you go.", snapshot)
+        )
     return None
+
+
+def gap_watch(snapshot: WorldSnapshot) -> LocalAnswer:
+    """ "Tell me when it's safe to merge / when I can turn left": we can't watch for gaps; offer the light."""
+    light = snapshot.light
+    stopped = snapshot.ego_stopped and snapshot.ego_motion_confident
+    if stopped and light.confident and light.color in (LightColor.RED, LightColor.YELLOW):
+        return LocalAnswer(
+            "I'll tell you when the light turns green, but you'll need to judge the traffic yourself.", (Watch.LIGHT,)
+        )
+    return LocalAnswer(GAP_WATCH_STOPPED if stopped else GAP_WATCH_MOVING)
