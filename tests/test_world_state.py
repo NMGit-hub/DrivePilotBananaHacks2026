@@ -341,7 +341,7 @@ def test_world_runs_a_4_way_stop_end_to_end() -> None:
     assert "arrived_at_stop" in kinds and "vehicle_departed" in kinds
     assert kinds.count("your_turn") == 1
     your_turn = next(e for e in events if e.kind == "your_turn")
-    assert 6.0 <= your_turn.t <= 7.0
+    assert 6.9 <= your_turn.t <= 7.4  # after the car kept driving for 1 s (a creep to the line is not a departure)
     snap = world.snapshot()
     assert snap is not None and snap.at_stop_sign and snap.queue.your_turn
 

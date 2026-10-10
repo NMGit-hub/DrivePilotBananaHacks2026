@@ -42,18 +42,20 @@ class Car:
             track_id = self.relink_id
         if t < self.stop_t:
             return WaitingVehicle(track_id, self.approach, False, None, 0.0, BOXES[self.approach])  # approaching
-        moved = 0.0 if self.depart_t is None or t < self.depart_t else (t - self.depart_t) * 2.0
-        if self.depart_t is not None and moved > 3.0:
+        driving = self.depart_t is not None and t >= self.depart_t
+        moving_for = t - self.depart_t if driving and self.depart_t is not None else 0.0
+        moved = moving_for * 2.0  # box heights: a normal start from the line
+        if moved > 4.0:
             return None  # gone through the intersection, out of view
-        stopped = self.depart_t is None or t < self.depart_t
         return WaitingVehicle(
             track_id,
             self.approach,
-            stopped,
-            self.stop_t if stopped else None,
+            not driving,
+            None if driving else self.stop_t,
             moved,
             BOXES[self.approach],
             label=f"car {track_id}",
+            moving_for=moving_for,
         )
 
 
@@ -208,7 +210,7 @@ def test_departures_then_your_turn_fires_once() -> None:
     assert order_of(q) == ["us"] and snap.your_turn
     assert kinds(events).count("your_turn") == 1
     your_turn = next(e for e in events if e.kind == "your_turn")
-    assert 18.0 <= your_turn.t <= 19.0  # right after the second car moved off
+    assert 18.9 <= your_turn.t <= 19.2  # once the second car has kept driving for 1 s (a creep is not a departure)
     assert kinds(events).count("vehicle_departed") == 2
 
 
@@ -250,13 +252,15 @@ def test_long_lost_car_is_dropped() -> None:
     assert "vehicle_dropped" in kinds(events) and order_of(q) == ["us"]
 
 
-def test_car_that_never_leaves_is_treated_as_parked() -> None:
-    cfg = StopQueueConfig(max_wait_s=20.0)
+def test_car_that_never_leaves_is_treated_as_parked_without_an_alert() -> None:
+    cfg = StopQueueConfig(parked_after_s=15.0)
     q, events = run([Car(1, L, stop_t=1.0)], ego_stop_t=10.0, until=30.0, cfg=cfg)
     dropped = [e for e in events if e.kind == "vehicle_dropped"]
-    assert dropped and "parked" in str(dropped[0].detail["reason"])
-    assert order_of(q) == ["us"]
-    assert "your_turn" in kinds(events)  # we waited for it, then it was written off: our turn
+    assert dropped and dropped[0].detail["reason"] == "probably parked" and 25.0 <= dropped[0].t <= 25.2
+    snap = q.snapshot()
+    assert order_of(q) == ["us"] and snap.your_turn  # answers may say nobody visible is ahead...
+    assert [e.key for e in snap.dropped] == ["track:1"] and snap.dropped[0].drop_reason == "probably parked"
+    assert "your_turn" not in kinds(events)  # ...but a guess never becomes a spoken "you're up"
 
 
 def test_moving_cars_do_not_join() -> None:

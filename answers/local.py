@@ -60,6 +60,11 @@ def caveats(snapshot: WorldSnapshot) -> list[str]:
         out.append("I can't see the sides of the intersection well.")
     if "ego_motion_unknown" in snapshot.caveats:
         out.append("I'm not sure we're fully stopped.")
+    for entry in snapshot.queue.dropped:
+        if entry.drop_reason == "probably parked":
+            out.append(f"{_sentence(describe(entry))} hasn't moved; it may be parked.")
+        else:
+            out.append(f"I lost sight of {describe(entry)}.")
     if snapshot.people_ahead:
         out.append(
             "Watch for the pedestrian ahead." if snapshot.people_ahead == 1 else "Watch for the pedestrians ahead."
@@ -136,6 +141,8 @@ def can_i_go(snapshot: WorldSnapshot) -> LocalAnswer:
         if queue.deadlock:
             return LocalAnswer(_with_caveats(_deadlock_text(), snapshot))
         if queue.your_turn:
+            if queue.dropped:  # the car ahead wasn't seen leaving: don't say "yes"
+                return LocalAnswer(_with_caveats(f"Nobody I can see is ahead of you. {_sentence(CHECK)}.", snapshot))
             went = len(queue.departed)
             lead = "Yes, it's your turn" if went else "Yes, nobody else is waiting"
             return LocalAnswer(_with_caveats(f"{lead}. {_sentence(CHECK)}.", snapshot))
@@ -183,6 +190,8 @@ def _not_at_a_stop(snapshot: WorldSnapshot) -> str:
         if snapshot.stop_sign_last_seen is not None:
             return f"You're behind the {lead}. Wait for it to go, then pull up to the stop line."
         return f"You're stopped behind the {lead}."
+    if snapshot.behind_lead and snapshot.stop_sign_last_seen is not None:
+        return "Pull up to the stop line first; I'll keep track of the order from there."
     if snapshot.light.confident and snapshot.light.color is not LightColor.UNKNOWN:
         return f"There's no stop sign here; the light decides, and it's {snapshot.light.color.value}."
     return "I don't see a stop sign or a traffic light here, so I can't tell whose turn it is. Check around you."

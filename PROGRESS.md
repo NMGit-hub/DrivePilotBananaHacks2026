@@ -4,6 +4,40 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### M3: router, local answers, alert engine (2026-10-10; independent review pending)
+- `voice/router.py`: ordered keyword/regex router: voice controls, "I'm going to <place>", "tell me when it's
+  green" / "when I can go" watches, split-second questions (refused while moving), right of way (local),
+  navigation, lanes, everything else → vision model. 123-phrasing table test incl. the tricky cases ("can I go
+  right on red?" is a sign question; "did I miss my turn?" is navigation). ~50 µs per question.
+- `answers/local.py`: PLAN.md phrasing ("The white car on your left, then the gray truck across from you. You're
+  third."), ties ("You and the car on your right stopped together. The car on the right goes first."), 4-way
+  deadlock, caveats (car out of view, narrow view, pedestrians, lost/maybe-parked cars), light answers. Never a
+  bare "go": every permissive answer says to check first (asserted in tests).
+- `answers/alerts.py`: once-per-event alerts with a cooldown; "You're up, check and go." (spoken on its own) and
+  "Light's green, check the intersection and go." (only when asked); watches expire on timeout, seek-back and
+  driving away; quiet mode keeps only requested/safety alerts.
+- `answers/assistant.py`: question → route → handler → speaker; quiet/normal/repeat/stop/never mind; navigation
+  (M6) and vision model (M5) behind small interfaces. `scripts/ask_replay.py`: typed questions on a replay.
+
+### M2: world state + 4-way-stop queue + traffic lights (2026-10-10)
+- `state/vehicle_motion.py`: per-car stopped/moving in the world (frame-to-frame homographies cancel our own
+  motion; one vectorized remap), stop dated from positions, noise floors for box jitter, "arrived while we
+  watched" only from what we saw while standing still.
+- `state/approach.py`: left/ahead/right zones, the car in front of us ("lead", seen from behind), front car per
+  approach. `state/stop_queue.py`: arrival order, ties to the right (2-, 3-way), 4-way deadlock, departures
+  (sustained driving, not a creep), lost-track re-linking, parked/lost cars dropped *without* an alert, copies
+  in snapshots. `state/traffic_light.py`: lit-lamp classifier + per-light tracker, anchored while stopped,
+  "turned green" only for our own light. `state/colors.py`: white balance + exposure, chroma voting.
+- `state/world.py`: at the stop line (not behind another car), pedestrians ahead, `drove_off` / `segment_reset`
+  events, frame buffer. `perception/pipeline.py: AsyncListener` runs the world update off the perception thread.
+- Tools: `scripts/world_timeline.py`, `scripts/eval_traffic_lights.py` (+ `eval/light_labels.yaml`).
+- **Independent review found 7 bugs (6 safety) + 3 risks**, each confirmed with a reproducer; all fixed and
+  re-checked with the reviewer's own scripts, plus `tests/test_intersection_safety.py` (pinhole-camera
+  scenarios with box jitter): a creeping car no longer "departs"; our own creep doesn't either; stopping
+  behind another car no longer starts the queue; jitter no longer makes an already-waiting car look newly
+  arrived (was 37/40 runs wrong, now 0/40); a cross-street light turning green is not "our" green; a car lost
+  from view never triggers "you're up"; snapshots are immutable; world update 2.5x cheaper.
+
 ### M1: video capture, detection/tracking, ego motion, performance (2026-10-10)
 - **Video sources** (`capture/`): one `VideoSource` interface. `FileSource` paces on the video's timestamps
   (real time; decode-bound playback slows down instead of starving), lock-step mode for evals, pause/seek/loop,
@@ -46,6 +80,21 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - `requirements.txt` (pinned top-level) + `requirements-lock.txt` (full freeze; `.venv` matches it exactly).
 
 ## Verified (and how)
+- **Answers on real replays** (`scripts/ask_replay.py`): SF stop-sign clip: "can I go?" while moving → "We're
+  moving..."; at the stop → "Yes, nobody else is waiting. Check the intersection before you go." plus "Watch
+  for the pedestrian ahead" (a pedestrian with a dog crosses); "can I merge now?" while moving → refused. SF
+  red-light clip: "can I go?" → "Not yet, the light's red. I'll tell you when it turns green."; "tell me when
+  it's green" → alert at 36.56 s (hand label 36.4 s). Local answers take < 1 ms.
+- **World timelines on real clips** (`scripts/world_timeline.py`): SF stop: arrival 21.54 s (ego label soft stop
+  21.6 s), nobody waiting (checked on frames: the minivan on the left was crossing), left at 24.9 s. Suburban
+  clip: rolls through its stop sign (no queue), later stops behind a car at a red light (no stop-sign queue).
+- **Traffic lights** (`scripts/eval_traffic_lights.py`, 4 labeled clips): 262/280 sampled moments right (94%),
+  17 "unsure", 1 wrong (at the change itself); red→green caught at 36.56 s (label 36.4 s); 0 false
+  "turned green" events.
+- **Car colors**: checked by eye on 41 vehicle crops from 5 dev clips (before: nearly all "blue" at dawn).
+- **World update cost**: 4-9 ms p50 per frame on real clips (5 cars avg), measured with the CPU loaded by
+  wake-word training; runs on its own thread (`AsyncListener`).
+- **Tests:** 372 pass (incl. 2 GPU); ruff + mypy clean.
 - **M1 performance** (`scripts/bench_pipeline.py`, dev clip c4130097, 720p30, other GPU users present: Epic
   launcher overlay, wake-word training): real-time **29.6 fps** processed of 30.2 (target ≥ 25.2); p95
   processing (detect+track ∥ ego) **27.5 ms** (< 40); p95 decode-to-result latency **32 ms** (< 70);
@@ -67,8 +116,8 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
-- M2 (in progress): world state + 4-way-stop queue (done, 20 tests) + per-vehicle motion, approach zones,
-  traffic-light tracker ("tell me when it's green"), world state glue, M2 evaluation.
+- M3 independent review; M5 (vision model: Claude Haiku default, Gemini/Ollama/mock) in progress; then M4
+  (voice audio), M6 (navigation), M7 (app + screen), M8 (test sheet).
 - Background: "Hey DrivePilot" wake-word training (separate agent, `.venv-wakeword`).
 
 ## Test data
@@ -81,6 +130,16 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   tested with synthetic GPX files in tests until real drives are recorded.
 
 ## Known issues / compromises
+- **No real multi-car 4-way stop on video yet.** BUILD_PLAN M2's "queue log matches my hand-labeled timeline
+  on the dev 4-way-stop clip" can't be checked until we record one: the queue is verified with synthetic and
+  pinhole-camera scenarios (with jitter) and on real single-car stops. Record 4-way stops with 1-3 other cars.
+- **"You're up" comes ~1 s after the other car starts moving** (PLAN target for alerts is 0.3 s from
+  detection): a departure is only confirmed after 1 s of sustained driving, because a car creeping up to its
+  line looks the same for the first second. Deliberate: a false "you're up" is the dangerous mistake.
+- **Cars already waiting when we arrive are assumed to be ahead of us** (we can't see when they arrived).
+  Wrongly yielding is the safe mistake; answers say "already waiting when you got here".
+- **A car ahead that's lost from view (8 s) or hasn't moved for 20 s is dropped without an alert**; "can I go?"
+  then says who it lost track of instead of "yes".
 - **Ego-motion accuracy** generalizes to ~±0.5 s (held-out 1/3 strict at ±0.5 s; see Verified). Rain/wiper
   footage is worse (rain is out of scope per PLAN.md). Re-check on our own drives with our mount.
 - **Small, distant traffic lights** can be missed by YOLO at the 384x640 input after they change color; while

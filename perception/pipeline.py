@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -252,3 +252,62 @@ class PerceptionWorker:
         log.info("perception perf", **fields)
         if self.recorder is not None:
             self.recorder.perf(stage="perception", **fields, stages=summary)
+
+
+class AsyncListener:
+    """Runs a slower listener (the world state) on its own thread, so it never holds up perception.
+
+    The perception thread only hands results over. At most `max_pending` results wait; if the consumer falls
+    behind, the oldest waiting result is dropped (counted in `dropped`). Downstream logic is time-based, so a
+    skipped frame is harmless, but a dropped result's `new_segment` flag is carried to the next one so a seek is
+    never missed. Exceptions in the listener are logged and don't stop the thread.
+    """
+
+    def __init__(self, listener: Listener, name: str = "listener", max_pending: int = 2) -> None:
+        self._listener = listener
+        self.name = name
+        self.max_pending = max_pending
+        self._pending: deque[PerceptionResult] = deque()
+        self._cond = threading.Condition()
+        self._stopping = False
+        self.dropped = 0
+        self.handled = 0
+        self._thread = threading.Thread(target=self._run, name=f"async-{name}", daemon=True)
+
+    def start(self) -> AsyncListener:
+        """Start the consumer thread (returns self for chaining)."""
+        self._thread.start()
+        return self
+
+    def __call__(self, result: PerceptionResult) -> None:
+        """Hand a result over (perception thread; never blocks)."""
+        with self._cond:
+            if len(self._pending) >= self.max_pending:
+                old = self._pending.popleft()
+                self.dropped += 1
+                if old.new_segment:
+                    result = replace(result, new_segment=True)
+            self._pending.append(result)
+            self._cond.notify()
+
+    def stop(self, timeout: float | None = 2.0) -> None:
+        """Finish what is pending, then stop the thread."""
+        with self._cond:
+            self._stopping = True
+            self._cond.notify()
+        if self._thread.is_alive():
+            self._thread.join(timeout)
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                while not self._pending and not self._stopping:
+                    self._cond.wait()
+                if not self._pending:
+                    return
+                result = self._pending.popleft()
+            try:
+                self._listener(result)
+            except Exception:
+                log.exception("async listener failed", listener=self.name)
+            self.handled += 1

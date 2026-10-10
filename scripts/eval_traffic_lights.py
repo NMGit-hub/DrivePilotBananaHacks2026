@@ -33,6 +33,7 @@ from state.traffic_light import TrafficLightTracker, classify_light  # noqa: E40
 LABELS = REPO_ROOT / "eval" / "light_labels.yaml"
 CACHE = REPO_ROOT / "data" / "cache"
 STEP_S = 0.25
+GREEN_TOLERANCE_S = 1.0  # a "turned green" this close to the labeled change is right; any other is false
 
 
 def cached_tracks(cfg: AppConfig, path: Path) -> dict[int, list[Track]]:
@@ -76,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging("WARNING")
     tl_cfg = cfg.traffic_light
     labels = yaml.safe_load(LABELS.read_text(encoding="utf-8"))["clips"]
-    totals = {"right": 0, "abstain": 0, "wrong": 0, "red_green_swaps": 0}
+    totals = {"right": 0, "abstain": 0, "wrong": 0, "red_green_swaps": 0, "false_greens": 0}
     tiles: list[np.ndarray] = []
     for clip in labels:
         path = next((cfg.root / "data" / "videos" / "dev").glob(f"*__{clip['bdd_id']}.mov"))
@@ -86,15 +87,15 @@ def main(argv: list[str] | None = None) -> int:
         source = FileSource(path, realtime=False)
         source.start()
         counts = {"right": 0, "abstain": 0, "wrong": 0, "red_green_swaps": 0}
-        green_at: float | None = None
+        green_events: list[float] = []  # every "turned green" (a later false one must not hide behind a right one)
         next_sample, next_tile = 0.0, 0.0
         duration = source.duration
         while (frame := source.read(timeout=10)) is not None:
             frame_tracks = tracks.get(frame.index, [])
             stopped = ego.update(frame, [t.box for t in frame_tracks]).stopped
             reading, turned_green = tracker.update(frame.t, frame.image, frame_tracks, ego_stopped=stopped)
-            if turned_green and green_at is None:
-                green_at = frame.t
+            if turned_green:
+                green_events.append(frame.t)
             if frame.t >= next_sample:
                 next_sample += STEP_S
                 expected = label_at(frame.t, clip["states"], duration)
@@ -132,21 +133,26 @@ def main(argv: list[str] | None = None) -> int:
             f"{clip['bdd_id']}: right {counts['right']}/{n}, abstain {counts['abstain']}, wrong {counts['wrong']}"
             f" (red/green swaps {counts['red_green_swaps']})"
         )
-        if "turns_green" in clip:
+        label_green = clip.get("turns_green")
+        hits = [g for g in green_events if label_green is not None and abs(g - label_green) <= GREEN_TOLERANCE_S]
+        false_greens = [g for g in green_events if g not in hits[:1]]
+        if label_green is not None:
             line += (
-                f"; turned green at {green_at:.2f} s (label {clip['turns_green']} s)"
-                if green_at is not None
-                else f"; turned green NOT detected (label {clip['turns_green']} s)"
+                f"; turned green at {hits[0]:.2f} s (label {label_green} s)"
+                if hits
+                else f"; turned green NOT detected (label {label_green} s)"
             )
-        elif green_at is not None:
-            line += f"; FALSE turned-green at {green_at:.2f} s"
+        if false_greens:
+            line += "; FALSE turned-green at " + ", ".join(f"{g:.2f} s" for g in false_greens)
         print(line)
-        for k in totals:
-            totals[k] += counts[k]
+        for k, v in counts.items():
+            totals[k] += v
+        totals["false_greens"] += len(false_greens)
     n = totals["right"] + totals["abstain"] + totals["wrong"]
     print(
         f"\nall: right {totals['right']}/{n} ({100 * totals['right'] / max(n, 1):.0f}%), abstain {totals['abstain']}, "
-        f"wrong {totals['wrong']}, red/green swaps {totals['red_green_swaps']}"
+        f"wrong {totals['wrong']}, red/green swaps {totals['red_green_swaps']}, "
+        f"false turned-green events {totals['false_greens']}"
     )
     if args.sheet is not None and tiles:
         rows = [

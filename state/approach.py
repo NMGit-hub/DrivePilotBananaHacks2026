@@ -2,8 +2,9 @@
 
 Pure geometry on the forward camera image, with zones in config (fractions of the frame, so they work at any
 resolution; calibrate them once for the real mount):
-- lead vehicle: the car directly in front of us in our lane: centered and large (close). While one is there we
-  are not at the stop line ourselves.
+- lead vehicle: the car directly in front of us in our lane: centered, seen from behind (not side-on: a car
+  crossing in front of us is not "lead") and close (box at least `lead_min_height` of the frame, ~9 m at 114°).
+  While one is there we are queued behind it, not at the stop line ourselves.
 - left / right: bottom-center x beyond `side_x`; must be seen side-on (box wider than tall by `min_side_aspect`)
   because cars waiting on the cross street face across our view. This keeps cars parked along our own street
   (seen from behind) out of the queue.
@@ -14,13 +15,18 @@ Vehicles whose box bottom is outside the road band (`min_bottom_y`..`max_bottom_
 
 from __future__ import annotations
 
+from typing import Literal
+
 from core.config import IntersectionConfig
 from perception.detector import VEHICLE_CLASSES, Track
 from state.stop_queue import Approach
 
+LEAD: Literal["lead"] = "lead"
+Zone = Approach | Literal["lead"] | None
 
-def classify_approach(track: Track, frame_w: int, frame_h: int, zones: IntersectionConfig) -> Approach | str | None:
-    """Return Approach.LEFT/AHEAD/RIGHT, "lead" for the car directly in front of us, or None (not relevant)."""
+
+def classify_approach(track: Track, frame_w: int, frame_h: int, zones: IntersectionConfig) -> Zone:
+    """Return Approach.LEFT/AHEAD/RIGHT, LEAD for the car directly in front of us, or None (not relevant)."""
     if track.cls not in VEHICLE_CLASSES:
         return None
     x_bc, y_bc = track.bottom_center
@@ -29,13 +35,26 @@ def classify_approach(track: Track, frame_w: int, frame_h: int, zones: Intersect
     aspect = track.width / max(track.height, 1.0)
     if not (zones.min_bottom_y <= yf <= zones.max_bottom_y) or h_frac < zones.min_height:
         return None
-    if abs(xf - 0.5) <= zones.lead_center_band and h_frac >= zones.lead_min_height:
-        return "lead"
+    if abs(xf - 0.5) <= zones.lead_center_band and h_frac >= zones.lead_min_height and aspect <= zones.max_lead_aspect:
+        return LEAD  # (a close side-on car is crossing or waiting on the cross street: judged below)
     if xf < zones.side_x:
         return Approach.LEFT if aspect >= zones.min_side_aspect else None
     if xf > 1.0 - zones.side_x:
         return Approach.RIGHT if aspect >= zones.min_side_aspect else None
     return Approach.AHEAD if aspect <= zones.max_ahead_aspect else None
+
+
+def front_of_approach(approach: Approach, track: Track) -> float:
+    """Sort key: higher = nearer the intersection on that approach (the car at the line comes first).
+
+    Left: the rightmost box (nearest the middle); right: the leftmost; ahead: the nearest (largest).
+    """
+    x1, _, x2, _ = track.box
+    if approach is Approach.LEFT:
+        return x2
+    if approach is Approach.RIGHT:
+        return -x1
+    return track.height
 
 
 def is_clipped(track: Track, frame_w: int, frame_h: int, margin_px: float = 3.0) -> bool:

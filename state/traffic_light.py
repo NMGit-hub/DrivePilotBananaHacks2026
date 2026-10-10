@@ -13,9 +13,10 @@ Over time, each light is followed individually (`TrafficLightTracker`):
   while green); with the camera still, the light stays at the same pixels, so an anchored light is read every
   frame even when YOLO misses it. Anchor boxes are padded because YOLO boxes sometimes clip the bottom lamp.
 - each light keeps its own majority vote over `stable_s`, so one misread frame doesn't flip it.
-- "turned green" fires once per stop when an individual light goes from stable red/yellow to
-  `green_confirm_frames` consecutive green readings while we are stopped (cross-street lights seen side-on
-  change the other way and are judged separately instead of being mixed into one vote).
+- "turned green" fires once per stop when *our* light (the most prominent one) goes from stable red/yellow to
+  `green_confirm_frames` consecutive green readings while we are stopped, and no other prominent light is still
+  red. Cross-street lights seen side-on, downstream signals and arrows change on their own schedule; they are
+  judged separately and never announce a change for us.
 - the overall reading answers "what color is our light": the most prominent light (box area x detection
   confidence x lamp brightness: side-on lamps are dim). If two prominent lights disagree, it is not confident.
 Glare and distance make this unreliable at times: answers say so (see `LightReading.confident`).
@@ -31,7 +32,10 @@ import cv2
 import numpy as np
 
 from core.config import TrafficLightConfig
+from core.logging_setup import get_logger
 from perception.detector import Track
+
+log = get_logger(__name__)
 
 Box = tuple[float, float, float, float]
 
@@ -74,21 +78,36 @@ def _lamp_blob(val: np.ndarray, threshold: float) -> np.ndarray | None:
     """
     mask = (val >= threshold).astype(np.uint8)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if n <= 1:
+        return None
     h, w = val.shape
-    best, best_v = None, -1.0
-    for i in range(1, n):
-        x, y, bw, bh, area = stats[i]
-        if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
-            continue  # touches the border: background, not a lamp inside the housing
-        if area < 3 or not 0.5 <= bw / max(bh, 1) <= 2.0 or area < 0.45 * bw * bh:
-            continue  # not compact/round enough
-        if bw > 0.9 * w:
-            continue
-        component = labels == i
-        mean_v = float(val[component].mean())
-        if mean_v > best_v:
-            best, best_v = component, mean_v
-    return best
+    x, y, bw, bh, area = (stats[1:, k] for k in range(5))
+    ok = (
+        (x > 0)  # touching the border: background around the housing, not a lamp inside it
+        & (y > 0)
+        & (x + bw < w)
+        & (y + bh < h)
+        & (area >= 3)  # compact and roughly round
+        & (bw <= 2.0 * np.maximum(bh, 1))
+        & (bw >= 0.5 * np.maximum(bh, 1))
+        & (area >= 0.45 * bw * bh)
+        & (bw <= 0.9 * w)
+    )
+    if not ok.any():
+        return None
+    # Mean brightness of every component in one pass, then the brightest acceptable one.
+    sums = np.bincount(labels.ravel(), weights=val.ravel(), minlength=n)[1:]
+    means = np.where(ok, sums / np.maximum(area, 1), -1.0)
+    return labels == int(np.argmax(means)) + 1
+
+
+def _median_u8(values: np.ndarray) -> float:
+    """Median of a uint8 array from its histogram (same result as np.median, ~10x faster on small crops)."""
+    cum = np.cumsum(np.bincount(values.ravel(), minlength=256))
+    n = values.size
+    low = int(np.searchsorted(cum, (n - 1) // 2 + 1))
+    high = int(np.searchsorted(cum, n // 2 + 1))
+    return (low + high) / 2.0
 
 
 def _hue_counts(hues: np.ndarray) -> dict[str, float]:
@@ -108,8 +127,8 @@ def classify_light(image: np.ndarray, box: Box, cfg: TrafficLightConfig) -> Ligh
     if x2 - x1 < 3 or y2 - y1 < 3:
         return LightClassification(LightColor.UNKNOWN, 0.0, {})
     hsv = cv2.cvtColor(np.ascontiguousarray(image[y1:y2, x1:x2]), cv2.COLOR_BGR2HSV)
-    hue, sat, val = hsv[..., 0].astype(int), hsv[..., 1].astype(int), hsv[..., 2].astype(int)
-    housing_v = float(np.median(val))
+    hue, sat, val = hsv[..., 0], hsv[..., 1], hsv[..., 2]  # uint8 (comparisons only; no arithmetic)
+    housing_v = _median_u8(val)
     # A lit lamp clips near 255, so in sunlit paint (housing nearly as bright) the contrast rule is capped.
     bright_housing = housing_v + cfg.lamp_contrast > cfg.lamp_v_cap
     threshold = max(cfg.v_min, min(housing_v + cfg.lamp_contrast, cfg.lamp_v_cap))
@@ -141,12 +160,12 @@ def classify_light(image: np.ndarray, box: Box, cfg: TrafficLightConfig) -> Ligh
             return LightClassification(LightColor.UNKNOWN, 0.0, scores, brightness)
 
     crop_h, crop_w = hue.shape
-    if crop_h >= 1.6 * crop_w:  # upright housing: the lit lamp's position must match its color
+    if crop_h >= cfg.upright_ratio * crop_w:  # upright housing: the lit lamp's position must match its color
         ys = np.nonzero(blob)[0]
         rel_y = float(ys.mean()) / crop_h
         expected = {"red": (0.0, 0.5), "yellow": (0.25, 0.75), "green": (0.45, 1.0)}[best]
         if not expected[0] <= rel_y <= expected[1]:
-            confidence *= 0.3
+            confidence *= cfg.position_penalty
     if confidence < cfg.min_confidence:
         return LightClassification(LightColor.UNKNOWN, confidence, scores, brightness)
     return LightClassification(LightColor(best), confidence, scores, brightness)
@@ -245,7 +264,7 @@ class TrafficLightTracker:
             if not record.anchored:
                 record.box = light.box
 
-        turned_green = False
+        candidates: list[_LightRecord] = []
         for record in list(self._records):
             detected_now = id(record) in seen
             if not detected_now and not record.anchored:
@@ -269,16 +288,43 @@ class TrafficLightTracker:
                 and t - record.last_red_t <= cfg.red_memory_s
                 and record.green_streak >= cfg.green_confirm_frames
             ):
-                turned_green, self._green_reported = True, True
-                record.stable, record.stable_share = LightColor.GREEN, 1.0
+                candidates.append(record)
 
-        return self._overall(t, turned_green), turned_green
+        turned_green = self._confirm_green(candidates)
+        return self._overall(t), turned_green
+
+    def _confirm_green(self, candidates: list[_LightRecord]) -> bool:
+        """Announce a change only for *our* light: the most prominent one, with no prominent light still red.
+
+        A cross-street light seen side-on, a downstream signal or a green arrow beside a red ball can turn green
+        while ours stays red; announcing that would be the dangerous mistake.
+        """
+        if not candidates:
+            return False
+        ranked = sorted(self._records, key=lambda r: r.prominence, reverse=True)
+        top = ranked[0]
+        if top not in candidates:
+            log.info("green change ignored: not our light", prominence=round(top.prominence, 1))
+            return False
+        rivals = [
+            r
+            for r in ranked[1:]
+            if r not in candidates
+            and r.stable in (LightColor.RED, LightColor.YELLOW)
+            and r.prominence >= self.cfg.rival_share * top.prominence
+        ]
+        if rivals:
+            log.info("green change ignored: a prominent light is still red", rivals=len(rivals))
+            return False
+        self._green_reported = True
+        top.stable, top.stable_share = LightColor.GREEN, 1.0
+        return True
 
     def _match(self, light: Track) -> _LightRecord | None:
         for record in self._records:
             if record.track_id is not None and record.track_id == light.track_id and not record.anchored:
                 return record
-        best, best_iou = None, 0.3
+        best, best_iou = None, self.cfg.match_iou
         for record in self._records:
             iou = _iou(record.box, light.box)
             if iou >= best_iou:
@@ -294,7 +340,7 @@ class TrafficLightTracker:
         if known:
             top = max(set(known), key=known.count)
             share = known.count(top) / len(record.votes)
-            if share >= 0.6:
+            if share >= cfg.vote_share:
                 record.stable, record.stable_share = top, share
         elif t - record.votes[0][0] >= 0.8 * cfg.stable_s:
             record.stable, record.stable_share = LightColor.UNKNOWN, 0.0
@@ -306,13 +352,15 @@ class TrafficLightTracker:
             prominence = (x2 - x1) * (y2 - y1) * max(record.det_conf, cfg.anchor_weight) * reading.lamp_brightness
             record.prominence = prominence if record.prominence == 0 else 0.8 * record.prominence + 0.2 * prominence
 
-    def _overall(self, t: float, turned_green: bool) -> LightReading:
+    def _overall(self, t: float) -> LightReading:
         ranked = sorted(self._records, key=lambda r: r.prominence, reverse=True)
         known = [r for r in ranked if r.stable is not LightColor.UNKNOWN]
         boxes = tuple(r.box for r in ranked)
         if not known:
             return LightReading(t=t, color=LightColor.UNKNOWN, confident=False, n_lights=len(ranked), boxes=boxes)
         top = known[0]
-        rivals = [r for r in known[1:] if r.stable is not top.stable and r.prominence >= 0.6 * top.prominence]
-        confident = turned_green or (top.stable_share >= 0.6 and not rivals)
+        rivals = [
+            r for r in known[1:] if r.stable is not top.stable and r.prominence >= self.cfg.rival_share * top.prominence
+        ]
+        confident = top.stable_share >= self.cfg.vote_share and not rivals
         return LightReading(t=t, color=top.stable, confident=confident, n_lights=len(ranked), boxes=boxes)

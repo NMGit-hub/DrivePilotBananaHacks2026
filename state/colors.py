@@ -40,10 +40,11 @@ BRIGHTNESS_NAMES = ((65.0, "black"), (115.0, "gray"), (185.0, "silver"))  # belo
 
 def frame_gains(image: np.ndarray) -> np.ndarray:
     """Per-channel (B, G, R) gains for a frame: gray-world white balance times exposure, both clamped."""
-    small = image[::8, ::8].reshape(-1, 3).astype(np.float32)
+    small = image[::16, ::16].reshape(-1, 3).astype(np.float32)  # ~3600 pixels at 720p: plenty for averages
     means = small.mean(axis=0)
     gains = np.clip(means.mean() / np.maximum(means, 1.0), 1.0 - MAX_WB_CHANGE, 1.0 + MAX_WB_CHANGE)
-    median = float(np.median((small * gains).max(axis=1)))
+    brightest = (small * gains).max(axis=1)
+    median = float(np.partition(brightest, len(brightest) // 2)[len(brightest) // 2])
     exposure = float(np.clip(TARGET_MEDIAN / max(median, 1.0), *EXPOSURE_RANGE))
     return gains * exposure
 

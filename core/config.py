@@ -218,13 +218,21 @@ class VehicleMotionConfig(_Strict):
     """Is each tracked vehicle stopped? (state/vehicle_motion.py)"""
 
     window_s: float = Field(0.6, gt=0.0, description="Speed is fitted over this much track history.")
-    min_samples: int = Field(5, ge=2)
+    min_samples: int = Field(10, ge=3, description="Samples needed (with min_span_frac) before judging speed.")
+    min_span_frac: float = Field(0.8, gt=0.0, le=1.0, description="History must span this share of window_s.")
     stopped_below: float = Field(0.12, gt=0.0, description="Box heights per second below which a car is still.")
     moving_above: float = Field(0.35, gt=0.0, description="Box heights per second above which it moves.")
+    noise_px_per_s: float = Field(
+        10.0, ge=0.0, description="Speed floor in px/s: box jitter on small (distant) cars is not motion."
+    )
+    moving_noise_factor: float = Field(2.5, ge=1.0, description="Moving needs this multiple of the noise floor.")
     stopped_after_s: float = Field(0.5, ge=0.0, description="PLAN.md: a car is stopped after 0.5 s of stillness.")
     still_radius: float = Field(
         0.1, gt=0.0, description="Box heights: a car within this of where it rests has stopped (dates the stop)."
     )
+    still_radius_px: float = Field(4.0, ge=0.0, description="Pixel floor for still_radius (small boxes jitter).")
+    max_shift_px: float = Field(200.0, gt=0.0, description="Homographies moving more per frame are rejected.")
+    max_scale_change: float = Field(0.15, gt=0.0, description="...or scaling more than this per frame.")
     max_track_age_s: float = Field(3.0, gt=0.0)
 
 
@@ -235,7 +243,12 @@ class IntersectionConfig(_Strict):
     min_side_aspect: float = Field(1.3, gt=0.0, description="Cross-street cars are seen side-on (w/h).")
     max_ahead_aspect: float = Field(2.2, gt=0.0)
     lead_center_band: float = Field(0.25, gt=0.0, lt=0.5)
-    lead_min_height: float = Field(0.18, gt=0.0, lt=1.0, description="Lead car: box height fraction (close).")
+    lead_min_height: float = Field(0.10, gt=0.0, lt=1.0, description="Lead car: box height fraction (< ~9 m).")
+    max_lead_aspect: float = Field(1.9, gt=0.0, description="Lead car is seen from behind (not side-on).")
+    narrow_fov_deg: float = Field(100.0, gt=0.0, description="Below this the sides of an intersection may be cut off.")
+    color_refresh_s: float = Field(1.0, gt=0.0, description="Re-name a vehicle's color this often.")
+    frame_buffer_s: float = Field(3.0, gt=0.0, description="Recent frames kept for vision-model questions.")
+    frame_buffer_spacing_s: float = Field(0.25, gt=0.0)
     min_height: float = Field(0.03, gt=0.0, lt=1.0, description="Smaller boxes are beyond the intersection.")
     min_bottom_y: float = Field(0.30, ge=0.0, lt=1.0)
     max_bottom_y: float = Field(0.98, gt=0.0, le=1.0)
@@ -255,10 +268,16 @@ class StopQueueConfig(_Strict):
     """The 4-way-stop queue (state/stop_queue.py)."""
 
     tie_window_s: float = Field(1.0, ge=0.0, description="PLAN.md: stops within 1 s are a tie (right goes first).")
-    depart_moved: float = Field(1.0, gt=0.0, description="Box heights a waiting car must move to have departed.")
+    depart_moving_s: float = Field(1.0, gt=0.0, description="A departing car keeps moving this long...")
+    depart_moved: float = Field(1.5, gt=0.0, description="...and moves this many box heights (a creep is less).")
+    depart_lost_moving_s: float = Field(0.5, gt=0.0, description="Lost from view while moving (this long)...")
+    depart_lost_moved: float = Field(1.0, gt=0.0, description="...and this many box heights from its stop = gone.")
+    undepart_s: float = Field(3.0, ge=0.0, description="'Departed' but at rest again on its approach: reinstated.")
     relink_iou: float = Field(0.3, gt=0.0, le=1.0)
     lost_timeout_s: float = Field(8.0, gt=0.0)
-    max_wait_s: float = Field(45.0, gt=0.0, description="A car that never leaves is probably parked.")
+    parked_after_s: float = Field(
+        20.0, gt=0.0, description="A car ahead that hasn't moved this long after we arrived is probably parked."
+    )
     ego_depart_s: float = Field(1.5, gt=0.0, description="Moving this long = we left (creeping is not).")
 
 
@@ -276,6 +295,13 @@ class TrafficLightConfig(_Strict):
     s_min_halo: int = Field(70, ge=0, le=255)
     v_halo_min: int = Field(90, ge=0, le=255)
     min_confidence: float = Field(0.5, ge=0.0, le=1.0)
+    upright_ratio: float = Field(1.6, gt=1.0, description="Boxes this much taller than wide are upright housings.")
+    position_penalty: float = Field(0.3, ge=0.0, le=1.0, description="Confidence factor if the lamp is misplaced.")
+    match_iou: float = Field(0.3, gt=0.0, le=1.0, description="Detections overlapping a known light this much match.")
+    vote_share: float = Field(0.6, gt=0.5, le=1.0, description="Majority needed for a light's stable color.")
+    rival_share: float = Field(
+        0.6, gt=0.0, le=1.0, description="A light this prominent (vs ours) that disagrees makes us unsure."
+    )
     stable_s: float = Field(0.5, gt=0.0, description="Reported state = majority over this window.")
     green_confirm_frames: int = Field(5, ge=1, description="Consecutive green frames that confirm the change.")
     red_memory_s: float = Field(5.0, gt=0.0, description="A green counts as a change if red was seen this recently.")

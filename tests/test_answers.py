@@ -45,6 +45,7 @@ def queue(
                 BOXES[appr],
                 label=label,
                 arrival_known=tid not in unknown,
+                moving_for=1.5 if gone and tid in departed else 0.0,
             )
             for tid, appr, stop_t, label in cars
         ]
