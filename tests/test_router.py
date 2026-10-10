@@ -144,7 +144,7 @@ TABLE: list[tuple[str, RouteKind, str]] = [
     ("Should I move over to the left?", G, "gap_check"),  # a lane change now (no route mentioned)
     # --- everything else: the vision model
     ("What's the speed limit?", M, "scene"),
-    ("What did that sign say?", M, "scene"),
+    ("What did that sign say?", M, "memory"),  # V2-M4: a sign we passed: remembered frames + close-ups
     ("Can I park here?", M, "scene"),
     ("What does the red curb mean?", M, "scene"),
     ("Is this spot EV only?", M, "scene"),

@@ -103,6 +103,7 @@ class Assistant:
         self.nav = nav
         self.model = model
         self.parking = parking  # V2: "find me a parking spot" (set after construction when it needs `say`)
+        self.on_highlight: Callable[[int], None] | None = None  # V2: the page pulses the car an answer is about
         self.alerts = AlertEngine(cfg.alerts, self.say)
         self._lock = threading.Lock()
         self._last: Utterance | None = None
@@ -267,7 +268,9 @@ class Assistant:
                     return self._model(r, snap, cancel), "model"
                 return self._local(lambda s: local.should_wait(s, r.text) or wait, snap, generation), "local"
             handler = {"who_first": local.who_first, "can_i_go": local.can_i_go, "position": local.position}[r.intent]
-            return self._local(handler, snap, generation), "local"
+            text = self._local(handler, snap, generation)
+            self._highlight_next(snap)
+            return text, "local"
         if r.kind is RouteKind.WATCH:
             handler = local.light_watch if r.intent == "light_watch" else local.go_watch
             return self._local(handler, snap, generation), "local"
@@ -275,6 +278,15 @@ class Assistant:
             log.info("gap-like question refused while moving", question=r.question)
             return local.GAP_REFUSAL, "local"
         return self._model(r, snap, cancel), "model"
+
+    def _highlight_next(self, snap: WorldSnapshot) -> None:
+        """A right-of-way answer is about the car that goes next: the page pulses it."""
+        ahead = local.ahead_of_us(snap.queue) if snap.queue.active else []
+        if self.on_highlight is not None and ahead and ahead[0].track_id is not None:
+            try:
+                self.on_highlight(ahead[0].track_id)
+            except Exception:
+                log.exception("highlight failed")
 
     def _local(
         self, compute: Callable[[WorldSnapshot], local.LocalAnswer], snap: WorldSnapshot, generation: int

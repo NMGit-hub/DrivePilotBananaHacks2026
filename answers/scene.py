@@ -7,6 +7,12 @@ tracker sees (cars by side, the right-of-way verdict, the light, pedestrians) an
 navigation step. The model is told to answer in 1-2 spoken sentences, left/right from the driver's seat, to say
 what it can't see, and never to vouch for traffic.
 
+V2-M4: the tracked objects on the latest frame are numbered (thin boxes with small tags) so the model can end
+its answer with a hidden "[ref N]" naming the object it talks about: the page then pulses that object's box. A
+memory question ("what was that sign?") gets the last seconds of remembered frames plus close-ups of the signs
+seen (state/memory.py), numbered "Image k"; an answer ending in "[image k]" shows that frame as a thumbnail. Tags
+(and any stray mention of a mark number) are stripped before anything is spoken.
+
 The reply streams back sentence by sentence (speech starts on the first). Safety nets on every sentence:
 - anything that gives permission ("go ahead", "you're good to go", "you can merge now", a bare "Go.") is
   replaced by "I can't judge moving traffic, so check both ways yourself before you go.";
@@ -19,7 +25,8 @@ from __future__ import annotations
 
 import re
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import cv2
@@ -39,6 +46,8 @@ from answers.vision import (
 from core.config import AppConfig
 from core.logging_setup import get_logger
 from core.types import Frame
+from perception.detector import Track
+from state.memory import SceneMemory
 from state.stop_queue import Approach
 from state.traffic_light import LightColor
 from state.world import WorldSnapshot
@@ -70,6 +79,29 @@ you see. It reads only the main color of the light facing us; it cannot read arr
 stopped (traffic, a light, a sign) unless you can see it.
 - Don't mention images, frames, cameras or the tracker; speak as if you are looking at the road.
 - Use US units (mph, feet, miles)."""
+
+MARKS_PROMPT = (
+    'Objects in the "Now" image are numbered (thin boxes with small number tags). When your answer is about a '
+    "specific object there (a car, truck, bus, person, cyclist, sign or light), you must end your answer with "
+    "that object's tag, like [ref 3]: the driver's screen then points at it. Write only the tag: never say the "
+    "numbers, and never mention marks, tags or boxes."
+)
+MARKS_REMINDER = "(If your answer is about one numbered object, end with its tag, e.g. [ref 2].)"
+MEMORY_PROMPT = (
+    "The driver is asking about something we already passed: look at the earlier images (numbered Image 1, "
+    "Image 2, ...; close-ups of signs we passed come first). End your answer with the tag of the image that "
+    "shows it best, like [image 2]: the driver's screen then shows that image. Write only the tag: never say "
+    "image numbers."
+)
+MEMORY_REMINDER = "(End with the tag of the image that shows it best, e.g. [image 2].)"
+TAG = re.compile(r"\s*[\[(]\s*(ref|image|img)\s*#?\s*(\d{1,3})\s*[\])]", re.IGNORECASE)
+STRAY_MARK = re.compile(
+    r"\s*\((?:marked |box |tag |number |object |#)\s*#?\d{1,3}\)"
+    r"|\s+(?:marked|tagged|labeled|labelled) (?:as )?#?\d{1,3}\b"
+    r"|\s*\[[^\]]{0,24}\]",
+    re.IGNORECASE,
+)
+MARK_COLORS = {"vehicle": (255, 220, 60), "person": (40, 190, 255), "light": (200, 200, 200), "sign": (90, 90, 255)}
 
 NO_VOUCH = "I can't judge moving traffic, so check both ways yourself before you go."
 FALLBACK_TIMEOUT = "Sorry, I couldn't get a clear answer in time."
@@ -144,6 +176,183 @@ def light_crop(image: np.ndarray, box: tuple[float, float, float, float], height
     return cv2.resize(crop, (max(1, round(crop.shape[1] * scale)), height), interpolation=cv2.INTER_CUBIC)
 
 
+@dataclass(frozen=True, slots=True)
+class Mark:
+    """A numbered object on the image sent to the model."""
+
+    number: int
+    kind: str  # "vehicle" | "person" | "light" | "sign"
+    track_id: int | None  # (lights have no stable track id)
+    box: tuple[float, float, float, float]
+    cls: str = ""  # the detector's class ("car", "bus", "person", "traffic light", ...)
+    color: str = ""  # a vehicle's color name, if known
+
+
+def pick_marks(snapshot: WorldSnapshot, tracks: Sequence[Track], limit: int) -> list[Mark]:
+    """The objects worth numbering on the latest frame: vehicles, people and stop signs (nearest = largest first),
+    then the lights; at most `limit`."""
+    Obj = tuple[float, str, int | None, tuple[float, float, float, float], str, str]
+    objects: list[Obj] = []
+    for v in snapshot.vehicles:
+        area = (v.box[2] - v.box[0]) * (v.box[3] - v.box[1])
+        objects.append((area, "vehicle", v.track_id, v.box, v.cls, v.color))
+    for tr in tracks:
+        kind = {"person": "person", "bicycle": "person", "stop sign": "sign"}.get(tr.cls)
+        if kind is not None:
+            objects.append((tr.width * tr.height, kind, tr.track_id, tr.box, tr.cls, ""))
+    objects.sort(key=lambda o: -o[0])
+    picked = objects[: max(0, limit)]
+    for box in snapshot.light.boxes:
+        if len(picked) >= limit:
+            break
+        picked.append((0.0, "light", None, box, "traffic light", ""))
+    return [
+        Mark(i, kind, track_id, box, cls, color)
+        for i, (_, kind, track_id, box, cls, color) in enumerate(picked, start=1)
+    ]
+
+
+# What an answer can call each detector class (the first one it names is what it is about).
+_ANY_VEHICLE = {"car", "truck", "bus", "motorcycle"}
+OBJECT_NOUNS: list[tuple[re.Pattern[str], set[str]]] = [
+    (re.compile(r"\b(?:school ?)?bus(?:es)?\b", re.IGNORECASE), {"bus"}),
+    (re.compile(r"\b(?:trucks?|pickups?|semis?|lorry|lorries)\b", re.IGNORECASE), {"truck", "car"}),
+    (re.compile(r"\b(?:motorcycles?|motorbikes?|scooters?|mopeds?)\b", re.IGNORECASE), {"motorcycle"}),
+    (re.compile(r"\b(?:cyclists?|bicyclists?|bikers?|bikes?|bicycles?)\b", re.IGNORECASE), {"bicycle", "person"}),
+    (
+        re.compile(
+            r"\b(?:person|pedestrians?|people|man|woman|men|women|guy|lady|kids?|child|children|someone|somebody|"
+            r"walkers?|joggers?)\b",
+            re.IGNORECASE,
+        ),
+        {"person", "bicycle"},
+    ),
+    (
+        re.compile(
+            r"\b(?:cars?|sedans?|suvs?|vans?|minivans?|hatchbacks?|coupes?|wagons?|jeeps?|taxis?|cabs?)\b",
+            re.IGNORECASE,
+        ),
+        {"car", "truck"},
+    ),
+    (re.compile(r"\bvehicles?\b", re.IGNORECASE), _ANY_VEHICLE),
+    (re.compile(r"\b(?:stop )?signs?\b|\bboards?\b", re.IGNORECASE), {"stop sign"}),  # (only stop signs are marked)
+    (re.compile(r"\b(?:traffic )?(?:lights?|signals?)\b", re.IGNORECASE), {"traffic light"}),
+]
+COLOR_WORDS = re.compile(
+    r"\b(white|black|gray|grey|silver|red|blue|green|yellow|orange|brown|beige|gold|tan|purple|maroon)\b", re.I
+)
+# Only "on your left / right" says where in the frame: "ahead" is anywhere up the road, and someone "crossing in
+# front of us" close by can be at the frame's edge.
+SIDE_WORDS = re.compile(r"\b(?:on|to) (?:your|the|our) (left|right)\b", re.IGNORECASE)
+TAG_MIN_SHARE = 0.25  # a tagged object this much smaller than the biggest that fits the answer gives way to it
+
+
+def _named_object(answer: str) -> tuple[set[str], re.Match[str]] | None:
+    """The classes the answer's first-named object can be, and where it is named (quoted sign text, like "LAST
+    LOCAL TRUCK ROUTE", names nothing)."""
+    unquoted = re.sub(r"\"[^\"]*\"|“[^”]*”", lambda m: " " * len(m.group(0)), answer)
+    best: tuple[int, set[str], re.Match[str]] | None = None
+    for pattern, classes in OBJECT_NOUNS:
+        match = pattern.search(unquoted)
+        if match is not None and (best is None or match.start() < best[0]):
+            best = (match.start(), classes, match)
+    return None if best is None else (best[1], best[2])
+
+
+_SAME_COLOR = {"grey": "gray", "silver": "gray", "maroon": "red", "tan": "beige", "gold": "beige", "brown": "beige"}
+
+
+def _color(name: str) -> str:
+    return _SAME_COLOR.get(name.lower(), name.lower())
+
+
+def _on_side(box: tuple[float, float, float, float], width: int, side: str) -> bool:
+    """Whether a box is on the side of the frame the answer says."""
+    center = (box[0] + box[2]) / 2 / max(width, 1)
+    return center < 0.4 if side == "left" else center > 0.6
+
+
+def _area(mark: Mark) -> float:
+    return (mark.box[2] - mark.box[0]) * (mark.box[3] - mark.box[1])
+
+
+def resolve_highlight(answer: str, tagged: Sequence[int], marks: dict[int, Mark], width: int) -> int | None:
+    """Which numbered object the answer is about, or None. The model's tag is kept only if it fits what the answer
+    names (a "school bus" answer tagged with a person is wrong); otherwise the one object matching the named class,
+    color and side wins (the largest, if it is clearly the nearest). An answer that names no object (a building,
+    construction) highlights nothing."""
+    named = _named_object(answer)
+    if named is None:
+        return None
+    classes, match = named
+    sentence = re.split(r"(?<=[.!?])\s+", answer[match.start() :], maxsplit=1)[0]
+    colors = COLOR_WORDS.findall(answer[max(0, match.start() - 24) : match.start()])
+    color = _color(colors[-1]) if colors else None
+    side_match = SIDE_WORDS.search(sentence)
+    side = side_match.group(1).lower() if side_match is not None else None
+
+    def fits(mark: Mark, use_color: bool) -> bool:
+        if mark.cls not in classes or mark.track_id is None:
+            return False
+        if use_color and color is not None and mark.color and _color(mark.color) != color:
+            return False
+        return side is None or _on_side(mark.box, width, side)
+
+    candidates = [m for m in marks.values() if fits(m, use_color=True)]
+    if not candidates and color is not None:  # (our color names can differ from the model's)
+        candidates = [m for m in marks.values() if fits(m, use_color=False)]
+    biggest = max(candidates, key=_area) if candidates else None
+    for number in tagged:  # the model's own pick, if it agrees with what the answer says about it...
+        mark = marks.get(number)
+        if mark is not None and fits(mark, use_color=True):
+            if biggest is not None and _area(mark) < TAG_MIN_SHARE * _area(biggest) and color is None and side is None:
+                return biggest.number  # ...unless a far bigger one fits just as well (answers are about the nearest)
+            return number
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0].number
+    area = sorted((_area(m), m.number) for m in candidates)
+    return area[-1][1] if area[-1][0] >= 2.0 * area[-2][0] else None  # the clearly nearest one, else unsure
+
+
+def draw_marks(image: np.ndarray, marks: Sequence[Mark]) -> np.ndarray:
+    """A copy of the image with each mark's box and number tag drawn (what the model sees)."""
+    out = image.copy()
+    w = out.shape[1]
+    thick = max(1, w // 640)
+    scale = max(0.45, w / 1800)
+    for mark in marks:
+        x1, y1, x2, y2 = (round(v) for v in mark.box)
+        color = MARK_COLORS.get(mark.kind, (255, 255, 255))
+        cv2.rectangle(out, (x1, y1), (x2, y2), color, thick)
+        label = str(mark.number)
+        (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, scale, max(1, thick))
+        tx, ty = max(0, x1), max(th + base + 2, y1)
+        cv2.rectangle(out, (tx, ty - th - base - 2), (min(w - 1, tx + tw + 4), ty), color, -1)
+        cv2.putText(out, label, (tx + 2, ty - base - 1), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), max(1, thick))
+    return out
+
+
+def strip_tags(sentence: str) -> tuple[str, list[tuple[str, int]]]:
+    """The sentence without its hidden tags ("[ref 3]", "[image 2]") or stray mark numbers, and the tags found."""
+    tags = [("image" if kind.lower() in ("image", "img") else "ref", int(n)) for kind, n in TAG.findall(sentence)]
+    text = STRAY_MARK.sub("", TAG.sub("", sentence)).strip()
+    text = re.sub(r"\s+([.,!?;:])", r"\1", text)
+    return text, tags
+
+
+@dataclass(slots=True)
+class RequestPlan:
+    """One request and what its numbers mean (to act on the answer's tags)."""
+
+    request: VisionRequest
+    marks: dict[int, Mark] = field(default_factory=dict)
+    images: dict[int, Frame] = field(default_factory=dict)  # memory: image number -> frame
+    marked: np.ndarray | None = None  # the "Now" image with its numbered objects (what the model saw; debugging)
+    width: int = 0  # of the frame the marks are on
+
+
 def _side(box: tuple[float, float, float, float], width: int) -> str:
     center = (box[0] + box[2]) / 2 / max(width, 1)
     return "on the left" if center < 0.4 else "on the right" if center > 0.6 else "in the middle"
@@ -216,17 +425,36 @@ class SceneHandler:
         frames: Callable[[int, float], list[Frame]],
         extra_context: Callable[[], list[str]] | None = None,
         now: Callable[[], datetime] = datetime.now,
+        tracks: Callable[[], Sequence[Track]] | None = None,
+        memory: SceneMemory | None = None,
+        on_highlight: Callable[[int], None] | None = None,
+        on_image: Callable[[Frame], None] | None = None,
     ) -> None:
+        """`tracks`: the latest frame's tracks (people, signs to number); `memory`: for "what was that?";
+        `on_highlight(track_id)` / `on_image(frame)`: what an answer's hidden tag points at (the page shows it)."""
         self.cfg = cfg
         self.model = model
         self._frames = frames
         self._extra = extra_context
         self._now = now
+        self._tracks = tracks
+        self.memory = memory
+        self.on_highlight = on_highlight
+        self.on_image = on_image
+        self.last_plan: RequestPlan | None = None  # (debugging, the test sheet)
 
     # ---------------------------------------------------------------------------------- prompt
 
-    def build_request(self, question: str, snapshot: WorldSnapshot) -> VisionRequest:
+    def build_request(self, question: str, snapshot: WorldSnapshot, memory: bool = False) -> VisionRequest:
         """The images and text for one question."""
+        return self.plan(question, snapshot, memory).request
+
+    def plan(self, question: str, snapshot: WorldSnapshot, memory: bool = False) -> RequestPlan:
+        """The request for one question, with what its object and image numbers mean."""
+        if memory and self.memory is not None:
+            planned = self._memory_plan(question, snapshot)
+            if planned is not None:
+                return planned
         vcfg = self.cfg.vision
         about_sign = bool(SIGN_WORDS.search(question))
         spacing = vcfg.sign_frame_spacing_s if about_sign else vcfg.frame_spacing_s
@@ -239,8 +467,14 @@ class SceneHandler:
         for frame in frames[:-1]:
             age = (latest.t - frame.t) if latest is not None else 0.0
             images.append(ImagePart(encode_jpeg(frame.image, older_width, vcfg.jpeg_quality), f"{age:.1f} s ago"))
+        marks: list[Mark] = []
         if latest is not None:
-            images.append(ImagePart(encode_jpeg(latest.image, vcfg.latest_width, vcfg.jpeg_quality), "Now"))
+            now_image = latest.image
+            if vcfg.mark_objects and latest is snapshot.frame:  # (the boxes are from this very frame)
+                marks = pick_marks(snapshot, self._tracks() if self._tracks is not None else (), vcfg.max_marks)
+                if marks:
+                    now_image = draw_marks(now_image, marks)
+            images.append(ImagePart(encode_jpeg(now_image, vcfg.latest_width, vcfg.jpeg_quality), "Now"))
             if LIGHT_WORDS.search(question):
                 for box in snapshot.light.boxes[:3]:
                     crop = light_crop(latest.image, box)
@@ -254,13 +488,68 @@ class SceneHandler:
         if latest is None:
             context.append("No camera image is available right now.")
         text = "Context:\n" + "\n".join(f"- {line}" for line in context) + f"\n\nDriver's question: {question}"
-        return VisionRequest(
-            system=SYSTEM_PROMPT,
+        if marks:
+            text += "\n" + MARKS_REMINDER
+        request = VisionRequest(
+            system=SYSTEM_PROMPT + ("\n- " + MARKS_PROMPT if marks else ""),
             text=text,
             images=tuple(images),
             max_tokens=self._max_tokens(),
             temperature=vcfg.temperature,
         )
+        return RequestPlan(
+            request,
+            marks={m.number: m for m in marks},
+            marked=now_image if marks else None,
+            width=latest.width if latest is not None else 0,
+        )
+
+    def _memory_plan(self, question: str, snapshot: WorldSnapshot) -> RequestPlan | None:
+        """Sign close-ups and the last seconds of frames, numbered, plus the latest frame (None: nothing kept)."""
+        assert self.memory is not None
+        vcfg, mcfg = self.cfg.vision, self.cfg.memory
+        latest = snapshot.frame
+        now = latest.t if latest is not None else snapshot.t
+        frames = [
+            f for f in self.memory.frames(mcfg.window_s, mcfg.frames, now=now) if latest is None or f.t < latest.t
+        ]
+        signs = self.memory.signs(mcfg.sign_window_s, mcfg.signs, now)
+        if not frames and not signs:
+            return None
+        images: list[ImagePart] = []
+        numbered: dict[int, Frame] = {}
+        number = 0
+        for sign in signs:
+            number += 1
+            what = sign.kind.replace("_", " ")
+            read = f", read as {sign.text}" if sign.text else ""
+            label = f"Image {number}: close-up of a {what} we saw {now - sign.t:.0f} s ago, {sign.side}{read}"
+            images.append(ImagePart(encode_jpeg(sign.image, 512, 90), label))
+        for frame in frames:
+            number += 1
+            numbered[number] = frame
+            label = f"Image {number}: {now - frame.t:.0f} s ago"
+            images.append(ImagePart(encode_jpeg(frame.image, vcfg.older_width, vcfg.jpeg_quality), label))
+        if latest is not None:
+            number += 1
+            numbered[number] = latest
+            images.append(
+                ImagePart(encode_jpeg(latest.image, vcfg.older_width, vcfg.jpeg_quality), f"Image {number}: now")
+            )
+        when = vcfg.time_override or spoken_time(self._now())
+        context = [f"Local time: {when}.", *describe_world(snapshot)]
+        if self._extra is not None:
+            context += self._extra()
+        text = "Context:\n" + "\n".join(f"- {line}" for line in context) + f"\n\nDriver's question: {question}"
+        text += "\n" + MEMORY_REMINDER
+        request = VisionRequest(
+            system=SYSTEM_PROMPT + "\n- " + MEMORY_PROMPT,
+            text=text,
+            images=tuple(images),
+            max_tokens=self._max_tokens(),
+            temperature=vcfg.temperature,
+        )
+        return RequestPlan(request, images=numbered)
 
     def _max_tokens(self) -> int:
         by_provider = {"claude": self.cfg.vision.claude.max_tokens, "gemini": self.cfg.vision.gemini.max_tokens}
@@ -270,18 +559,56 @@ class SceneHandler:
 
     def answer(self, route: Route, snapshot: WorldSnapshot, cancel: threading.Event | None = None) -> Iterator[str]:
         """Spoken sentences, as they arrive (stops early if `cancel` is set)."""
-        request = self.build_request(route.question or route.text, snapshot)
+        planned = self.plan(route.question or route.text, snapshot, memory=route.intent == "memory")
+        self.last_plan = planned
         vcfg = self.cfg.vision
-        pieces = guarded_stream(self.model, request, vcfg.first_token_timeout_s, vcfg.total_timeout_s, cancel)
+        pieces = guarded_stream(self.model, planned.request, vcfg.first_token_timeout_s, vcfg.total_timeout_s, cancel)
         passing = bool(PASS_QUESTION.search(route.text))
-        return self._safe(sentences(pieces), strict=is_go_question(route), passing=passing)
+        return self._safe(sentences(pieces), strict=is_go_question(route), passing=passing, planned=planned)
 
-    def _safe(self, stream: Iterator[str], strict: bool, passing: bool = False) -> Iterator[str]:
-        """Safety nets on every sentence, and spoken fallbacks for failures."""
+    def _show_image(self, number: int, planned: RequestPlan) -> None:
+        """A memory answer's "[image k]": show that remembered frame."""
+        try:
+            if number in planned.images and self.on_image is not None:
+                self.on_image(planned.images[number])
+        except Exception:
+            log.exception("showing an answer's image failed", number=number)
+
+    def _highlight(self, answer: str, tagged: list[int], planned: RequestPlan) -> None:
+        """Once the answer is complete: pulse the object it is about (if we can tell which)."""
+        if not planned.marks or self.on_highlight is None:
+            return
+        try:
+            number = resolve_highlight(answer, tagged, planned.marks, planned.width)
+            log.info("answer highlight", tagged=tagged, chosen=number)
+            if number is not None:
+                track_id = planned.marks[number].track_id
+                if track_id is not None:
+                    self.on_highlight(track_id)
+        except Exception:
+            log.exception("highlight failed")
+
+    def _safe(
+        self, stream: Iterator[str], strict: bool, passing: bool = False, planned: RequestPlan | None = None
+    ) -> Iterator[str]:
+        """Safety nets on every sentence, hidden tags taken out, and spoken fallbacks for failures."""
         said = False
         no_vouch_said = False
+        shown = False
+        spoken: list[str] = []
+        tagged: list[int] = []
         try:
-            for sentence in stream:
+            for raw in stream:
+                sentence, tags = strip_tags(raw)
+                for kind, number in tags:
+                    if kind == "ref":
+                        tagged.append(number)
+                    elif planned is not None and not shown:
+                        self._show_image(number, planned)
+                        shown = True
+                if not sentence or not re.search(r"\w", sentence):
+                    continue
+                spoken.append(sentence)
                 if passing and SCHOOL_BUS.search(sentence):
                     # "Should I go around them?" with a school bus in view: the rule, not the model's judgment.
                     log.warning("school bus in a passing answer: replaced by the rule", sentence=sentence)
@@ -303,6 +630,8 @@ class SceneHandler:
             else:
                 yield FALLBACK_TIMEOUT if isinstance(exc, VisionTimeout) else FALLBACK_ERROR
             return
+        if planned is not None and spoken:
+            self._highlight(" ".join(spoken), tagged, planned)
         if not said:
             log.warning("vision answer was empty")
             yield FALLBACK_EMPTY

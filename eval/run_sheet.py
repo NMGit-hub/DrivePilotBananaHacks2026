@@ -37,6 +37,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import cv2
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -51,6 +53,7 @@ from core.runlog import RunRecorder  # noqa: E402
 from perception.detector import Detector  # noqa: E402
 from perception.ego_motion import EgoMotionEstimator  # noqa: E402
 from perception.pipeline import PerceptionResult, PerceptionWorker  # noqa: E402
+from state.memory import SceneMemory  # noqa: E402
 from state.world import WorldState  # noqa: E402
 
 log = get_logger("eval.sheet")
@@ -100,6 +103,7 @@ class Row:
     judge: str = ""
     judge_reason: str = ""
     manual: str = ""
+    tag: str = ""  # V2-M4: what the answer's hidden tag pointed at ("track 12", "image at 8.0 s")
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -209,18 +213,38 @@ def run_clip(
     vision: VisionModel | None,
     tts: Any,
     voice: SpokenQuestions | None,
+    out_dir: Path | None = None,
 ) -> None:
-    """Play the clip frame by frame and answer its rows at their times."""
+    """Play the clip frame by frame and answer its rows at their times (`out_dir`: where to save the marked
+    image of answers that pointed at an object)."""
     speaker = TextSpeaker()
     world_holder: list[WorldState] = []
-    scene = SceneHandler(cfg, vision, lambda n, s: world_holder[0].recent_frames(n, s)) if vision else None
+    memory = SceneMemory(cfg.memory)  # as in the app: "what was that sign?" and numbered objects
+    latest_tracks: list[Any] = [()]
+    tags: list[str] = []
+    scene = (
+        SceneHandler(
+            cfg,
+            vision,
+            lambda n, s: world_holder[0].recent_frames(n, s),
+            tracks=lambda: latest_tracks[0],
+            memory=memory,
+            on_highlight=lambda track_id: tags.append(f"track {track_id}"),
+            on_image=lambda frame: tags.append(f"image at {frame.t:.1f} s"),
+        )
+        if vision
+        else None
+    )
     assistant = Assistant(cfg, lambda: world_holder[0].snapshot(), speaker, model=scene)
+    assistant.on_highlight = lambda track_id: tags.append(f"track {track_id}")
     world = WorldState(cfg, on_event=assistant.on_world_event)
     world_holder.append(world)
     pending = sorted(rows, key=lambda r: r.time_s)
 
     def on_result(result: PerceptionResult) -> None:
         world.on_perception(result)
+        latest_tracks[0] = tuple(result.tracks)
+        memory.add(result.frame, result.tracks)
         while pending and result.frame.t >= pending[0].time_s:
             ask(pending.pop(0))
 
@@ -234,8 +258,23 @@ def run_clip(
                 return
             text = heard
         said_before = len(speaker.said)
+        tags.clear()
+        if scene is not None:
+            scene.last_plan = None
         reply = assistant.ask(text)
         row.answer, row.source = reply.text, reply.source
+        plan = scene.last_plan if scene is not None else None
+        if plan is not None:  # which number the model gave, to check it on the marked image
+            numbers = {m.track_id: m.number for m in plan.marks.values()}
+            tags[:] = [
+                f"{tag} (#{numbers[int(tag.split()[1])]})"
+                if tag.startswith("track ") and int(tag.split()[1]) in numbers
+                else tag
+                for tag in tags
+            ]
+        row.tag = "; ".join(tags)
+        if tags and plan is not None and plan.marked is not None and out_dir is not None:
+            cv2.imwrite(str(out_dir / f"row{row.index:02d}_marked.jpg"), plan.marked)  # (to check the tag)
         row.route = f"{reply.route.kind.value}/{reply.route.intent}"
         row.answer_ms = None if reply.first_ms is None else round(reply.first_ms, 1)
         first = next((u.text for u in speaker.said[said_before:] if u.kind == "answer"), None)
@@ -358,7 +397,7 @@ def write_outputs(folder: Path, rows: list[Row], summary: dict[str, Any], meta: 
     columns = [
         "index", "clip", "time_s", "type", "question", "heard", "expected", "answer", "source", "route",
         "alert_at", "alert_said_at", "answer_ms", "tts_ms", "answer_s", "endpoint_s", "stt_wait_s", "first_word_s",
-        "judge", "judge_reason", "manual", "verdict", "notes",
+        "judge", "judge_reason", "manual", "verdict", "tag", "notes",
     ]  # fmt: skip
     with (folder / "results.csv").open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
@@ -443,7 +482,7 @@ def main(argv: list[str] | None = None) -> int:
         for name, clip_rows in clips.items():
             path = find_clip(name)
             print(f"{path.name}: {len(clip_rows)} question(s)", flush=True)
-            run_clip(cfg, path, clip_rows, detector, vision, tts, voice)
+            run_clip(cfg, path, clip_rows, detector, vision, tts, voice, out_dir=recorder.dir)
         judge_model = None if args.no_judge else vision
         for row in rows:
             judge(judge_model, row, cfg.vision.temperature)

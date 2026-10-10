@@ -4,7 +4,44 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
-### V2 (in progress, 2026-10-10): 5A, V2-M0 done; V2-M1 parking part 1 built (not yet run on real footage)
+### V2 (in progress, 2026-10-10): 5A, V2-M0 done; V2-M1 parking measured (below the bar); V2-M2, M4 built
+- **V2-M1 parking on real footage** (`scripts/cache_perception.py` caches tracks + ego motion per clip once;
+  `scripts/eval_parking.py` replays `ParkingTracker` with GPS speed and scores it against `eval/parking_labels.yaml`,
+  `--sweep` for tuning). First run: 0 spot events. Fixed: the self-measured scale ran to its 2.5x clamp in sparse lots
+  (gaps taken for the pitch; now only spacings near the prior count, scale kept to 0.75-1.35), our hood and cut-off
+  boxes gave positions (now none at the bottom edge, at the side only while the nearest corner is in view), our speed
+  comes from GPS when there's a fix (`WorldState(speed_source=...)`, wired in the app), "looks like a lot" holds 5 s
+  (it flapped), pull-outs must move >= 0.8 m from a row toward our path with our own turn subtracted. **Result on
+  the 28 usable clips (30 clear unrestricted spots, 13.5 min of lot driving): recall 1/30, 0.7 false spots per
+  10 min, lot offer in 15/25 lot clips (7 outside lot windows, which the model check gates), parked 4/5 (1 false),
+  pull-outs 1 false.** The plan's bar (>= 70 %, <= 1 false / 10 min) is not met on recall. Why (measured): most
+  labeled spots pass at 6-13 m/s (13-30 mph, well above a parking-search crawl), and the tracker almost never sees
+  parked cars in a row on the spot's side (median 0: YOLO tracks churn on half-hidden cars at the frame edges; the
+  per-clip camera scale differs 0.4-2.9x from GPS); loosening the thresholds (`--sweep`) adds false spots, not
+  recall. Labels spot-checked on 6 full-resolution frames: the spots are real. **Alternative measured** (V2_BUILD_PLAN
+  asked for it), a periodic Claude Haiku scan (`eval/parking_scan.py`, `scripts/eval_parking_scan.py`, by a
+  subagent, ~2,400 calls, ~$7): best 47 % recall at 26.6 false / 10 min, handicap stalls announced as open 3 times;
+  Sonnet 4.6: 20 % at 1.9. Not shipped. The geometry + per-candidate model check stays: rare but precise.
+- **V2-M2 overlay page** (`ui/overlay.py`, `ui/static/v2.html`, `ui.overlays`): each frame and its overlay packet go
+  in one binary WebSocket message (built on the world thread right after that frame's update, so they can't drift);
+  4-way badges with timers (next car amber, YOU badge green on our turn), people amber, the light's state, parked
+  cars gray, open spots green while the parking watch is on, the hood filtered out; HUD with the nav banner and
+  Mapbox lanes, GPS speed and a roundabout diagram. Checked in the browser (SF red-light clip): sampled canvas
+  pixels at every box edge carry the stroke color; page 21-23 fps, ~85 ms from capture to screen while the GPU was
+  shared with the sign fine-tune; perception 29.6 fps. V1 page at /v1.
+- **V2-M4 memory and answer highlight:** `state/memory.py` keeps a frame a second for 60 s and the best close-up of
+  each sign seen (stop signs now; the V2-M6 detector adds its kinds with their reading); a MEMORY route ("what was
+  that sign?", "what did we just pass?", "...back there") sends 5 frames over the last 15 s plus up to 4 sign
+  close-ups, numbered; an answer's hidden "[image k]" shows that frame as a thumbnail on the page. Model answers
+  get the tracked objects numbered on the latest frame (`vision.mark_objects`); the hidden "[ref N]" is kept only
+  if it fits what the answer names (class, color, side; a tag on a far-off object yields to a much bigger one that
+  fits; quoted sign text names nothing), else the one object matching the description, else nothing; right-of-way
+  answers pulse the car that goes next. Tags and stray mark numbers are stripped before speech (tests). **Measured
+  live (Claude Haiku):** full sheet 22 right / 3 partly / 4 wrong of 29 (before: 23 / 3 / 3; the changed rows are
+  the lane count and a distant sign, both flaky before), model answer median ~1.0 s (unchanged); highlights on the
+  7 object rows all right after two fixes (3 pulse the right object: person crossing, bus, school bus; 4 correctly
+  none: sign, building, construction, road); first try had 1 of 3 right (a person tagged for "the bus"). The memory
+  row ("what did that yellow sign say?") stays partly right (reads "SCHOOL ... AHEAD"). 986 tests pass.
 - **5A (BDD100K GPS):** `nav/bdd_info.py` + `scripts/bdd_info_to_gpx.py` read `data/bdd100k/bdd100k_info.zip` without
   unpacking (fields checked on real files and a 3,000-file survey: -1 = unknown speed/course, bad accuracy, repeated
   timestamps, gaps up to 23 s), write GPX 1.0 with a `video_start` waypoint; `GpxReplay` aligns on it, never
@@ -364,11 +401,12 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
-- **The parking feature has not been run on real footage yet** (only simulated lots): next step, scored against
-  `eval/parking_labels.yaml` (HANDOFF.md section 2). Street mode is untested; `config.yaml` has no `parking:`
-  section yet (defaults live in `core/config.py`); no overlay yet. On a ~60° camera (BDD100K) a spot is confirmed
-  only ~6 m ahead, because it must be seen 1 m deep past its neighbour (the hidden-small-car rule); the lot offer
-  needs the vision model.
+- **"Find me a parking spot" finds few spots on real footage: 1 of 30 labeled clear spots on BDD100K lots** (0.7
+  false per 10 min; plan bar >= 70 % recall). Precise but rarely fires; a Claude Haiku scan was measured instead and
+  is far worse on false alarms (see Done, V2-M1). Causes: fast through-aisle driving in the clips, parked rows not
+  formed from churning edge tracks, unknown BDD camera scales. Our own lot footage with the phone (114°, known
+  mount) is needed to tune it; street mode is untested; the lot offer needs the vision model. On a ~60° camera a
+  spot is confirmed only ~6 m ahead (the hidden-small-car rule).
 - **A looping clip played with its own GPX gets GPS only on its first pass** (the clock runs on across passes so a
   long simulated drive plays to its end).
 - PLAN.md was deleted from the working tree by an unknown process on 2026-10-10 (not the user, not this session);

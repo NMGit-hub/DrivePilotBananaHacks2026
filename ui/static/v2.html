@@ -74,6 +74,8 @@
   .alert { background: var(--alert-bg); border-left: 3px solid var(--alert); padding: 8px 10px; border-radius: 4px; }
   .alert .text { color: var(--alert); font-weight: 600; }
   .note { color: var(--muted); font-style: italic; font-size: 14px; }
+  .thumb { display: block; width: 100%; max-width: 320px; margin-top: 6px; border-radius: 6px;
+    border: 1px solid var(--line); }
   .t { color: var(--muted); font-size: 11px; margin-left: 6px; text-transform: none; letter-spacing: 0; }
   form { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
   input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line);
@@ -186,7 +188,19 @@ function show(m) {
     case "nothing": listening.classList.remove("on"); break;
     case "stopped": answerBlock = null; break;
     case "note": note(m.text); break;
+    case "thumbnail": thumbnail(m); break;
   }
+}
+
+function thumbnail(m) { // the remembered frame an answer came from
+  const img = document.createElement("img");
+  img.className = "thumb";
+  img.alt = `What I answered from (${clock(m.t)})`;
+  img.src = `/api/image/${encodeURIComponent(m.image)}`;
+  img.onerror = () => img.remove(); // (old thumbnails are dropped by the app)
+  const host = answerBlock ? answerBlock.parentElement : feed.lastElementChild;
+  (host || feed).appendChild(img);
+  feed.scrollTop = feed.scrollHeight;
 }
 
 function escapeHtml(text) {

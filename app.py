@@ -38,7 +38,7 @@ from answers.alerts import LIGHT_GREEN, YOUR_TURN
 from answers.assistant import CAMERA_LOST, Assistant
 from answers.lanes import VisionLaneReader
 from answers.parking import ParkingWatch
-from answers.scene import SceneHandler
+from answers.scene import SceneHandler, encode_jpeg
 from answers.speech import Priority, Speaker, TextSpeaker, Utterance
 from answers.vision import VisionModel
 from capture.base import VideoSource
@@ -51,10 +51,11 @@ from nav.gps import GpsFix, GpsSource, PhoneGps
 from nav.handler import FIXED_ALERTS, NavHandler
 from nav.mapbox import RoutingClient
 from nav.phrasing import in_distance, maneuver_phrase
-from perception.detector import Detector
+from perception.detector import Detector, Track
 from perception.ego_motion import EgoMotionEstimator
 from perception.gpu_monitor import GpuMonitor
 from perception.pipeline import AsyncListener, PerceptionResult, PerceptionWorker
+from state.memory import SceneMemory
 from state.world import WorldEvent, WorldSnapshot, WorldState
 from ui.hub import UiHub
 from ui.overlay import frame_packet, hud_packet
@@ -204,6 +205,10 @@ class DrivePilotApp:
         self._started_at: float | None = None
 
         self.world = WorldState(cfg, on_event=self._on_world_event, speed_source=self._gps_speed_at)
+        self.memory = SceneMemory(cfg.memory)  # V2: "what was that sign?"
+        self._latest_tracks: Sequence[Track] = ()
+        self._highlight: tuple[int, float] | None = None  # (track id, until perf_counter): pulsed on the page
+        self._image_ids = itertools.count(1)
         self._world_thread = AsyncListener(self._world_update, name="world", max_pending=2)
         self.screen = ScreenSpeaker(speaker, self.latency, hub, recorder)
         self.nav: NavHandler | None = None
@@ -215,13 +220,23 @@ class DrivePilotApp:
             )
             self.nav = NavHandler(cfg.nav, routing, self.gps_fix, self._on_nav_alert, lane_reader)
         self.scene = (
-            SceneHandler(cfg, vision, self._model_frames, self.nav.extra_context if self.nav else None)
+            SceneHandler(
+                cfg,
+                vision,
+                self._model_frames,
+                self.nav.extra_context if self.nav else None,
+                tracks=lambda: self._latest_tracks,
+                memory=self.memory,
+                on_highlight=self.highlight,
+                on_image=self._show_image,
+            )
             if vision is not None
             else None
         )
         self.assistant = Assistant(
             cfg, self._snapshot, self.screen, nav=self.nav, model=self.scene, unavailable=self._unavailable
         )
+        self.assistant.on_highlight = self.highlight
         self.parking = ParkingWatch(  # V2: "find me a parking spot"
             cfg.parking,
             cfg.vision,
@@ -309,8 +324,16 @@ class DrivePilotApp:
         page, hand the frame to the screen with the overlay built from this very update."""
         with self.latency.detection(result.frame.captured_at):
             self.world.on_perception(result)
+        self._latest_tracks = tuple(result.tracks)
+        try:
+            if result.new_segment:
+                self.memory.reset()
+            self.memory.add(result.frame, result.tracks)
+        except Exception:
+            log.exception("scene memory failed")
         if self.hub is not None and self.cfg.ui.overlays:
             frame = result.frame
+            highlight = self._highlight
             try:
                 overlay = frame_packet(
                     self.world.snapshot(),
@@ -318,6 +341,7 @@ class DrivePilotApp:
                     frame.width,
                     frame.height,
                     parking_active=self.parking.active,
+                    highlight=highlight[0] if highlight is not None and time.perf_counter() < highlight[1] else None,
                 )
             except Exception:
                 log.exception("overlay failed")
@@ -551,6 +575,20 @@ class DrivePilotApp:
             hud=self._hud(),
             **self.status,
         )
+
+    def highlight(self, track_id: int) -> None:
+        """Pulse a tracked object on the page for `ui.highlight_s` (an answer is about it)."""
+        self._highlight = (track_id, time.perf_counter() + self.cfg.ui.highlight_s)
+        if self.recorder is not None:
+            self.recorder.event("highlight", t=self.media_time(), track_id=track_id)
+
+    def _show_image(self, frame: Frame) -> None:
+        """A remembered frame an answer came from: shown on the page as a thumbnail."""
+        if self.hub is None:
+            return
+        image_id = next(self._image_ids)
+        self.hub.put_image(image_id, encode_jpeg(frame.image, 480, 80))
+        self.hub.publish("thumbnail", image=image_id, t=round(frame.t, 1))
 
     def _hud(self) -> dict[str, Any] | None:
         """The V2 page's banner, speed and roundabout diagram."""

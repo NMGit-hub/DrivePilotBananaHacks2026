@@ -36,6 +36,7 @@ log = get_logger(__name__)
 PAGE_QUEUE = 500  # messages buffered per open page before the oldest are dropped
 CLOSE = "_close"  # internal: the server closes the page's WebSocket
 MAGIC = b"DPV1"  # the frame + overlay messages of the V2 page start with this
+IMAGES = 30  # thumbnails kept for the page
 
 
 def frame_message(header: dict[str, Any], jpeg: bytes) -> bytes:
@@ -68,6 +69,7 @@ class UiHub:
         self._lock = threading.Lock()
         self._history: deque[dict[str, Any]] = deque(maxlen=history)
         self._status: dict[str, Any] = {}
+        self._images: dict[int, bytes] = {}  # thumbnails shown in the conversation (newest IMAGES kept)
         self._ids = itertools.count(1)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._pages: set[asyncio.Queue[dict[str, Any]]] = set()
@@ -178,6 +180,18 @@ class UiHub:
         with self._lock:
             self._status = message
             self._push_locked(message)
+
+    def put_image(self, image_id: int, jpeg: bytes) -> None:
+        """Keep a JPEG the page can show by id (memory thumbnails); only the newest `IMAGES` are kept."""
+        with self._lock:
+            self._images[image_id] = jpeg
+            while len(self._images) > IMAGES:
+                del self._images[min(self._images)]
+
+    def image(self, image_id: int) -> bytes | None:
+        """A kept JPEG, or None."""
+        with self._lock:
+            return self._images.get(image_id)
 
     def history(self) -> list[dict[str, Any]]:
         """The conversation so far (oldest first)."""

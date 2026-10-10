@@ -9,6 +9,7 @@
     POST /api/ask     {"text": ...}: a typed question (hotkey Q)
     POST /api/control {"action": "pause"} | {"action": "seek", "delta_s": ±5}: replay hotkeys
     POST /api/gps     {"lat", "lon", "speed", "heading", "accuracy"}: a phone fix
+    GET  /api/image/N a memory thumbnail an answer came from (JPEG)
     GET  /api/state   history + status (debugging, tests)
 
 The server listens on `ui.host` (127.0.0.1 by default); the phone reaches it over USB with
@@ -29,7 +30,7 @@ from typing import Literal, Protocol
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -230,6 +231,13 @@ def create_server(hub: UiHub, actions: UiActions, hosts: Sequence[str] = LOCAL_H
     async def gps(body: GpsBody) -> JSONResponse:
         used = actions.gps_fix(body.lat, body.lon, body.speed, body.heading, body.accuracy)
         return JSONResponse({"ok": used})
+
+    @app.get("/api/image/{image_id}")
+    async def image(image_id: int) -> Response:
+        jpeg = hub.image(image_id)
+        if jpeg is None:
+            raise HTTPException(status_code=404, detail="no such image")
+        return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.get("/api/state")
     async def state() -> JSONResponse:

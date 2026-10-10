@@ -446,6 +446,21 @@ class ParkingConfig(_Strict):
     max_checks_per_min: int = Field(20, ge=1, description="Vision-model checks of candidate spots, at most.")
 
 
+class MemoryConfig(_Strict):
+    """Scene memory for "what was that sign?" (state/memory.py, V2-M4)."""
+
+    keep_s: float = Field(60.0, gt=0.0, description="Frames and sign close-ups are kept this long.")
+    spacing_s: float = Field(1.0, gt=0.0, description="One remembered frame every this many seconds.")
+    width: int = Field(960, ge=160, description="Remembered frames are kept at most this wide.")
+    window_s: float = Field(15.0, gt=0.0, description="A memory question looks this far back...")
+    frames: int = Field(5, ge=1, le=8, description="...in this many frames spread over the window...")
+    signs: int = Field(4, ge=0, le=8, description="...plus close-ups of the most recent signs seen.")
+    sign_window_s: float = Field(45.0, gt=0.0, description="Signs seen this recently are sent.")
+    sign_classes: list[str] = Field(default_factory=lambda: ["stop sign"], description="Detector classes kept.")
+    sign_min_conf: float = Field(0.4, ge=0.0, le=1.0)
+    sign_min_px: float = Field(12.0, ge=0.0, description="Smaller sign boxes are too small to read: not kept.")
+
+
 # ------------------------------------------------------------------------------------------- vision
 
 
@@ -482,6 +497,10 @@ class VisionConfig(_Strict):
     latest_width: int = Field(1280, ge=320, description="The latest frame is sent at up to this width...")
     older_width: int = Field(640, ge=160, description="...earlier frames smaller (motion, things just passed).")
     jpeg_quality: int = Field(80, ge=30, le=100)
+    mark_objects: bool = Field(
+        True, description="Number the tracked objects on the latest frame so an answer can say which one it means."
+    )
+    max_marks: int = Field(12, ge=0, le=30, description="At most this many objects are numbered (nearest first).")
     first_token_timeout_s: float = Field(3.0, gt=0.0, description="No text by then: spoken fallback.")
     total_timeout_s: float = Field(8.0, gt=0.0, description="The whole answer must arrive by then.")
     time_override: str | None = Field(
@@ -591,6 +610,7 @@ class UiConfig(_Strict):
     overlays: bool = Field(True, description="V2 page: overlays drawn on the video (false: the plain V1 page).")
     video_width: int = Field(960, gt=0, description="Frames are scaled to this width for the page.")
     video_fps: float = Field(30.0, gt=0.0, description="At most this many frames a second go to the page.")
+    highlight_s: float = Field(2.0, gt=0.0, description="The object an answer is about pulses this long.")
 
 
 class LoggingConfig(_Strict):
@@ -642,6 +662,7 @@ class AppConfig(_Strict):
     traffic_light: TrafficLightConfig = TrafficLightConfig()
     alerts: AlertsConfig = AlertsConfig()
     parking: ParkingConfig = ParkingConfig()
+    memory: MemoryConfig = MemoryConfig()
 
     @property
     def effective_hfov_deg(self) -> float:

@@ -499,6 +499,25 @@ _LANE = _rx(
 )
 
 
+# ------------------------------------------------------------------------------------------------ memory
+
+# "What was that sign?": something we already passed (V2-M4). The vision model gets the last seconds of frames
+# and the close-ups of the signs seen (intent "memory"); "what does that sign say?" (in view now) stays a scene
+# question.
+_PASSED = r"(?:passed|pass|went past|drove past|drove by|went by|go past|go by)"
+_MEMORY = _rx(
+    r"\bwhat (?:was|were) (?:that|those|the|this|these) (?:last |previous )?(?:\w+ ){0,2}?(?:signs?|board|billboard)\b",
+    r"\bwhat did (?:that|the|this|those|these) (?:last |previous )?(?:\w+ ){0,2}?(?:signs?|board|billboard) "
+    r"(?:back there |we passed |we just passed )?(?:say|said|read|mean)\b",
+    r"\bwhat (?:was|did|were) (?:that|it|those|we)\b.*\b(?:just )?" + _PASSED + r"\b",
+    rf"\b(?:we|i) (?:just )?{_PASSED}\b.*\b(?:what|which|was|did)\b",
+    rf"\b(?:what|which) (?:\w+ ){{0,3}}(?:did )?(?:we|i) (?:just )?{_PASSED}\b",
+    r"\bback there\b",
+    r"^(?:what was that|what were those|what was it)$",
+    r"\bdid you (?:see|catch|read) (?:that|the|what|those)\b",
+    r"\bwhat was the (?:speed limit|limit|name of (?:that|the) \w+)\b",
+)
+
 _LEADING_CLAUSE = re.compile(r"^[^.,!?;:]*[.,!?;:]+\s*")
 MAX_DROPPED_CLAUSES = 3
 
@@ -586,4 +605,6 @@ def _route_once(text: str) -> Route:
         if pattern.search(norm):
             return make(RouteKind.NAV, intent)
 
+    if _MEMORY.search(norm):
+        return make(RouteKind.MODEL, "memory")
     return make(RouteKind.MODEL, "scene")

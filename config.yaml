@@ -113,7 +113,33 @@ alerts:                     # spoken on their own: "You're up, check and go." / 
   cooldown_s: 15.0          # never the same alert twice within this time (once per event)
   watch_timeout_s: 300.0    # "tell me when it's green" requests expire after 5 minutes
 
-vision_model: claude        # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
+parking:                    # V2 "find me a parking spot" (state/parking.py geometry, answers/parking.py the watch)
+  camera_height_m: 1.3      # windshield mount
+  lot_pitch_m: 2.7          # stall spacing prior (the row's own spacing is measured)
+  curb_pitch_m: 6.0         # parallel-parked spacing (street mode)
+  scale_min: 0.75           # the field of view is trusted to within this range (measured from the stall pitch)
+  scale_max: 1.35
+  gap_ratio: 1.7            # spacing (in pitches) between parked cars that leaves a space
+  min_visible_depth_m: 1.0  # a space is reported only once we see this deep into it past its nearer neighbour
+  confirm_s: 0.7            # ...after it looked open this long while we approach
+  min_parked_s: 0.5
+  pull_out_min_m: 0.8       # "a car is pulling out": a parked car in a row moved this far toward our path
+  lot_min_parked: 6         # parked cars seen in rows while we crawl: "looks like a parking lot" (offer, if
+  lot_max_speed_mps: 4.5    #   the vision model agrees); ~10 mph: faster isn't looking for a spot
+  parked_after_s: 10.0      # we've parked: stopped this long after a turn of parked_turn_deg (the watch ends)
+  parked_turn_deg: 50.0
+  watch_timeout_s: 300.0    # the user: stop looking after 5 minutes
+  reply_window_s: 5.0       # after the lot offer, listen this long for a plain yes/no (no wake word)
+  max_checks_per_min: 20    # vision-model checks of candidate spots
+
+memory:                     # V2 "what was that sign?" (state/memory.py)
+  keep_s: 60.0              # a frame a second and a close-up of each sign seen, for the last minute
+  spacing_s: 1.0
+  window_s: 15.0            # a memory question sends this many seconds of frames...
+  frames: 5
+  signs: 4                  # ...plus the most recent sign close-ups
+
+vision_model: claude       # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
 vision:
   frames: 3                 # latest frame at full width + 2 earlier, smaller ones (motion, things just passed)
   frame_spacing_s: 0.7
@@ -121,6 +147,8 @@ vision:
   latest_width: 1280
   older_width: 640
   jpeg_quality: 80
+  mark_objects: true        # V2: number the tracked objects on the latest frame; the answer's hidden [ref N]
+  max_marks: 12             #   tag (checked against what the answer names) pulses that object on the page
   first_token_timeout_s: 3.0  # no words by then: a spoken "sorry" (PLAN target: answer audio within 2.5 s)
   total_timeout_s: 8.0
   time_override: null       # e.g. "Saturday 17:40" for replays and the test sheet (default: the real clock)
@@ -173,6 +201,9 @@ voice:
 ui:
   host: 127.0.0.1
   port: 8000
+  overlays: true            # V2 page (boxes, badges, banner); false = the plain V1 page (also at /v1)
+  video_fps: 30.0
+  highlight_s: 2.0          # the object an answer is about pulses this long
 
 logging:
   level: INFO
