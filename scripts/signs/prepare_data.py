@@ -52,6 +52,7 @@ LABELS = DATA / "bdd_labels"
 DET_OUT = DATA / "det"
 CLS_OUT = DATA / "cls"
 TILE = 640
+VAL_FRAC = 0.06  # BDD train images held out (by a stable hash of the id) for val and threshold tuning
 HARDNEG_DET = DATA / "hardneg_det.txt"  # scripts/signs/mine_det_negatives.py
 WIDTH = 1280  # frames are resized to this width (the app's detector input), never upscaled
 MASK_KINDS = frozenset({"unclear"})
@@ -538,26 +539,30 @@ def _real_crops(samples: list[Sample], copies: int, seed: int, min_h: float) -> 
                 continue
             # A speed limit whose number nobody could read is a reject crop: the classifier must learn to say so.
             label = b.cls_label or (value_class(b.value) if b.kind in VALUE_KINDS else "none")
-            for _ in range(copies if label != "none" else 1):
+            copies_here = copies if label != "none" else 1
+            if label == "none" and b.value is not None:
+                label = f"none@{b.value}"  # reject crop of a real limit: its value is kept in the file name
+            for _ in range(copies_here):
                 crop = jitter_crop(img, b.xyxy, rng)
                 if crop is not None:
                     yield label, crop
 
 
 def _bdd_other_crops(split: str, limit: int, seed: int) -> Iterator[tuple[str, np.ndarray]]:
-    """Reject-class crops: BDD signs labeled other/not_a_sign (train split only)."""
-    path = LABELS / f"{split}.jsonl"
-    if not path.exists():
-        return
-    recs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-    recs = [r for r in recs if r["kind"] in ("other", "not_a_sign") and r["box"][3] - r["box"][1] >= 14]
+    """Reject-class crops: BDD signs labeled other/not_a_sign (train split, outside the held-out val fraction)."""
+    banned = dev_clip_ids()
+    recs = [
+        r
+        for r in read_labels(split)
+        if r["kind"] in ("other", "not_a_sign")
+        and r["box"][3] - r["box"][1] >= 14
+        and Path(r["image"]).stem not in banned
+        and stable_frac(Path(r["image"]).stem) >= VAL_FRAC
+    ]
     random.Random(seed).shuffle(recs)
     rng = np.random.default_rng(seed)
-    banned = dev_clip_ids()
     for r in recs[:limit]:
         image = BDD_IMAGES / r["image"]
-        if image.stem in banned:
-            continue
         img = cv2.imread(str(image))
         crop = None if img is None else jitter_crop(img, tuple(r["box"]), rng)
         if crop is not None:
@@ -574,6 +579,8 @@ def _hard_negative_crops(copies: int, seed: int) -> Iterator[tuple[str, np.ndarr
     rng = np.random.default_rng(seed)
     for line in HARDNEG.read_text(encoding="utf-8").splitlines():
         r = json.loads(line)
+        if stable_frac(Path(r["image"]).stem) < VAL_FRAC:
+            continue  # held out for validation / threshold tuning
         img = cv2.imread(str(BDD_IMAGES / r["image"]))
         if img is None:
             continue
@@ -631,9 +638,12 @@ def build_cls(args: argparse.Namespace) -> None:
     counts: dict[str, Counter] = {"train": Counter(), "val": Counter()}
 
     def save(split: str, items: Iterator[tuple[str, np.ndarray]] | list[tuple[str, np.ndarray]], tag: str) -> None:
-        for label, crop in items:
+        for full_label, crop in items:
+            # "none@30": a reject crop of a real 30 mph sign nobody could read; evaluation knows its true value.
+            label, _, true_value = full_label.partition("@")
             n = counts[split][label]
-            cv2.imwrite(str(CLS_OUT / split / label / f"{tag}_{n:06d}.png"), crop)
+            suffix = f"_true{true_value}" if true_value else ""
+            cv2.imwrite(str(CLS_OUT / split / label / f"{tag}_{n:06d}{suffix}.png"), crop)
             counts[split][label] += 1
 
     pos, _neg = bdd_samples("train")
@@ -670,7 +680,7 @@ def main(argv: list[str] | None = None) -> int:
     """Build one dataset."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("what", choices=["det", "cls"])
-    p.add_argument("--val-frac", type=float, default=0.06, help="fraction of BDD train images held out for val")
+    p.add_argument("--val-frac", type=float, default=VAL_FRAC, help="fraction of BDD train images held out for val")
     p.add_argument("--neg-ratio", type=float, default=0.3, help="BDD images without our signs, per positive image")
     p.add_argument("--synth", type=int, default=3000, help="synthetic composite frames")
     p.add_argument("--synth-per-value", type=int, default=1200)

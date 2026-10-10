@@ -81,7 +81,9 @@ def main(argv: list[str] | None = None) -> int:
                 img = cv2.imread(str(f))
                 if img is not None:
                     val_crops.append(img)
-                    val_truth.append(parse_value_class(d.name))
+                    # "..._true30.png": a real 30 mph sign trained as "none" (unreadable): reading 30 is right
+                    true = f.stem.rpartition("_true")[2] if "_true" in f.stem else None
+                    val_truth.append(int(true) if true else parse_value_class(d.name))
     val_rows = sweep(classify(model, val_crops, s.classifier_imgsz), val_truth)
     safe = [r["threshold"] for r in val_rows if r["wrong"] == 0]
     chosen = min(safe) if safe else max(THRESHOLDS)

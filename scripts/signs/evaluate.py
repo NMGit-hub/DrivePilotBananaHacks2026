@@ -2,6 +2,7 @@
 
     .venv/Scripts/python scripts/signs/evaluate.py bdd          # hand-checked BDD100K held-out set
     .venv/Scripts/python scripts/signs/evaluate.py public       # ctacke "val" split (public, US dashcam)
+    .venv/Scripts/python scripts/signs/evaluate.py tune         # BDD train hold-out (pseudo-labels): for thresholds
     .venv/Scripts/python scripts/signs/evaluate.py all --write-metrics
 
 Every frame goes through SignDetector.detect() at a low detection threshold (0.05) with the value classifier
@@ -269,6 +270,25 @@ def bdd_items(audit: bool = True) -> list[tuple[str, Path, list[Gt], list[Any]]]
     return items
 
 
+def tune_items() -> list[tuple[str, Path, list[Gt], list[Any]]]:
+    """BDD100K *train*-split frames held out from training (prepare_data's val split), with pseudo-labels.
+
+    For choosing thresholds end to end (detector false alarms reach the classifier too) without touching the
+    hand-checked held-out set. Pseudo-labels: speed values are Claude's readings, so "readable" = it read one.
+    """
+    from scripts.signs.prepare_data import VAL_FRAC, bdd_samples, stable_frac
+
+    pos, neg = bdd_samples("train")
+    items: list[tuple[str, Path, list[Gt], list[Any]]] = []
+    for s in pos + neg:
+        if stable_frac(s.image.stem) >= VAL_FRAC:
+            continue
+        gts = [Gt(b.xyxy, b.kind, b.value, b.value is not None) for b in s.boxes if b.kind is not None]
+        ignore = [b.xyxy for b in s.boxes if b.kind is None]
+        items.append((s.image.name, s.image, gts, ignore))
+    return items
+
+
 def public_items() -> list[tuple[str, Path, list[Gt], list[Any]]]:
     """ctacke "val" (public, 1920x1080): its speed-limit boxes with the re-read checks of verify_ctacke.py.
 
@@ -288,15 +308,15 @@ def public_items() -> list[tuple[str, Path, list[Gt], list[Any]]]:
 def main(argv: list[str] | None = None) -> int:
     """Run the chosen evaluations and print (optionally save) the metrics."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("which", choices=["bdd", "public", "all"])
+    p.add_argument("which", choices=["bdd", "public", "tune", "all"])
     p.add_argument("--write-metrics", action="store_true", help=f"save to {METRICS.relative_to(REPO_ROOT)}")
     p.add_argument("--set", action="append", default=[], help="config override, e.g. signs.engine=pytorch")
     p.add_argument("--no-audit", action="store_true", help="BDD held-out labels without the detection-triggered audit")
     args = p.parse_args(argv)
     cfg = load_config(overrides=args.set).signs
     out: dict[str, Any] = {"config": cfg.model_dump(mode="json")}
-    sets = {"bdd": lambda: bdd_items(audit=not args.no_audit), "public": public_items}
-    for name in ["bdd", "public"] if args.which == "all" else [args.which]:
+    sets = {"bdd": lambda: bdd_items(audit=not args.no_audit), "public": public_items, "tune": tune_items}
+    for name in ["bdd", "public", "tune"] if args.which == "all" else [args.which]:
         results, timing = run_detector(sets[name](), cfg)
         s = summarize(results, cfg)
         s["value_threshold_sweep"] = value_sweep(results, cfg)

@@ -25,6 +25,13 @@ Sign templates (public-domain MUTCD renders from Wikimedia Commons) go to `data/
 (one per code). The number font is Overpass (SIL OFL):
 `curl -L -o data/signs/fonts/Overpass.ttf "https://github.com/google/fonts/raw/main/ofl/overpass/Overpass%5Bwght%5D.ttf"`.
 
+Look-alike "distractors" (never labeled: route shields and number plates that must not become speed limits) go to
+`data/signs/templates/distractors/`, same Special:FilePath URL with `?width=300`: `I-5`, `I-15`, `I-25`, `I-35`,
+`I-40`, `I-45`, `I-55`, `I-65`, `I-70`, `I-80`, `I-90`, `US_20`, `US_25`, `US_30`, `US_40`, `US_50`, `US_60`,
+`US_101`, `California_25`, `NY-25A`, `M-25`, `Texas_35`, `East_plate`, `MUTCD_W13-1`, `MUTCD_W13-1P`,
+`MUTCD_W13-2`, `MUTCD_W13-3`, `MUTCD_E13-1P`, `MUTCD_R2-3`, `MUTCD_R2-4`, `MUTCD_R7-1`, `MUTCD_R7-8`,
+`MUTCD_D3-1` (all `.svg` on Commons, saved as `.png`).
+
 LISA (if a Roboflow export is placed in `data/signs/raw/lisa_yolo/{train,valid}/{images,labels}` with its
 `data.yaml`) is picked up automatically by `prepare_data.py`; its labels are mapped by
 `perception/sign_classes.kind_from_label`.
@@ -51,15 +58,28 @@ LISA (if a Roboflow export is placed in `data/signs/raw/lisa_yolo/{train,valid}/
 .venv/Scripts/python scripts/signs/prepare_data.py cls    # 96x96 value crops -> data/signs/cls (~8 min)
 ```
 
-## 4. Training (shared GPU: batch 8 keeps the detector at ~2.6 GB)
+Hard negatives (both datasets pick them up when the files exist; rebuild after mining):
+
+```bash
+# value classifier: non-speed BDD signs it reads as a number; check the sheet, keep the true negatives in
+# data/signs/hardneg_cls_curated.jsonl (one JSON line each, copied from hardneg_cls.jsonl)
+.venv/Scripts/python scripts/signs/mine_hard_negatives.py --weights models/signs/speed_value_cls.pt
+# detector: BDD frames with none of our signs where it still fires -> data/signs/hardneg_det.txt
+.venv/Scripts/python scripts/signs/mine_det_negatives.py --weights runs/signs/det/weights/best.pt
+```
+
+## 4. Training (shared GPU: batch 8 keeps the detector at ~2.6 GB; don't export engines while training: RAM)
 
 ```bash
 .venv/Scripts/python scripts/signs/train.py det --epochs 40 --batch 8 --workers 4    # ~4 h; checkpoint every epoch
 .venv/Scripts/python scripts/signs/train.py det --resume                             # after a stop
-.venv/Scripts/python scripts/signs/train.py cls --epochs 20                          # ~10 min
+.venv/Scripts/python scripts/signs/train.py cls --epochs 20 --dropout 0.2            # ~10 min
+# fine-tune on the rebuilt dataset with hard negatives, from the first run's best weights
+.venv/Scripts/python scripts/signs/train.py det --name det_ft --base runs/signs/det/weights/best.pt --epochs 12 --lr0 0.002 --warmup-epochs 0 --batch 8
 ```
 
-Best weights are copied to `models/signs/signs_yolo26s.pt` and `models/signs/speed_value_cls.pt`.
+Best weights are copied to `models/signs/signs_yolo26s.pt` and `models/signs/speed_value_cls.pt` (pass
+`--name <run> --no-copy` to keep a run aside; copy its `runs/signs/<run>/weights/best.pt` by hand if it wins).
 
 ## 5. Evaluation
 

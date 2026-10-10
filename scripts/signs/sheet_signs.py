@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"missing clip for {r['clip']}")
             continue
         cap = cv2.VideoCapture(str(clip))
-        seen: dict[str, dict[str, Any]] = defaultdict(lambda: {"frames": 0, "max_conf": 0.0, "values": set()})
+        seen: dict[str, dict[str, Any]] = defaultdict(lambda: {"frames": set(), "max_conf": 0.0, "values": set()})
         t = max(0.0, float(r["time_s"]) - args.window)
         n = 0
         while t <= float(r["time_s"]) + 1e-6:
@@ -57,13 +57,13 @@ def main(argv: list[str] | None = None) -> int:
                 n += 1
                 for d in det.detect(Frame(img, t=t, index=n, captured_at=0.0)):
                     s = seen[d.kind]
-                    s["frames"] += 1
+                    s["frames"].add(n)
                     s["max_conf"] = max(s["max_conf"], round(d.conf, 2))
                     if d.value is not None:
                         s["values"].add(d.value)
             t += 0.25
         cap.release()
-        summary = {k: {**v, "values": sorted(v["values"])} for k, v in seen.items()}
+        summary = {k: {**v, "frames": len(v["frames"]), "values": sorted(v["values"])} for k, v in seen.items()}
         results.append(
             {
                 "clip": r["clip"],

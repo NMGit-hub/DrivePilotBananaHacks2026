@@ -9,7 +9,10 @@ were classified by Claude Opus 5.5 (scripts/signs/label_bdd_signs.py), then chec
   "clearly readable" recall (a detection there may still not report a wrong value);
 - recall of the labeler for speed limits: the 264 largest of 774 upright, low-saturation signs it called
   "other"/"unclear" were inspected: no readable speed limit was missed;
-- other kinds keep Opus's labels (spot-checked on contact sheets, not exhaustively).
+- the 270 boxes of the smaller kinds (stop, yield, do not enter, no left/right/U turn, no turn on red, wrong way,
+  pedestrian crossing, school speed limit) were viewed on contact sheets: all but one looked right (a blue
+  square crosswalk sign called pedestrian_crossing, now ignored); one_way (442) and school_zone (158) keep Opus's
+  labels: random samples of 96 each were viewed, about 2 doubtful one_way boxes in 96, no wrong school zone.
 Boxes labeled "unclear", sign boxes too small to label (< 12 px tall) and REVIEW["ignore"] are ignore regions: a
 detection there is neither a hit nor a false alarm (but a wrong speed value there still counts as wrong).
 
@@ -53,6 +56,7 @@ REVIEW = {
     # Kind itself doubtful: neither a hit nor a miss.
     "ignore": [
         "valid/0145b233-ee9c5b63/12",  # "20" on an orange/red panel: not clearly an R2-1
+        "valid/0e7aa9b3-866273e9/4",  # blue square crosswalk sign, not the W11-2 diamond
     ],
 }
 

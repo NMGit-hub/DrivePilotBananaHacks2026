@@ -50,7 +50,31 @@ school_speed_limit are thin in real data and lean on synthetic examples: see Kno
 To be filled with measured results (detector training in progress).
 
 ## Known issues / compromises
-To be filled.
+- **Training labels are Claude pseudo-labels, not hand labels.** BDD100K boxes every sign by hand but not its
+  type; Claude Opus 5.5 assigned the type (and mph) per crop. Haiku 4.5 was tried first and rejected (many real
+  one-way/school/speed signs called "not a sign"). Opus is cautious ("unclear" boxes are masked, never trained
+  as background) but not perfect: mining showed it called some TOWN/CITY/AREA SPEED LIMIT variants "other".
+  Labeling cost $39 (+ $1 for the ctacke re-read) on the project's Anthropic key.
+- **The held-out set is hand-checked for speed limits only.** Every speed-limit box was checked by eye on the
+  full-resolution crop and a size-sorted sample of the labeler's "other"/"unclear" boxes was checked for missed
+  speed limits; the other kinds keep Opus's labels (spot-checked). A label audit triggered by the model's own
+  unmatched speed values added 2 school speed limits that BDD's annotators never boxed or Opus called "other"
+  and marked 3 doubtful boxes as ignore (`make_heldout.py` AUDIT); `evaluate.py --no-audit` gives the numbers
+  without it.
+- **BDD100K is mostly New York and the Bay Area**: its speed limits are mostly 25 mph (NYC). Other values come
+  from ctacke (25-80 mph, few distinct signs: its frames are video sequences of the same signs) and synthetic
+  MUTCD renders. The value classifier is checked on real 20-50 mph signs only.
+- **ctacke's public val split shares sign sequences with its train split** (adjacent frames of the same physical
+  signs), so the public-split numbers are optimistic; the BDD held-out set (separate videos) is the honest one.
+- **Thin real data:** wrong_way (1 held-out instance), no_turn_on_red (7), school_speed_limit (2-4) rely on
+  synthetic examples; their held-out numbers are anecdotal.
+- **LISA is not used**: its official download returns 404 and the Roboflow copy needs an API key that wasn't
+  provided in time; `prepare_data.py` picks it up automatically if a Roboflow YOLO export is placed in
+  `data/signs/raw/lisa_yolo/`.
+- **Not validated on our own camera** (the phone's 114° ultrawide): signs appear smaller and later than in BDD's
+  narrower view; re-check on our drives.
+- A crashed run: the detector run was resumed once from its epoch-6 checkpoint after a RAM shortage (a TensorRT
+  export ran alongside it); resumed runs continue the same schedule.
 
 ## Best Fine-tune write-up
 To be filled.

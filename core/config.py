@@ -530,7 +530,7 @@ class SignsConfig(_Strict):
     )
     iou: float = Field(0.6, gt=0.0, lt=1.0)
     value_conf: float = Field(
-        0.98, gt=0.0, le=1.0, description="Minimum classifier probability to report a speed-limit value."
+        0.9, gt=0.0, le=1.0, description="Minimum classifier probability to report a speed-limit value."
     )
     value_min_px: float = Field(
         16.0, gt=0.0, description="Sign boxes shorter than this (pixels at 1280 px frame width) never get a value."

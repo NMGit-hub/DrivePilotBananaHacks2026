@@ -59,6 +59,8 @@ def train_det(args: argparse.Namespace) -> Path:
             mosaic=1.0,
             close_mosaic=args.close_mosaic,
             cos_lr=True,
+            lr0=args.lr0,
+            warmup_epochs=args.warmup_epochs,
             plots=True,
             seed=0,
             fraction=args.fraction,
@@ -129,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--close-mosaic", type=int, default=5)
     p.add_argument("--fraction", type=float, default=1.0, help="det: train on this fraction of the tiles")
     p.add_argument("--base", default=None, help="det: starting weights (default: COCO yolo26s.pt)")
+    p.add_argument("--lr0", type=float, default=0.01, help="det: initial learning rate (lower for a fine-tune)")
+    p.add_argument("--warmup-epochs", type=float, default=3.0, help="det: warmup epochs (0 for a fine-tune)")
     p.add_argument("--resume", action="store_true")
     p.add_argument("--dropout", type=float, default=0.2, help="cls: dropout before the classifier head")
     p.add_argument("--name", default=None, help="run folder under runs/signs (default: det / cls)")
