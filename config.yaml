@@ -152,6 +152,8 @@ voice:
     end_silence_s: 0.5      # PLAN.md says ~0.6 s; 0.5 keeps local answers under 1 s and cut off none of the real takes
     speculative_silence_s: 0.25  # start transcribing early; kept if the silence lasts
     no_speech_timeout_s: 4.0
+    wake_tail_s: 0.4         # speech this soon after the wake word may be just "...pilot": then the question
+    wake_pause_s: 1.2        #   ends only after 1.2 s of silence (a pause before the question isn't its end)
     max_utterance_s: 10.0
     pre_roll_s: 1.5         # the whole wake phrase goes to Whisper (a cut one garbles the question's first word)
   stt:                      # faster-whisper on the GPU

@@ -86,6 +86,8 @@ class Endpointer:
         self._t0 = t - len(pre_roll) / SAMPLE_RATE  # stream time of the first collected sample
         self._vad_t = self._t0  # stream time covered by VAD decisions
         self._heard_speech = False
+        self._in_wake_tail = True  # speech right after the wake fires may be just the end of "...pilot"
+        self._question_speech = False  # speech that is certainly the question (after the wake phrase)
         self._speech_end: float | None = None  # end of the last speech (stream time)
         self._speculated_at: float | None = None
         self._started_at = t
@@ -103,11 +105,16 @@ class Endpointer:
         for prob in self.vad.process(chunk):
             self._vad_t += VAD_CHUNK / SAMPLE_RATE
             if prob >= cfg.speech_threshold:
+                if not (self._in_wake_tail and self._vad_t - self._started_at < cfg.wake_tail_s):
+                    self._in_wake_tail = False  # (speech running on without a pause: said in one breath)
+                    self._question_speech = True
                 self._heard_speech = True
                 self._speech_end = None
                 self._speculated_at = None  # they kept talking: any speculation is void
-            elif self._heard_speech and self._speech_end is None:
-                self._speech_end = self._vad_t - VAD_CHUNK / SAMPLE_RATE
+            else:
+                self._in_wake_tail = False
+                if self._heard_speech and self._speech_end is None:
+                    self._speech_end = self._vad_t - VAD_CHUNK / SAMPLE_RATE
         if not self._heard_speech:
             if t - self._started_at >= cfg.no_speech_timeout_s:
                 return self._finish("timeout", "nothing said")
@@ -116,9 +123,13 @@ class Endpointer:
             return self._finish("end", "maximum length")
         if self._speech_end is not None:
             silence = self._vad_t - self._speech_end
-            if silence >= cfg.end_silence_s:
+            # Only the end of the wake phrase so far ("Hey DrivePilot, ... is it safe"): the pause before the
+            # question is longer than a pause within it. (A one-word command said right away, "Hey DrivePilot,
+            # stop", ends this way too: speech was already stopped by the wake word itself.)
+            needed = cfg.end_silence_s if self._question_speech else cfg.wake_pause_s
+            if silence >= needed:
                 return self._finish("end", "silence")
-            if silence >= cfg.speculative_silence_s and self._speculated_at is None:
+            if self._question_speech and silence >= cfg.speculative_silence_s and self._speculated_at is None:
                 self._speculated_at = self._speech_end
                 return EndpointEvent("speculate", self.audio(), self._speech_end, "short silence")
         return None

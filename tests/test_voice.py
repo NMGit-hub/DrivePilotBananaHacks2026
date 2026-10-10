@@ -101,6 +101,27 @@ def test_question_ends_after_the_silence_with_a_speculation_first() -> None:
     assert end_speech == pytest.approx(2.0, abs=0.04) and spec_end == end_speech
 
 
+def test_the_pause_after_the_wake_phrase_does_not_end_the_question() -> None:
+    # "Hey DrivePilot, <pause> is it safe to pull out?": the tail of "...pilot" right after the wake fired, then
+    # a pause longer than the end-of-question silence, then the question. It used to end at the pause.
+    _, events = run_endpointer([(0.0, 0.2), (0.9, 2.5)], 6.0)
+    kinds = [k for _, k, _ in events]
+    assert kinds[-1] == "end" and events[-1][2] == pytest.approx(2.5, abs=0.04)
+
+
+def test_a_one_word_command_right_after_the_wake_phrase_is_heard() -> None:
+    # "Hey DrivePilot, stop": the word falls in the wake-phrase tail window; it still ends as a question.
+    cfg = EndpointConfig()
+    _, events = run_endpointer([(0.0, 0.35)], 5.0)
+    assert events[-1][1] == "end" and events[-1][2] == pytest.approx(0.35, abs=0.04)
+    assert events[-1][0] == pytest.approx(0.35 + cfg.wake_pause_s, abs=0.15)
+
+
+def test_a_question_said_in_one_breath_with_the_wake_phrase_counts() -> None:
+    _, events = run_endpointer([(0.0, 2.0)], 5.0)  # no pause between "DrivePilot" and the question
+    assert events[-1][1] == "end" and events[-1][2] == pytest.approx(2.0, abs=0.04)
+
+
 def test_speech_after_a_pause_voids_the_speculation() -> None:
     ep, events = run_endpointer([(0.3, 1.5), (1.9, 3.0)], 6.0)
     assert [k for _, k, _ in events] == ["speculate", "speculate", "end"]

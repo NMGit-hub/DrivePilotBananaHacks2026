@@ -432,6 +432,15 @@ class EndpointConfig(_Strict):
         0.25, ge=0.0, description="Start transcribing after this much silence (kept if the silence lasts)."
     )
     no_speech_timeout_s: float = Field(4.0, gt=0.0, description="Give up if nothing is said after the wake word.")
+    wake_tail_s: float = Field(
+        0.4,
+        ge=0.0,
+        description="Speech this soon after the wake fires may be just the end of the wake phrase (unless "
+        "it runs on without a pause).",
+    )
+    wake_pause_s: float = Field(
+        1.2, gt=0.0, description="...so after only that, the question ends after this much silence, not end_silence_s."
+    )
     max_utterance_s: float = Field(10.0, gt=0.0)
     pre_roll_s: float = Field(
         1.5,
