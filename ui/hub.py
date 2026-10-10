@@ -1,7 +1,10 @@
-"""What the V1 screen shows, shared between the app's threads and the web server.
+"""What the page shows, shared between the app's threads and the web server.
 
 - Video: the latest processed frame as a JPEG, encoded on the hub's own thread at most `fps` times a second and
-  scaled to `width` (the perception thread only hands over a reference, so it never waits on encoding).
+  scaled to `width` (the perception thread only hands over a reference, so it never waits on encoding). With its
+  overlay packet (V2, ui/overlay.py) the frame also becomes one binary message: `MAGIC`, a 4-byte big-endian
+  header length, the JSON header (time, frame size, capture wall time, overlay) and the JPEG, so the page draws
+  each overlay on the very frame it was built from.
 - Messages: questions, answers, alerts and state changes, pushed to every open page over WebSocket. The last
   `history` messages are kept so a page opened (or reloaded) later shows the conversation so far. The latest
   status (time, pause, fps, GPS, next maneuver) is kept separately and replaced, not appended.
@@ -16,6 +19,7 @@ import asyncio
 import contextlib
 import itertools
 import json
+import struct
 import threading
 import time
 import uuid
@@ -31,6 +35,21 @@ log = get_logger(__name__)
 
 PAGE_QUEUE = 500  # messages buffered per open page before the oldest are dropped
 CLOSE = "_close"  # internal: the server closes the page's WebSocket
+MAGIC = b"DPV1"  # the frame + overlay messages of the V2 page start with this
+
+
+def frame_message(header: dict[str, Any], jpeg: bytes) -> bytes:
+    """One binary video message: MAGIC, header length (4 bytes, big-endian), JSON header, JPEG."""
+    body = json.dumps(header, separators=(",", ":")).encode()
+    return MAGIC + struct.pack(">I", len(body)) + body + jpeg
+
+
+def parse_frame_message(message: bytes) -> tuple[dict[str, Any], bytes]:
+    """(header, JPEG) of a binary video message (tests, tools)."""
+    if message[:4] != MAGIC:
+        raise ValueError("not a DrivePilot video message")
+    (size,) = struct.unpack(">I", message[4:8])
+    return json.loads(message[8 : 8 + size]), message[8 + size :]
 
 
 class UiHub:
@@ -42,8 +61,9 @@ class UiHub:
         self.fps = fps
         self.jpeg_quality = jpeg_quality
         self._frame_cond = threading.Condition()
-        self._pending: Frame | None = None
+        self._pending: tuple[Frame, dict[str, Any] | None] | None = None
         self._jpeg: bytes | None = None
+        self._message: bytes | None = None  # the newest frame + overlay as one binary message
         self._jpeg_seq = 0
         self._lock = threading.Lock()
         self._history: deque[dict[str, Any]] = deque(maxlen=history)
@@ -78,16 +98,21 @@ class UiHub:
         """True once the app is shutting down (open video streams end)."""
         return self._stop.is_set()
 
-    def offer_frame(self, frame: Frame) -> None:
-        """A new processed frame (perception thread): keep only the newest, never wait."""
+    def offer_frame(self, frame: Frame, overlay: dict[str, Any] | None = None) -> None:
+        """A new processed frame and, for the V2 page, its overlay (any thread): keep only the newest, never wait."""
         with self._frame_cond:
-            self._pending = frame
+            self._pending = (frame, overlay)
             self._frame_cond.notify()
 
     def latest_jpeg(self) -> tuple[int, bytes | None]:
         """(sequence number, JPEG) of the newest encoded frame; the number grows with every new frame."""
         with self._frame_cond:
             return self._jpeg_seq, self._jpeg
+
+    def latest_message(self) -> tuple[int, bytes | None]:
+        """(sequence number, binary frame + overlay message) of the newest encoded frame."""
+        with self._frame_cond:
+            return self._jpeg_seq, self._message
 
     def _encode_loop(self) -> None:
         interval = 1.0 / self.fps if self.fps > 0 else 0.0
@@ -96,23 +121,33 @@ class UiHub:
             with self._frame_cond:
                 while self._pending is None and not self._stop.is_set():
                     self._frame_cond.wait(0.5)
-                frame, self._pending = self._pending, None
-            if frame is None:
+                pending, self._pending = self._pending, None
+            if pending is None:
                 continue
             delay = next_at - time.perf_counter()
             if delay > 0:
                 self._stop.wait(delay)
                 with self._frame_cond:  # a newer frame arrived while we waited: show that one
                     if self._pending is not None:
-                        frame, self._pending = self._pending, None
+                        pending, self._pending = self._pending, None
             next_at = time.perf_counter() + interval
+            frame, overlay = pending
             try:
                 jpeg = self._encode(frame)
+                header = {
+                    "t": round(frame.t, 3),
+                    "w": frame.width,
+                    "h": frame.height,
+                    # when the frame was captured, on the wall clock (the page measures frame-to-screen latency)
+                    "captured": round(time.time() - (time.perf_counter() - frame.captured_at), 4),
+                    "overlay": overlay,
+                }
+                message = frame_message(header, jpeg)
             except Exception:
                 log.exception("frame encoding failed")
                 continue
             with self._frame_cond:
-                self._jpeg, self._jpeg_seq = jpeg, self._jpeg_seq + 1
+                self._jpeg, self._message, self._jpeg_seq = jpeg, message, self._jpeg_seq + 1
             self.encoded += 1
 
     def _encode(self, frame: Frame) -> bytes:

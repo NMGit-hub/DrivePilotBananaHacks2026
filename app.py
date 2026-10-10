@@ -57,6 +57,7 @@ from perception.gpu_monitor import GpuMonitor
 from perception.pipeline import AsyncListener, PerceptionResult, PerceptionWorker
 from state.world import WorldEvent, WorldSnapshot, WorldState
 from ui.hub import UiHub
+from ui.overlay import frame_packet, hud_packet
 
 if TYPE_CHECKING:
     from voice.pipeline import HeardQuestion
@@ -297,16 +298,31 @@ class DrivePilotApp:
     def _make_worker(self) -> PerceptionWorker:
         worker = PerceptionWorker(self.source, self.detector, self.ego, recorder=self.recorder, gpu=self.gpu)
         worker.add_listener(self._world_thread)
-        if self.hub is not None:
+        if self.hub is not None and not self.cfg.ui.overlays:  # (V2: the world thread offers frame + overlay)
             worker.add_listener(lambda result: self.hub.offer_frame(result.frame) if self.hub else None)
         return worker
 
     # ----------------------------------------------------------------------------- world + alerts
 
     def _world_update(self, result: PerceptionResult) -> None:
-        """World-state thread: update, and time any alert it raises from this frame's capture."""
+        """World-state thread: update, and time any alert it raises from this frame's capture. Then, for the V2
+        page, hand the frame to the screen with the overlay built from this very update."""
         with self.latency.detection(result.frame.captured_at):
             self.world.on_perception(result)
+        if self.hub is not None and self.cfg.ui.overlays:
+            frame = result.frame
+            try:
+                overlay = frame_packet(
+                    self.world.snapshot(),
+                    result.tracks,
+                    frame.width,
+                    frame.height,
+                    parking_active=self.parking.active,
+                )
+            except Exception:
+                log.exception("overlay failed")
+                overlay = None
+            self.hub.offer_frame(frame, overlay)
 
     def _on_world_event(self, event: WorldEvent) -> None:
         if self.recorder is not None:
@@ -532,8 +548,19 @@ class DrivePilotApp:
             gps=self._gps_state(),
             nav=self._nav_line(),
             quiet=self.assistant.alerts.quiet,
+            hud=self._hud(),
             **self.status,
         )
+
+    def _hud(self) -> dict[str, Any] | None:
+        """The V2 page's banner, speed and roundabout diagram."""
+        try:
+            fix = self.gps_fix()
+            progress = self.nav.progress if self.nav is not None and self.nav.route is not None else None
+            return hud_packet(progress, fix.speed_mps if fix is not None else None)
+        except Exception:
+            log.exception("hud failed")
+            return None
 
     # ---------------------------------------------------------------------------------- lifecycle
 
@@ -873,7 +900,7 @@ def build_app(
     gpu = GpuMonitor(cfg.perception.device)
     detector = Detector(cfg.perception, cfg.root)
     speaker = speaker if speaker is not None else _speaker(cfg, args, status)
-    hub = None if args.no_ui else UiHub()
+    hub = None if args.no_ui else UiHub(width=cfg.ui.video_width, fps=cfg.ui.video_fps)
     app = DrivePilotApp(
         cfg,
         _source_factory(cfg, hold_at_end=not args.exit_at_end),  # the page stays up: seek back to replay
@@ -925,7 +952,7 @@ def main(argv: list[str] | None = None) -> int:
         if app.hub is not None:
             from ui.server import UiServer, allowed_hosts, create_server
 
-            page = create_server(app.hub, PageActions(app), allowed_hosts(cfg.ui.host))
+            page = create_server(app.hub, PageActions(app), allowed_hosts(cfg.ui.host), overlays=cfg.ui.overlays)
             server = UiServer(page, cfg.ui.host, cfg.ui.port)
             try:
                 server.start()

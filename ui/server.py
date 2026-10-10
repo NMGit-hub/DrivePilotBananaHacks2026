@@ -1,8 +1,10 @@
-"""The local web server: the V1 screen, the phone GPS page and their small API (FastAPI + uvicorn).
+"""The local web server: the screen, the phone GPS page and their small API (FastAPI + uvicorn).
 
-    GET  /            the V1 screen: video plus the question and answer as text (ui/static/index.html)
+    GET  /            the V2 screen (`ui.overlays`: video with overlays, ui/static/v2.html) or the V1 one
+    GET  /v1, /v2     each screen explicitly. V1: plain video plus the question and answer as text (index.html)
     GET  /gps         the phone page that sends its location once a second (ui/static/gps.html)
-    GET  /video.mjpg  the processed video as MJPEG
+    GET  /video.mjpg  the processed video as MJPEG (V1 screen)
+    WS   /ws/video    the V2 screen's video: each frame with its overlay packet as one binary message
     WS   /ws          conversation history on connect, then every new message and status update
     POST /api/ask     {"text": ...}: a typed question (hotkey Q)
     POST /api/control {"action": "pause"} | {"action": "seek", "delta_s": ±5}: replay hotkeys
@@ -101,8 +103,9 @@ async def require_json(request: Request) -> None:
         raise HTTPException(status_code=415, detail="send JSON")
 
 
-def create_server(hub: UiHub, actions: UiActions, hosts: Sequence[str] = LOCAL_HOSTS) -> FastAPI:
-    """The FastAPI app for the V1 screen, answering only to `hosts`."""
+def create_server(hub: UiHub, actions: UiActions, hosts: Sequence[str] = LOCAL_HOSTS, overlays: bool = True) -> FastAPI:
+    """The FastAPI app for the page, answering only to `hosts`; `/` is the V2 overlay page (`overlays`) or the
+    plain V1 page (both stay reachable at /v2 and /v1)."""
 
     async def same_origin(request: Request) -> None:
         if not _origin_ok(request.headers.get("origin"), hosts):
@@ -119,7 +122,15 @@ def create_server(hub: UiHub, actions: UiActions, hosts: Sequence[str] = LOCAL_H
 
     @app.get("/")
     async def index() -> FileResponse:
+        return FileResponse(STATIC / ("v2.html" if overlays else "index.html"), headers={"Cache-Control": "no-store"})
+
+    @app.get("/v1")
+    async def page_v1() -> FileResponse:
         return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
+
+    @app.get("/v2")
+    async def page_v2() -> FileResponse:
+        return FileResponse(STATIC / "v2.html", headers={"Cache-Control": "no-store"})
 
     @app.get("/gps")
     async def gps_page() -> FileResponse:
@@ -146,6 +157,30 @@ def create_server(hub: UiHub, actions: UiActions, hosts: Sequence[str] = LOCAL_H
             media_type=f"multipart/x-mixed-replace; boundary={BOUNDARY}",
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.websocket("/ws/video")
+    async def ws_video(socket: WebSocket) -> None:
+        """The V2 page's video: each new frame with its overlay as one binary message (ui/hub.py)."""
+        if not _origin_ok(socket.headers.get("origin"), hosts):
+            await socket.close(code=1008)
+            return
+        await socket.accept()
+        closed = asyncio.create_task(_until_disconnected(socket))
+        seen = -1
+        try:
+            while not hub.stopped and not closed.done():
+                seq, message = hub.latest_message()
+                if message is None or seq == seen:
+                    await asyncio.sleep(0.01)
+                    continue
+                seen = seq
+                await socket.send_bytes(message)  # (waits for a slow page: it then skips to the newest frame)
+            if not closed.done():
+                await socket.close()
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            closed.cancel()
 
     @app.websocket("/ws")
     async def ws(socket: WebSocket) -> None:

@@ -588,6 +588,9 @@ class UiConfig(_Strict):
 
     host: str = "127.0.0.1"
     port: int = Field(8000, gt=0, lt=65536)
+    overlays: bool = Field(True, description="V2 page: overlays drawn on the video (false: the plain V1 page).")
+    video_width: int = Field(960, gt=0, description="Frames are scaled to this width for the page.")
+    video_fps: float = Field(30.0, gt=0.0, description="At most this many frames a second go to the page.")
 
 
 class LoggingConfig(_Strict):

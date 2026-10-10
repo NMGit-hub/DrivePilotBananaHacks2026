@@ -1,0 +1,24 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "drivepilot-camera",
+      "runtimeExecutable": "C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "app", "--camera"],
+      "port": 8000
+    },
+    {
+      "name": "drivepilot-replay",
+      "runtimeExecutable": "C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "app", "--video", "data/videos/dev/red_light_turns_green_sf__b97b9ee8-612c36ef.mov"],
+      "port": 8000
+    },
+    {
+      "name": "drivepilot-overlays",
+      "runtimeExecutable": "C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "app", "--video", "data/videos/dev/red_light_turns_green_sf__b97b9ee8-612c36ef.mov",
+                      "--gpx", "data/gps/b97b9ee8-612c36ef.gpx", "--no-voice", "--no-audio"],
+      "port": 8000
+    }
+  ]
+}

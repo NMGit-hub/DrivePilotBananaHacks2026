@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DrivePilot</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14171c;
+    --line: #262b33;
+    --text: #e8ebef;
+    --muted: #8b94a3;
+    --you: #7cc4ff;
+    --alert-bg: #3a2a0a;
+    --alert: #ffc24d;
+    --listen: #4ade80;
+    --green: #34d399;
+    --red: #f87171;
+    --amber: #fbbf24;
+    --white: #f1f5f9;
+    --gray: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { display: flex; height: 100vh; }
+  #stage { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+  #video-box { flex: 1 1 auto; position: relative; background: #000; min-height: 0; overflow: hidden; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #no-video { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+
+  /* top banner: the next maneuver */
+  #banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 260px);
+    display: none; align-items: center; gap: 14px; padding: 10px 18px; border-radius: 12px;
+    background: rgba(12, 16, 22, .82); border: 1px solid rgba(255, 255, 255, .08); backdrop-filter: blur(4px); }
+  #banner.on { display: flex; }
+  #banner .step { font-size: 20px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #banner .dist { color: var(--green); font-size: 18px; font-weight: 700; white-space: nowrap; }
+  #lanes { display: flex; gap: 4px; }
+  #lanes span { width: 30px; height: 34px; display: grid; place-items: center; border-radius: 5px; font-size: 20px;
+    font-weight: 700; background: rgba(148, 163, 184, .18); color: rgba(241, 245, 249, .45); }
+  #lanes span.valid { background: rgba(52, 211, 153, .9); color: #062418; }
+
+  /* top-right corner: speed, roundabout */
+  #corner { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; align-items: flex-end;
+    gap: 10px; }
+  .badge { min-width: 74px; padding: 6px 12px; border-radius: 12px; text-align: center;
+    background: rgba(12, 16, 22, .82); border: 1px solid rgba(255, 255, 255, .08); }
+  .badge .v { font-size: 26px; font-weight: 750; line-height: 1.05; }
+  .badge .u { font-size: 11px; color: var(--muted); letter-spacing: .5px; text-transform: uppercase; }
+  #speed, #ring { display: none; }
+  #speed.on, #ring.on { display: block; }
+  #ring { padding: 6px; }
+
+  #status { flex: 0 0 auto; padding: 8px 14px; border-top: 1px solid var(--line); background: var(--panel);
+    color: var(--muted); font: 13px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #status b { color: var(--text); font-weight: 600; }
+  aside { flex: 0 0 400px; display: flex; flex-direction: column; border-left: 1px solid var(--line);
+    background: var(--panel); min-width: 0; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center;
+    gap: 10px; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  #conn { margin-left: auto; font-size: 12px; color: var(--muted); }
+  #listening { display: none; font-size: 12px; font-weight: 600; color: var(--bg); background: var(--listen);
+    border-radius: 999px; padding: 2px 10px; }
+  #listening.on { display: inline-block; }
+  #feed { flex: 1 1 auto; overflow-y: auto; padding: 12px 16px 24px; }
+  .turn { margin: 0 0 14px; }
+  .who { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 2px; }
+  .q .text { color: var(--you); font-weight: 600; }
+  .a .text { color: var(--text); }
+  .alert { background: var(--alert-bg); border-left: 3px solid var(--alert); padding: 8px 10px; border-radius: 4px; }
+  .alert .text { color: var(--alert); font-weight: 600; }
+  .note { color: var(--muted); font-style: italic; font-size: 14px; }
+  .t { color: var(--muted); font-size: 11px; margin-left: 6px; text-transform: none; letter-spacing: 0; }
+  form { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
+  input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 8px 10px; font: inherit; }
+  input:focus { outline: 2px solid var(--you); outline-offset: -1px; }
+  button { background: #2b3440; color: var(--text); border: 0; border-radius: 6px; padding: 8px 14px; font: inherit;
+    cursor: pointer; }
+  #keys { padding: 0 16px 10px; color: var(--muted); font-size: 12px; }
+  kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 11px ui-monospace, monospace; }
+  @media (max-width: 900px) {
+    main { flex-direction: column; height: auto; min-height: 100vh; }
+    #video-box { height: 56vw; flex: 0 0 auto; }
+    aside { flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--line); }
+    #feed { max-height: 50vh; }
+    #banner { max-width: calc(100% - 120px); }
+    #banner .step { font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <section id="stage">
+    <div id="video-box">
+      <div id="no-video">Waiting for video…</div>
+      <canvas id="view" aria-label="Camera view with overlays"></canvas>
+      <div id="banner" aria-live="polite"><div id="lanes"></div><div class="step"></div><div class="dist"></div></div>
+      <div id="corner">
+        <div id="speed" class="badge"><div class="v">–</div><div class="u">mph</div></div>
+        <div id="ring" class="badge"></div>
+      </div>
+    </div>
+    <div id="status">Starting…</div>
+  </section>
+  <aside>
+    <header>
+      <h1>DrivePilot</h1>
+      <span id="listening">Listening…</span>
+      <span id="conn">connecting</span>
+    </header>
+    <div id="feed" aria-live="polite"></div>
+    <form id="ask">
+      <input id="question" autocomplete="off" maxlength="500" placeholder="Type a question (Q)">
+      <button type="submit">Ask</button>
+    </form>
+    <div id="keys"><kbd>Space</kbd> pause · <kbd>←</kbd>/<kbd>→</kbd> 5 s · <kbd>Q</kbd> type a question</div>
+  </aside>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const feed = $("feed"), statusLine = $("status"), listening = $("listening"), conn = $("conn");
+const input = $("question"), canvas = $("view"), noVideo = $("no-video");
+const ctx = canvas.getContext("2d");
+const css = getComputedStyle(document.documentElement);
+const COLORS = Object.fromEntries(["green", "red", "amber", "white", "gray"].map(c => [c, css.getPropertyValue(`--${c}`).trim()]));
+let answerBlock = null, lastId = 0, session = null, lastStatus = null;
+
+// ------------------------------------------------------------------------------------------ conversation
+function clock(t) {
+  if (typeof t !== "number") return "";
+  const m = Math.floor(t / 60), s = t - 60 * m;
+  return `${m}:${s.toFixed(1).padStart(4, "0")}`;
+}
+
+function turn(cls, who, text, t) {
+  const div = document.createElement("div");
+  div.className = `turn ${cls}`;
+  const label = document.createElement("div");
+  label.className = "who";
+  label.textContent = who;
+  if (typeof t === "number") {
+    const time = document.createElement("span");
+    time.className = "t";
+    time.textContent = clock(t);
+    label.appendChild(time);
+  }
+  const body = document.createElement("div");
+  body.className = "text";
+  body.textContent = text;
+  div.append(label, body);
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+  return body;
+}
+
+function note(text) {
+  const div = document.createElement("div");
+  div.className = "turn note";
+  div.textContent = text;
+  feed.appendChild(div);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function show(m) {
+  if (m.id && m.id <= lastId) return; // already shown (reconnect)
+  if (m.id) lastId = m.id;
+  switch (m.type) {
+    case "question":
+      if (!m.superseded) listening.classList.remove("on");
+      turn("q", m.via === "typed" ? "You (typed)" : "You", m.text, m.t);
+      answerBlock = null;
+      break;
+    case "answer":
+      if (answerBlock) answerBlock.textContent += " " + m.text;
+      else answerBlock = turn("a", "DrivePilot", m.text, m.t);
+      feed.scrollTop = feed.scrollHeight;
+      break;
+    case "alert": turn("alert", "Alert", m.text, m.t); break;
+    case "listening": listening.classList.add("on"); break;
+    case "nothing": listening.classList.remove("on"); break;
+    case "stopped": answerBlock = null; break;
+    case "note": note(m.text); break;
+  }
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+}
+
+const stats = {fps: 0, lagMs: null, frames: 0}; // page drawing rate and frame-to-screen latency
+window.__dp = stats;
+
+function showStatus(s) {
+  lastStatus = s;
+  const parts = [];
+  parts.push(`<b>${s.live ? "LIVE" : "REPLAY"}</b> ${clock(s.t)}${s.paused ? " <b>paused</b>" : ""}`);
+  if (typeof s.fps === "number") parts.push(`${s.fps.toFixed(1)} fps`);
+  parts.push(`page ${stats.fps.toFixed(0)} fps${stats.lagMs === null ? "" : `, ${stats.lagMs.toFixed(0)} ms behind`}`);
+  if (s.camera) parts.push(`<b>${escapeHtml(s.camera)}</b>`);
+  parts.push(`GPS ${escapeHtml(s.gps || "off")}`);
+  if (s.quiet) parts.push("<b>quiet mode</b>");
+  if (s.voice) parts.push(`voice ${escapeHtml(s.voice)}`);
+  if (s.vision) parts.push(`vision ${escapeHtml(s.vision)}`);
+  statusLine.innerHTML = parts.join(" · ");
+  showHud(s.hud || {});
+}
+
+// ------------------------------------------------------------------------------------- HUD (banner, corner)
+const ARROWS = {"left": "←", "slight left": "↖", "sharp left": "↰", "straight": "↑", "slight right": "↗",
+                "right": "→", "sharp right": "↱", "uturn": "↶"};
+
+function showHud(hud) {
+  const banner = $("banner");
+  if (hud.banner) {
+    banner.querySelector(".step").textContent = hud.banner.text;
+    banner.querySelector(".dist").textContent = hud.banner.distance;
+    const lanes = $("lanes");
+    lanes.replaceChildren(...(hud.banner.lanes || []).map(lane => {
+      const span = document.createElement("span");
+      span.className = lane.valid ? "valid" : "";
+      span.textContent = ARROWS[(lane.ways || [])[0]] || "↑";
+      return span;
+    }));
+    banner.classList.add("on");
+  } else {
+    banner.classList.remove("on");
+  }
+  const speed = $("speed");
+  if (typeof hud.speed_mph === "number") {
+    speed.querySelector(".v").textContent = hud.speed_mph;
+    speed.classList.add("on");
+  } else speed.classList.remove("on");
+  const ring = $("ring");
+  if (hud.roundabout) {
+    ring.innerHTML = roundaboutSvg(hud.roundabout.exit, hud.roundabout.passed);
+    ring.classList.add("on");
+  } else ring.classList.remove("on");
+}
+
+function roundaboutSvg(exit, passed) {
+  // We enter at the bottom and drive counter-clockwise (US): exits spread around the ring, ours in green.
+  const n = Math.max(exit + 1, 4), r = 26, c = 36, parts = [];
+  parts.push(`<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${COLORS.gray}" stroke-width="7" opacity=".55"/>`);
+  parts.push(`<line x1="${c}" y1="${c + r}" x2="${c}" y2="${c + r + 10}" stroke="${COLORS.white}" stroke-width="5"/>`);
+  for (let k = 1; k <= exit; k++) {
+    const a = Math.PI / 2 - (2 * Math.PI * k) / n; // from the bottom, turning right (counter-clockwise on screen)
+    const x1 = c + r * Math.cos(a), y1 = c + r * Math.sin(a);
+    const x2 = c + (r + 10) * Math.cos(a), y2 = c + (r + 10) * Math.sin(a);
+    const color = k === exit ? COLORS.green : (k <= passed ? COLORS.gray : COLORS.white);
+    parts.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${k === exit ? 7 : 4}" stroke-linecap="round" opacity="${k <= passed ? .45 : 1}"/>`);
+  }
+  return `<svg width="72" height="72" viewBox="0 0 72 76" role="img" aria-label="Roundabout: exit ${exit}">${parts.join("")}</svg>` +
+         `<div class="u">exit ${exit}</div>`;
+}
+
+// ---------------------------------------------------------------------------------------- video + overlay
+let latest = null;   // {bitmap, header} of the newest frame
+let drawPending = false;
+
+function fitCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  return dpr;
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h);
+}
+
+function pill(x, y, text, fg, bg, size) {
+  ctx.font = `700 ${size}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+  const w = ctx.measureText(text).width + size * 0.9, h = size * 1.5;
+  roundRect(x, y, w, h, h / 2);
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.fillStyle = fg;
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + size * 0.45, y + h / 2 + 0.5);
+  return w;
+}
+
+function draw() {
+  drawPending = false;
+  if (!latest) return;
+  const dpr = fitCanvas();
+  const {bitmap, header} = latest;
+  const W = canvas.width, H = canvas.height;
+  const scale = Math.min(W / bitmap.width, H / bitmap.height);
+  const vw = bitmap.width * scale, vh = bitmap.height * scale, ox = (W - vw) / 2, oy = (H - vh) / 2;
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(bitmap, ox, oy, vw, vh);
+  const overlay = header.overlay;
+  if (overlay) drawOverlay(overlay, ox, oy, vw, vh, dpr);
+  stats.frames++;
+  stats.lagMs = Math.max(0, Date.now() - header.captured * 1000);
+}
+
+function drawOverlay(overlay, ox, oy, vw, vh, dpr) {
+  const now = performance.now() / 1000;
+  const fs = Math.max(11, Math.round(vh / 46)) ; // label size follows the video size
+  for (const item of overlay.items) {
+    const [x1, y1, x2, y2] = item.box;
+    const x = ox + x1 * vw, y = oy + y1 * vh, w = (x2 - x1) * vw, h = (y2 - y1) * vh;
+    const color = COLORS[item.color] || COLORS.white;
+    let width = item.kind === "vehicle" && item.color === "gray" ? 1.2 : (item.kind === "spot" ? 3 : 2);
+    let alpha = item.color === "gray" ? 0.55 : 0.95;
+    if (item.pulse) { // the thing an answer is about: pulses
+      const p = 0.5 + 0.5 * Math.sin(now * 2 * Math.PI * 1.5);
+      width = 3 + 4 * p; alpha = 0.6 + 0.4 * p;
+    }
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = width * dpr;
+    ctx.strokeStyle = color;
+    if (item.kind === "spot") {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.22;
+      roundRect(x, y, w, h, 6 * dpr);
+      ctx.fill();
+      ctx.globalAlpha = 0.95;
+    }
+    roundRect(x, y, w, h, Math.min(6 * dpr, w / 4, h / 4));
+    ctx.stroke();
+    ctx.restore();
+    // badge (4-way order) + timer, or a label for things worth naming
+    let tx = x, ty = y - fs * 1.6;
+    if (ty < oy + 2) ty = y + 2;
+    if (item.badge) {
+      const fg = item.color === "amber" ? "#231703" : "#0b0d10";
+      tx += pill(tx, ty, item.badge, fg, color, fs) + 4;
+      if (typeof item.timer === "number") tx += pill(tx, ty, `${item.timer.toFixed(1)} s`, COLORS.white, "rgba(12,16,22,.78)", fs) + 4;
+    }
+    if (item.label && (item.kind !== "vehicle" || item.badge || item.pulse)) {
+      pill(tx, ty, item.label, item.kind === "light" || item.kind === "spot" ? "#0b0d10" : COLORS.white,
+           item.kind === "light" || item.kind === "spot" ? color : "rgba(12,16,22,.78)", fs * (item.badge ? 0.85 : 0.9));
+    }
+  }
+  if (overlay.you) { // our own badge, bottom center
+    const text = overlay.you.text, size = Math.round(fs * 1.4);
+    ctx.font = `750 ${size}px system-ui, sans-serif`;
+    const w = ctx.measureText(text).width + size;
+    const bg = overlay.you.color === "green" ? COLORS.green : "rgba(12,16,22,.85)";
+    const fg = overlay.you.color === "green" ? "#062418" : COLORS.white;
+    pill(ox + vw / 2 - w / 2, oy + vh - size * 2.4, text, fg, bg, size);
+  }
+}
+
+let drawTimes = [];
+function onFrame(buffer) {
+  const bytes = new Uint8Array(buffer);
+  if (bytes[0] !== 0x44 || bytes[1] !== 0x50 || bytes[2] !== 0x56 || bytes[3] !== 0x31) return; // "DPV1"
+  const size = new DataView(buffer).getUint32(4);
+  const header = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + size)));
+  const jpeg = new Blob([bytes.subarray(8 + size)], {type: "image/jpeg"});
+  createImageBitmap(jpeg).then(bitmap => {
+    if (latest && latest.bitmap) latest.bitmap.close();
+    latest = {bitmap, header};
+    noVideo.style.display = "none";
+    const now = performance.now();
+    drawTimes.push(now);
+    while (drawTimes.length && now - drawTimes[0] > 1000) drawTimes.shift();
+    stats.fps = drawTimes.length;
+    if (!drawPending) { drawPending = true; requestAnimationFrame(draw); }
+  }).catch(() => {});
+}
+
+// keep pulsing highlights alive between frames (a paused replay sends no new frames)
+setInterval(() => {
+  if (latest && latest.header.overlay && latest.header.overlay.items.some(i => i.pulse) && !drawPending) {
+    drawPending = true; requestAnimationFrame(draw);
+  }
+}, 50);
+window.addEventListener("resize", () => { if (!drawPending) { drawPending = true; requestAnimationFrame(draw); } });
+
+function socketUrl(path) { return `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${path}`; }
+
+let videoRetry = 500;
+function connectVideo() {
+  const ws = new WebSocket(socketUrl("/ws/video"));
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { videoRetry = 500; };
+  ws.onmessage = ev => onFrame(ev.data);
+  ws.onclose = () => {
+    noVideo.style.display = "grid";
+    setTimeout(connectVideo, videoRetry);
+    videoRetry = Math.min(videoRetry * 2, 5000);
+  };
+}
+connectVideo();
+
+// -------------------------------------------------------------------------------------------- messages
+let retry = 500;
+function connect() {
+  const ws = new WebSocket(socketUrl("/ws"));
+  ws.onopen = () => { conn.textContent = "connected"; retry = 500; };
+  ws.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "hello") {
+      if (m.session !== session) {
+        session = m.session;
+        feed.replaceChildren();
+        lastId = 0;
+        answerBlock = null;
+      }
+      m.history.forEach(show);
+      if (m.status && m.status.type) showStatus(m.status);
+    } else if (m.type === "status") {
+      showStatus(m);
+    } else {
+      show(m);
+    }
+  };
+  ws.onclose = () => {
+    conn.textContent = "reconnecting…";
+    setTimeout(connect, retry);
+    retry = Math.min(retry * 2, 5000);
+  };
+}
+connect();
+
+async function post(path, body) {
+  try {
+    const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    return r.ok ? r.json() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+$("ask").addEventListener("submit", ev => {
+  ev.preventDefault();
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  input.blur();
+  post("/api/ask", {text});
+});
+
+document.addEventListener("keydown", ev => {
+  if (ev.target === input) {
+    if (ev.key === "Escape") { input.value = ""; input.blur(); }
+    return;
+  }
+  if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+  if (ev.code === "Space") { ev.preventDefault(); post("/api/control", {action: "pause"}); }
+  else if (ev.key === "ArrowLeft") { ev.preventDefault(); post("/api/control", {action: "seek", delta_s: -5}); }
+  else if (ev.key === "ArrowRight") { ev.preventDefault(); post("/api/control", {action: "seek", delta_s: 5}); }
+  else if (ev.key === "q" || ev.key === "Q") { ev.preventDefault(); input.focus(); }
+});
+</script>
+</body>
+</html>
