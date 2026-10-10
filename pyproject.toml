@@ -18,7 +18,7 @@ filterwarnings = ["ignore::DeprecationWarning:ultralytics.*"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = [".venv", ".venv-*", "runs", "models", "data"]
+extend-exclude = [".venv", ".venv-*", "runs", "models", "data", "scripts/wakeword"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "BLE", "RUF"]

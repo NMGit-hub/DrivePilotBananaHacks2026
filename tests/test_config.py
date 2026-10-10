@@ -30,7 +30,7 @@ def test_empty_file_gives_defaults(tmp_path: Path) -> None:
     cfg = load_config(write(tmp_path, ""), env_file=None, environ={})
     assert cfg == AppConfig(root=tmp_path)
     assert cfg.video.source == "file"
-    assert cfg.video.camera.camera_zoom == pytest.approx(0.6)
+    assert cfg.video.camera.camera_id == 3 and cfg.video.camera.camera_zoom == pytest.approx(1.0)
 
 
 def test_partial_section_keeps_other_defaults(tmp_path: Path) -> None:

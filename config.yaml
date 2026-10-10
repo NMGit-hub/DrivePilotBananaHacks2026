@@ -13,15 +13,50 @@ video:
     loop: false
   camera:
     scrcpy_dir: null        # folder with adb.exe + scrcpy-server; null = auto-detect the winget install
-    camera_id: 0            # OnePlus 12: 0 = logical back camera (zoom 0.6 = ultrawide)
-    camera_zoom: 0.6
+    camera_id: 3            # OnePlus 12: 3 = the physical ultrawide (same view as logical camera 0 at zoom 0.6,
+    camera_zoom: 1.0        #   but it can't switch lenses by itself mid-drive)
     width: 1920
     height: 1080
     fps: 30
     bitrate_mbps: 8.0
+    decoder: auto           # auto = hardware H.264 decoding (D3D11VA, then CUDA), software as a last resort
 
 gps:
   source: auto              # auto = GPX in file mode (if gpx_path is set), phone page in camera mode
+
+perception:
+  weights: models/yolo26s.pt  # downloaded on first run
+  device: 0                 # CUDA device; the pipeline refuses to run on the CPU
+  half: true
+  imgsz: 640                # inference size (multiple of 32)
+  conf: 0.25
+  iou: 0.7
+  classes: [car, truck, bus, motorcycle, stop sign, traffic light, person, bicycle]
+  vehicle_dedup_iou: 0.7    # one pickup reported as both "car" and "truck" -> keep the more confident box
+  tracker:                  # ByteTrack
+    track_high_thresh: 0.25
+    track_low_thresh: 0.1
+    new_track_thresh: 0.25
+    track_buffer_s: 1.5     # keep lost tracks this long (occlusion by crossing traffic)
+    match_thresh: 0.8
+    fuse_score: true
+
+ego_motion:                 # "are we stopped?" from optical flow on a small frame copy
+  work_width: 320
+  roi_top: 0.30             # ignore sky above / hood below these fractions of the height
+  roi_bottom: 0.85
+  box_margin: 0.15          # mask out detected objects (they move on their own), grown by this fraction
+  max_points: 300
+  min_points: 20
+  fb_max_error_px: 1.0
+  min_dt_s: 0.0167          # floor on the frame time step for per-second rates (bursty live frames)
+  metric: combined          # max(zoom x zoom_weight, horizontal flow); see perception/ego_motion.py
+  zoom_weight: 50.0
+  baseline_s: 0.6           # measure motion against the frame 0.6 s ago: ~10x lower noise while stopped
+  stopped_below: 1.5        # calibrated on hand-labeled stops: scripts/eval_ego_motion.py
+  moving_above: 3.0
+  stopped_after_s: 0.5      # PLAN.md: stopped when the background barely moves for 0.5 s
+  smoothing_s: 0.2          # rolling median removes one-frame glitches
 
 vision_model: claude        # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
 vision:

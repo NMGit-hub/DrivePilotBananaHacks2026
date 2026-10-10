@@ -31,3 +31,6 @@ clips:
   - name: school_bus_stop_arm_parking
     bdd_id: c33700f7-08262a44
     notes: Brooklyn; school bus with STOP arm, ends parked at a curb beside a bank (parking questions).
+  - name: ego_holdout_long_stop
+    bdd_id: b5aa77fa-b1916843
+    notes: Held-out clip for the stop detector (scan showed a ~16 s stop); labeled blind before evaluation.

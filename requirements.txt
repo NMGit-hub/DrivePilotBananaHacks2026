@@ -11,6 +11,7 @@ torchvision==0.29.1+cu126
 ultralytics==8.4.175
 lap==0.5.13
 opencv-python==5.0.0.93
+av==18.1.0                 # PyAV: H.264 decoding of the scrcpy camera stream (D3D11VA/CUDA hardware decode)
 numpy==2.4.6
 scipy==1.17.1
 

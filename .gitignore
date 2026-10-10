@@ -22,6 +22,7 @@ data/videos/
 data/gps/
 data/audio/
 data/wakeword/
+data/cache/
 *.mp4
 *.mov
 *.mkv

@@ -1,0 +1,54 @@
+# Hand-labeled "our car is stopped" intervals on the dev clips (eval/dev_clips.yaml), in seconds of video time.
+#
+# Method: x-t images (one horizontal pixel row per frame, stacked over time). Static scenery draws streaks that
+# curve outward while the car moves forward and become perfectly vertical when it stops. Labeled by eye at
+# 0.1 s resolution, independent of the optical-flow detector being evaluated. Estimated label accuracy ±0.15 s.
+#
+#   stops:       firm stops [start, end] (null end = still stopped when the clip ends); scored at ±0.5 s.
+#   soft_stops:  near-stops (crawling, rocking): a detection there is allowed but not required; reported only.
+#   moving:      ranges where any detected stop is a false positive.
+#   holdout:     never used for tuning (scripts/eval_ego_motion.py --sweep skips them): measures generalization.
+clips:
+  - bdd_id: b97b9ee8-612c36ef  # SF red light; the light turns green ~39.6 s and the car pulls away at the clip end
+    stops:
+      - [21.8, 39.85]
+  - bdd_id: b4a99fcc-d849eaf4  # Queens red light; small jerk as the car stops
+    stops:
+      - [21.1, null]
+  - bdd_id: b44a71bf-4d366798  # nearly stopped behind a forklift at the start; red light under an overpass
+    stops:
+      - [0.6, 2.4]
+      - [21.6, null]
+  - bdd_id: be986afd-012d020c  # SF dawn: near-stop at a stop sign on a hill crest (pitch rocking)
+    soft_stops:
+      - [21.6, 23.25]
+  - bdd_id: c4130097-887da34f  # rolls through a stop sign at ~4 s (never stops); creeps in a red-light queue
+    moving:
+      - [0.0, 30.0]
+    soft_stops:
+      - [34.5, null]
+  # The next two were labeled after the first thresholds were chosen; they exposed failures (rain + wiper, slow
+  # creep) and were then used for development, so they are no longer held out.
+  - bdd_id: b61456bb-5bfb50ee  # NYC rain: crawls/near-stops at a crosswalk ~8-10 s; red light from 21 s; wipers
+    stops:
+      - [21.0, null]
+    soft_stops:
+      - [8.2, 10.2]
+  - bdd_id: b967b2a7-2003bfd2  # crawls to a stop behind a car that waits behind a school bus (magnified x-t:
+    stops:                     # the sub-pixel crawl ends at ~15.2 s; first label 14.0 was by eye at 1x and wrong)
+      - [15.2, null]
+  # Held out: labeled blind (x-t images only, magnified at transitions) after the method and thresholds were
+  # frozen, and evaluated once. Never used for tuning.
+  - bdd_id: c33700f7-08262a44  # already stopped at the clip start (behind a school bus), pulls away; parks at the end
+    holdout: true
+    stops:
+      - [null, 6.3]            # null start = already stopped when the clip begins (start not scored)
+      - [33.1, null]
+  - bdd_id: c4c4b88a-d1a38d2f  # highway; the recording jumps at ~20.0 s, then stopped in a jam to the end
+    holdout: true
+    stops:
+      - [20.3, null]
+  - bdd_id: b5aa77fa-b1916843  # brakes hard to a stop at an intersection
+    holdout: true
+    stops:
+      - [22.4, null]

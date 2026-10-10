@@ -97,12 +97,15 @@ class CameraVideoConfig(_Strict):
     scrcpy_dir: ConfigPath | None = Field(
         None, description="Folder with adb.exe and scrcpy-server; auto-detected if null."
     )
-    camera_id: int = Field(0, ge=0)
-    camera_zoom: float = Field(0.6, gt=0.0, description="0.6 on a logical camera = ultrawide field of view.")
+    camera_id: int = Field(3, ge=0, description="OnePlus 12: 3 = the physical ultrawide (verified 2026-10-09).")
+    camera_zoom: float = Field(1.0, gt=0.0, description="Zoom; on a logical camera (id 0) 0.6 selects the ultrawide.")
     width: int = Field(1920, gt=0)
     height: int = Field(1080, gt=0)
     fps: int = Field(30, gt=0, le=60)
     bitrate_mbps: float = Field(8.0, gt=0.0)
+    decoder: Literal["auto", "d3d11va", "cuda", "software"] = Field(
+        "auto", description="H.264 decoding: auto tries hardware (D3D11VA, then CUDA) before software."
+    )
 
 
 class VideoConfig(_Strict):
@@ -120,6 +123,85 @@ class GpsConfig(_Strict):
     """GPS input: GPX replay in file mode, the phone web page in camera mode."""
 
     source: Literal["auto", "gpx", "phone", "none"] = "auto"
+
+
+# --------------------------------------------------------------------------------------- perception
+
+DETECTION_CLASSES = ("car", "truck", "bus", "motorcycle", "stop sign", "traffic light", "person", "bicycle")
+
+
+class TrackerConfig(_Strict):
+    """ByteTrack settings (ultralytics BYTETracker)."""
+
+    track_high_thresh: float = Field(0.25, ge=0.0, le=1.0, description="First-stage association score.")
+    track_low_thresh: float = Field(0.1, ge=0.0, le=1.0, description="Second-stage (low-score) association.")
+    new_track_thresh: float = Field(0.25, ge=0.0, le=1.0, description="Min score to start a new track.")
+    track_buffer_s: float = Field(1.5, gt=0.0, description="Keep lost tracks alive this long (occlusions).")
+    match_thresh: float = Field(0.8, gt=0.0, le=1.0)
+    fuse_score: bool = True
+
+
+class PerceptionConfig(_Strict):
+    """YOLO26s detector on the GPU plus ByteTrack."""
+
+    weights: ConfigPath = Path("models/yolo26s.pt")
+    device: int = Field(0, ge=0, description="CUDA device index. The pipeline refuses to run on the CPU.")
+    half: bool = Field(True, description="FP16 inference.")
+    imgsz: int = Field(640, ge=320, le=1920, description="Inference size (long side, multiple of 32).")
+    conf: float = Field(0.25, gt=0.0, lt=1.0)
+    iou: float = Field(0.7, gt=0.0, lt=1.0)
+    classes: Annotated[tuple[str, ...], Strict(False)] = DETECTION_CLASSES  # YAML gives a list
+    vehicle_dedup_iou: float = Field(
+        0.7, gt=0.0, le=1.0, description="Merge overlapping vehicle boxes of different classes (car vs truck)."
+    )
+    tracker: TrackerConfig = TrackerConfig()
+
+    @field_validator("imgsz")
+    @classmethod
+    def _multiple_of_32(cls, value: int) -> int:
+        if value % 32:
+            raise ValueError("must be a multiple of 32")
+        return value
+
+    @field_validator("classes")
+    @classmethod
+    def _known_classes(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        unknown = sorted(set(value) - set(DETECTION_CLASSES))
+        if unknown:
+            raise ValueError(f"unsupported classes {unknown}; choose from {list(DETECTION_CLASSES)}")
+        return value
+
+
+class EgoMotionConfig(_Strict):
+    """'Are we stopped?' from optical flow on a small grayscale copy of the frame."""
+
+    work_width: int = Field(320, ge=160, le=960, description="Downscaled width for optical flow.")
+    roi_top: float = Field(0.30, ge=0.0, lt=1.0, description="Ignore the sky above this fraction of height.")
+    roi_bottom: float = Field(0.85, gt=0.0, le=1.0, description="Ignore the hood/dashboard below this fraction.")
+    box_margin: float = Field(0.15, ge=0.0, le=1.0, description="Grow object boxes by this fraction when masking.")
+    max_points: int = Field(300, ge=20)
+    min_points: int = Field(20, ge=4, description="Below this, motion is 'unknown' and the state is held.")
+    fb_max_error_px: float = Field(1.0, gt=0.0, description="Forward-backward LK consistency limit.")
+    min_dt_s: float = Field(1 / 60, gt=0.0, description="Floor on the frame time step used for per-second rates.")
+    metric: Literal["combined", "zoom", "horizontal", "magnitude"] = Field(
+        "combined", description="Motion measure for the stopped state (see perception/ego_motion.py)."
+    )
+    zoom_weight: float = Field(50.0, gt=0.0, description="Zoom-rate scale in the combined measure.")
+    baseline_s: float = Field(
+        0.6, gt=0.0, le=2.0, description="Long-baseline motion: compare with the frame this long ago (lower noise)."
+    )
+    stopped_below: float = Field(1.5, gt=0.0, description="Smoothed measure below this = still.")
+    moving_above: float = Field(3.0, gt=0.0, description="Smoothed measure above this = moving (hysteresis).")
+    stopped_after_s: float = Field(0.5, ge=0.0, description="Still this long before we call it stopped.")
+    smoothing_s: float = Field(0.2, ge=0.0, description="Rolling-median window that removes one-frame glitches.")
+
+    @model_validator(mode="after")
+    def _ordered(self) -> EgoMotionConfig:
+        if self.roi_bottom <= self.roi_top:
+            raise ValueError("roi_bottom must be greater than roi_top")
+        if self.moving_above < self.stopped_below:
+            raise ValueError("moving_above must be >= stopped_below")
+        return self
 
 
 # ------------------------------------------------------------------------------------------- vision
@@ -208,6 +290,8 @@ class AppConfig(_Strict):
 
     video: VideoConfig = VideoConfig()
     gps: GpsConfig = GpsConfig()
+    perception: PerceptionConfig = PerceptionConfig()
+    ego_motion: EgoMotionConfig = EgoMotionConfig()
     vision_model: Literal["claude", "gemini", "ollama", "mock"] = "claude"
     vision: VisionConfig = VisionConfig()
     ui: UiConfig = UiConfig()
