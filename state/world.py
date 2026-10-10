@@ -80,6 +80,7 @@ class WorldSnapshot:
     queue: QueueSnapshot
     light: LightReading
     caveats: tuple[str, ...]
+    people_ahead: int = 0  # pedestrians in front of us (answers add "watch for the pedestrian")
 
 
 def _empty_queue(t: float) -> QueueSnapshot:
@@ -102,6 +103,7 @@ class WorldState:
         self._frames: deque[Frame] = deque()
         self._stop_sign_last_seen: float | None = None
         self._ego_moving_since: float | None = None
+        self._was_stopped = False  # stopped since the last "drove_off"
         self._snapshot: WorldSnapshot | None = None
 
     # ---------------------------------------------------------------------------------- updating
@@ -115,14 +117,16 @@ class WorldState:
         self._frames.clear()
         self._stop_sign_last_seen = None
         self._ego_moving_since = None
+        self._was_stopped = False
 
     def on_perception(self, result: PerceptionResult) -> None:
         """PerceptionWorker listener: fold one frame's results into the world state."""
-        if result.new_segment:
-            self.reset()
         frame, t, ego = result.frame, result.frame.t, result.ego
         cfg = self.cfg.intersection
         events: list[WorldEvent] = []
+        if result.new_segment:
+            self.reset()
+            events.append(WorldEvent("segment_reset", t))
 
         vehicles = [tr for tr in result.tracks if tr.cls in VEHICLE_CLASSES]
         states = self.vehicle_motion.update(t, vehicles, ego.homography, ego.stopped)
@@ -158,14 +162,15 @@ class WorldState:
 
         if ego.stopped:
             self._ego_moving_since = None
+            self._was_stopped = True
         elif self._ego_moving_since is None:
             self._ego_moving_since = t
+        moving_for = 0.0 if self._ego_moving_since is None else t - self._ego_moving_since
+        if self._was_stopped and moving_for >= cfg.drive_off_s:
+            self._was_stopped = False
+            events.append(WorldEvent("drove_off", t, {"moving_since": self._ego_moving_since}))
         at_stop = ego.stopped and sign_recent and lead is None
-        ego_stop = EgoStop(
-            at_stop=at_stop,
-            stopped_since=ego.stopped_since,
-            moving_for_s=0.0 if self._ego_moving_since is None else t - self._ego_moving_since,
-        )
+        ego_stop = EgoStop(at_stop=at_stop, stopped_since=ego.stopped_since, moving_for_s=moving_for)
         for qe in self.queue.update(t, ego_stop, waiting):
             if qe.kind in ("your_turn", "arrived", "left_intersection", "vehicle_departed"):
                 events.append(WorldEvent("arrived_at_stop" if qe.kind == "arrived" else qe.kind, t, dict(qe.detail)))
@@ -174,10 +179,19 @@ class WorldState:
         if turned_green:
             events.append(WorldEvent("light_green", t, {"ego_stopped": ego.stopped}))
 
+        people_ahead = sum(
+            1
+            for tr in result.tracks
+            if tr.cls == "person"
+            and abs(tr.center[0] / frame.width - 0.5) <= cfg.people_center_band
+            and tr.height / frame.height >= cfg.people_min_height
+        )
+
         caveats = []
         if cfg.camera_hfov_deg < NARROW_FOV_DEG:
             caveats.append("narrow_view")
-        caveats += [f"clipped:{v.approach.value}" for v in views if v.clipped and v.approach is not None]
+        # A waiting car cut off by the frame edge (cars just driving through don't matter for the order).
+        caveats += [f"clipped:{v.approach.value}" for v in views if v.clipped and v.stopped and v.approach is not None]
         if not ego.confident:
             caveats.append("ego_motion_unknown")
 
@@ -196,6 +210,7 @@ class WorldState:
             queue=self.queue.snapshot(),
             light=light,
             caveats=tuple(caveats),
+            people_ahead=people_ahead,
         )
         with self._lock:
             self._snapshot = snapshot

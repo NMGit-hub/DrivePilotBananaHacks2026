@@ -244,6 +244,11 @@ class IntersectionConfig(_Strict):
         10.0, gt=0.0, description="We are 'at a stop' if a stop sign was seen this recently."
     )
     camera_hfov_deg: float = Field(114.0, gt=0.0, lt=180.0, description="Below ~100° the sides may be out of view.")
+    drive_off_s: float = Field(
+        5.0, gt=0.0, description="Moving this long after a stop = we drove away (requests about it expire)."
+    )
+    people_center_band: float = Field(0.3, gt=0.0, le=0.5, description="Pedestrians this close to center are ahead.")
+    people_min_height: float = Field(0.06, gt=0.0, lt=1.0, description="...and at least this tall (frame fraction).")
 
 
 class StopQueueConfig(_Strict):
@@ -276,6 +281,18 @@ class TrafficLightConfig(_Strict):
     red_memory_s: float = Field(5.0, gt=0.0, description="A green counts as a change if red was seen this recently.")
     anchor_pad: float = Field(0.15, ge=0.0, le=1.0, description="Pad light boxes so the whole housing is read.")
     anchor_weight: float = Field(0.2, gt=0.0, le=1.0, description="Vote weight of a remembered (undetected) light.")
+
+
+# ------------------------------------------------------------------------------------------- answers
+
+
+class AlertsConfig(_Strict):
+    """Spoken alerts (answers/alerts.py)."""
+
+    cooldown_s: float = Field(15.0, ge=0.0, description="The same alert kind is never repeated within this time.")
+    watch_timeout_s: float = Field(
+        300.0, gt=0.0, description="'Tell me when it's green' requests expire after this long."
+    )
 
 
 # ------------------------------------------------------------------------------------------- vision
@@ -370,6 +387,7 @@ class AppConfig(_Strict):
     intersection: IntersectionConfig = IntersectionConfig()
     stop_queue: StopQueueConfig = StopQueueConfig()
     traffic_light: TrafficLightConfig = TrafficLightConfig()
+    alerts: AlertsConfig = AlertsConfig()
     vision_model: Literal["claude", "gemini", "ollama", "mock"] = "claude"
     vision: VisionConfig = VisionConfig()
     ui: UiConfig = UiConfig()

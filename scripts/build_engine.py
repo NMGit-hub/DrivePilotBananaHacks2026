@@ -49,10 +49,29 @@ def ensure_build_venv() -> Path:
     python = BUILD_VENV / "Scripts" / "python.exe"
     if not python.exists():
         run(["uv", "venv", "--python", "3.11", str(BUILD_VENV)])
-    packages = [pinned("torch"), pinned("torchvision"), pinned("ultralytics"), pinned("tensorrt-cu12"),
-                "onnx", "onnxslim", "nvidia-modelopt[onnx]>=0.44"]
-    run(["uv", "pip", "install", "--python", str(python), "--extra-index-url", TORCH_INDEX,
-         "--index-strategy", "unsafe-best-match", *packages])
+    packages = [
+        pinned("torch"),
+        pinned("torchvision"),
+        pinned("ultralytics"),
+        pinned("tensorrt-cu12"),
+        "onnx",
+        "onnxslim",
+        "nvidia-modelopt[onnx]>=0.44",
+    ]
+    run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "--extra-index-url",
+            TORCH_INDEX,
+            "--index-strategy",
+            "unsafe-best-match",
+            *packages,
+        ]
+    )
     return python
 
 

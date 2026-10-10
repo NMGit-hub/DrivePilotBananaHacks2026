@@ -88,6 +88,10 @@ traffic_light:              # light color from the lit lamp; "tell me when it's 
   red_memory_s: 5.0
   anchor_pad: 0.15          # while stopped, lights are read at a remembered (padded) box even if YOLO misses them
 
+alerts:                     # spoken on their own: "You're up, check and go." / "Light's green, ..." (when asked)
+  cooldown_s: 15.0          # never the same alert twice within this time (once per event)
+  watch_timeout_s: 300.0    # "tell me when it's green" requests expire after 5 minutes
+
 vision_model: claude        # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
 vision:
   claude:
