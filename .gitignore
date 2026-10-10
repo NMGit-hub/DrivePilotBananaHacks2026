@@ -23,6 +23,7 @@ data/gps/
 data/audio/
 data/wakeword/
 data/cache/
+data/routes/
 *.mp4
 *.mov
 *.mkv

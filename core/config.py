@@ -124,6 +124,24 @@ class GpsConfig(_Strict):
     """GPS input: GPX replay in file mode, the phone web page in camera mode."""
 
     source: Literal["auto", "gpx", "phone", "none"] = "auto"
+    stale_s: float = Field(3.0, gt=0.0, description="A phone fix older than this is ignored.")
+
+
+class NavConfig(_Strict):
+    """Navigation: Mapbox routing, progress, rerouting and spoken guidance (nav/)."""
+
+    profile: Literal["driving-traffic", "driving"] = "driving-traffic"
+    country: str | None = Field("us", description="Limit destination search to a country (ISO code) or null.")
+    timeout_s: float = Field(5.0, gt=0.0)
+    off_route_m: float = Field(50.0, gt=0.0, description="PLAN.md: more than ~50 m from the route...")
+    off_route_s: float = Field(5.0, ge=0.0, description="...for 5 s means we left it: reroute.")
+    reroute_cooldown_s: float = Field(20.0, ge=0.0)
+    snap_window_m: float = Field(500.0, gt=0.0, description="Snap near where we were (routes can loop back).")
+    max_backtrack_m: float = Field(50.0, ge=0.0, description="A bigger jump backwards along the route is noise.")
+    arrival_m: float = Field(30.0, gt=0.0)
+    lane_reminders_m: Annotated[tuple[float, ...], Strict(False)] = Field(  # YAML gives a list
+        (1609.0, 402.0), description="PLAN.md: lane reminders about 1 mile and 0.25 mile before a junction."
+    )
 
 
 # --------------------------------------------------------------------------------------- perception
@@ -408,6 +426,7 @@ class SttConfig(_Strict):
     device: Literal["cuda", "cpu"] = "cuda"
     compute_type: str = "float16"
     beam_size: int = Field(1, ge=1, le=10)
+    max_new_tokens: int = Field(64, ge=8, le=440, description="Questions are short; bounds the decode time.")
     initial_prompt: str = Field(
         "Hey DrivePilot. A driver asks about the road: stop signs, traffic lights, lanes, exits, merging, "
         "parking, turns.",
@@ -486,6 +505,7 @@ class AppConfig(_Strict):
 
     video: VideoConfig = VideoConfig()
     gps: GpsConfig = GpsConfig()
+    nav: NavConfig = NavConfig()
     perception: PerceptionConfig = PerceptionConfig()
     ego_motion: EgoMotionConfig = EgoMotionConfig()
     vehicle_motion: VehicleMotionConfig = VehicleMotionConfig()

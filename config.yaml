@@ -24,6 +24,19 @@ video:
 
 gps:
   source: auto              # auto = GPX in file mode (if gpx_path is set), phone page in camera mode
+  stale_s: 3.0              # a phone fix older than this is ignored
+
+nav:                        # Mapbox routing, rerouting and spoken guidance
+  profile: driving-traffic
+  country: us               # destination search limited to this country (null = anywhere)
+  timeout_s: 5.0
+  off_route_m: 50.0         # PLAN.md: more than ~50 m from the route for 5 s = reroute
+  off_route_s: 5.0
+  reroute_cooldown_s: 20.0
+  snap_window_m: 500.0      # snap near where we were (routes can loop back on themselves)
+  max_backtrack_m: 50.0     # a bigger jump backwards along the route is GPS noise
+  arrival_m: 30.0
+  lane_reminders_m: [1609.0, 402.0]  # PLAN.md: lane reminders ~1 mile and ~0.25 mile before a junction
 
 perception:
   weights: models/yolo26s.pt  # downloaded on first run
@@ -118,6 +131,33 @@ vision:
     model: qwen2.5vl:7b     # note: a 7B vision model won't fit in 6 GB next to YOLO and Whisper
     host: http://localhost:11434
     timeout_s: 15.0
+
+voice:
+  input_device: null        # sounddevice name or index; null = system default
+  output_device: null
+  wakeword:                 # "Hey DrivePilot" (openWakeWord model trained by scripts/wakeword)
+    model: models/wakeword/hey_drivepilot.onnx
+    threshold: 0.25         # chosen on validation data (models/wakeword/metrics.json)
+    debounce_s: 2.0
+  endpoint:                 # when the question has ended (Silero VAD)
+    speech_threshold: 0.5
+    end_silence_s: 0.6      # PLAN.md: stop listening after ~0.6 s of silence
+    speculative_silence_s: 0.25  # start transcribing early; kept if the silence lasts
+    no_speech_timeout_s: 4.0
+    max_utterance_s: 10.0
+    pre_roll_s: 0.4
+  stt:                      # faster-whisper on the GPU
+    model: small.en
+    device: cuda
+    compute_type: float16
+    beam_size: 1
+    max_new_tokens: 64      # questions are short; bounds decode time
+  tts:                      # Piper; alerts are pre-rendered clips
+    voice: models/piper/en_US-lessac-medium.onnx
+    length_scale: 0.95
+    clips_dir: models/piper/clips
+    chime_volume: 0.25
+    listen_chime: true
 
 ui:
   host: 127.0.0.1
