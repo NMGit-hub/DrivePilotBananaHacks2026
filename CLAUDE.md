@@ -4,8 +4,10 @@ DrivePilot is a dashcam voice co-pilot for Banana Hacks 2026. PLAN.md is the ful
 is the live status. Read both before starting work.
 
 ## Scope
-- **Build V1 only.** Everything tagged V2 in PLAN.md (overlays, YOLOPv2 lanes, drift warning, pedestrian and
-  cyclist alerts, sign fine-tune, memory, answer highlight) is off limits until the user explicitly says so.
+- **V2 is approved (user, 2026-10-10)**, without waiting for V1's live drive (deferred until the user can
+  drive). V2 = everything tagged V2 in PLAN.md (overlays, YOLOPv2 lanes, drift warning, pedestrian and cyclist
+  alerts, sign fine-tune, memory, answer highlight) plus the new "find me a parking spot" feature. See
+  HANDOFF.md for the decisions, the parking feature and open problems.
 - V1 is the whole co-pilot, not just the 4-way stop: lane guidance ("am I in the right lane?"), roundabout exits,
   traffic lights (incl. "tell me when the light is green", added by the user), signs, parking, road questions,
   navigation by voice and route questions. BUILD_PLAN.md has the feature → milestone → test table.

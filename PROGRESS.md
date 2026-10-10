@@ -283,9 +283,11 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   record more voices with `scripts/wakeword/check_real.py`, ideally in the car; recorded drives with GPX
   (4-way stops with other cars, a roundabout, the 405/520 interchange, parking signs) so the test sheet gets
   navigation / 4-way / roundabout rows; then the live drive (PLAN.md's V1 definition).
-- Open question from the last synthetic voice run (made while the CPU was throttled): 4 synthetic takes woke
-  but no question was heard (`runs/*_voice`, "W ... None"). Not seen on the real takes or in the run before the
-  wake-pause change; re-run `scripts/voice_eval.py --limit 40` on a full-speed machine and check.
+- **Open bug (diagnosed, not fixed):** at threshold 0.15 the wake word can fire before "...pilot" ends; the rest
+  of the wake phrase then counts as the question and the pause after it ends the question with nothing heard
+  (synthetic "Stop watching the light": woke, empty transcript). Fix suggested in HANDOFF.md section 3.
+- **2026-10-10: the user approved V2 without the live drive** (deferred), plus a new V2 feature, "find me a
+  parking spot". HANDOFF.md has the decisions, a starting design, and how to get recorded drives + GPS at home.
 - M9 (needs the team): fix the GPU throttling and re-measure latency; live phone camera + GPS page;
   real-voice wake-word check (`scripts/wakeword/check_real.py`); recorded drives with GPX to add
   navigation, 4-way-stop and roundabout rows to the test sheet; then the live drive.

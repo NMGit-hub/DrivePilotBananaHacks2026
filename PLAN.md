@@ -40,6 +40,9 @@ V1 is the complete working co-pilot — phone camera, laptop, voice in and voice
 **V2 — extras on top of V1**
 **IMPORTANT** - DO NOT START UNTIL I TELL YOU ABOUT THE NEW PARKING FEATURE TO ADD HERE IN THE CLAUDE PROMPT (FOR V2 ONLY. CONINUTE WITH V1)
 
+> Update 2026-10-10: the user described it (V2): ask DrivePilot to help find a parking spot (e.g. in a busy lot), and it
+> tells you when it has found one. V2 is approved without V1's live drive. See HANDOFF.md.
+
 - Visualization: all overlays (car badges, green target lane, red drift line, roundabout diagram, sign cards, curb highlights)
 - YOLOPv2 lane detection, replacing the model's lane count with a per-frame one
 - Lane drift warning
