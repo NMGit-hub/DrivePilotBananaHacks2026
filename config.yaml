@@ -112,6 +112,21 @@ traffic_light:              # light color from the lit lamp; "tell me when it's 
 alerts:                     # spoken on their own: "You're up, check and go." / "Light's green, ..." (when asked)
   cooldown_s: 15.0          # never the same alert twice within this time (once per event)
   watch_timeout_s: 300.0    # "tell me when it's green" requests expire after 5 minutes
+  safety_gap_s: 3.0         # pedestrian warnings closer together are one warning (a group crossing)
+
+pedestrians:                # "Pedestrian stepping into the road on your right." (V2; state/pedestrians.py)
+  half_width_m: 1.5         # our path: 1.5 m either side of where we're heading (half the car + a margin)...
+  min_length_m: 6.0         # ...out to 6 m + 2 s at our speed (GPS; 8 m/s assumed when moving without a fix),
+  headway_s: 2.0            #   at most 35 m; a cyclist riding ahead with us is closed in on slower: shorter
+  max_length_m: 35.0
+  min_speed_mps: 0.5        # GPS slower than this = not moving (people crossing while we wait are normal)
+  confirm_frames: 3         # in (or stepping into) the path 3 observations in a row before a warning
+  predict_s: 1.2            # "stepping into the road": inside the path within 1.2 s at their sideways speed,
+  predict_max_z_m: 15.0     #   predicted only within 15 m (further out, sideways speeds are mostly depth noise)
+  height_weight: 0.5        # distance = box height and ground contact combined (the latter breaks on hills)
+  max_tall_ratio: 1.4       # a "person" much taller than one standing there is a tree / pole: never warned of
+  curvature_uncertainty: 0.0026  # the path bends with our turn rate less this (1/m); far out it narrows by it
+  max_aim_deg: 12.0         # dashcams aimed off the car's axis: where we head is the focus of expansion
 
 vision_model: claude        # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
 vision:

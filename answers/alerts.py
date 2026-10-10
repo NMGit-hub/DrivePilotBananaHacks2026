@@ -14,6 +14,10 @@
   reports "missed" so the assistant answers again from fresh state instead of promising an alert that won't
   come. A request made before a seek (`generation` changed) is ignored.
 - Quiet mode: only REQUESTED and SAFETY alerts.
+- Pedestrians and cyclists in (or stepping into) our path while we move (state/pedestrians.py): a SAFETY alert
+  from a small fixed set of sentences (pre-rendered at startup, so they play at once), spoken at most once per
+  track and not again within `safety_gap_s` of the last one (a group crossing is one warning). Kept in quiet mode;
+  it interrupts answers, which resume afterwards (it doesn't make them stale).
 
 Called from the perception thread (world events) and the voice thread (arming, controls): thread-safe.
 """
@@ -36,6 +40,22 @@ log = get_logger(__name__)
 YOUR_TURN = "You're up, check and go."
 LIGHT_GREEN = "Light's green, check the intersection and go."
 _EVENT_OF = {Watch.TURN: "your_turn", Watch.LIGHT: "light_green"}
+
+# (who, how, side) of a "pedestrian_in_path" event -> what is said. "entering" names the side they come from.
+PEDESTRIAN_TEXTS: dict[tuple[str, str, str], str] = {
+    ("pedestrian", "in_path", "ahead"): "Pedestrian ahead.",
+    ("pedestrian", "in_path", "left"): "Pedestrian ahead on your left.",
+    ("pedestrian", "in_path", "right"): "Pedestrian ahead on your right.",
+    ("pedestrian", "entering", "left"): "Pedestrian stepping into the road on your left.",
+    ("pedestrian", "entering", "right"): "Pedestrian stepping into the road on your right.",
+    ("cyclist", "in_path", "ahead"): "Cyclist ahead.",
+    ("cyclist", "in_path", "left"): "Cyclist ahead on your left.",
+    ("cyclist", "in_path", "right"): "Cyclist ahead on your right.",
+    ("cyclist", "entering", "left"): "Cyclist cutting in on your left.",
+    ("cyclist", "entering", "right"): "Cyclist cutting in on your right.",
+}
+SAFETY_ALERT_TEXTS = tuple(PEDESTRIAN_TEXTS.values())  # pre-rendered at startup with the other fixed alerts
+_WARNED_MEMORY_S = 120.0  # how long a warned track id is remembered (ids only grow within a segment)
 
 
 class ArmResult(StrEnum):
@@ -66,6 +86,7 @@ class AlertEngine:
         self._last_event: dict[str, float] = {}  # event kind -> media time it happened (spoken or not)
         self._turn_silenced = False  # "never mind" at this stop
         self._generation = 0  # bumped on every reset (seek / new segment)
+        self._warned: dict[int, float] = {}  # pedestrian/cyclist track id -> when we warned about them
 
     # ---------------------------------------------------------------------------------- controls
 
@@ -127,7 +148,9 @@ class AlertEngine:
         t = event.t
         with self._lock:
             self._expire(t)
-            if event.kind == "your_turn":
+            if event.kind == "pedestrian_in_path":
+                utterance = self._pedestrian(event)
+            elif event.kind == "your_turn":
                 self._last_event["your_turn"] = t
                 if self._turn_silenced:
                     log.info("alert silenced: never mind", kind="your_turn")
@@ -166,6 +189,29 @@ class AlertEngine:
             self._emit(utterance)
         return utterance
 
+    def _pedestrian(self, event: WorldEvent) -> Utterance | None:
+        """A pedestrian or cyclist in our path (caller holds the lock): once per track, one per `safety_gap_s`.
+        Safety: spoken in quiet mode too."""
+        d, t = event.detail, event.t
+        text = PEDESTRIAN_TEXTS.get((str(d.get("cls")), str(d.get("how")), str(d.get("side"))))
+        track = d.get("track")
+        if text is None or not isinstance(track, int):
+            log.warning("pedestrian event without a known phrase", **d)
+            return None
+        if track in self._warned:
+            log.info("alert suppressed: already warned about this person", kind="pedestrian", track=track)
+            return None
+        self._warned[track] = t
+        if len(self._warned) > 500:
+            self._warned = {k: v for k, v in self._warned.items() if 0.0 <= t - v <= _WARNED_MEMORY_S}
+        last = self._last_fired.get("pedestrian")
+        if last is not None and 0.0 <= t - last < self.cfg.safety_gap_s:
+            log.info("alert suppressed: just warned", kind="pedestrian", track=track, t=round(t, 2))
+            return None
+        self._last_fired["pedestrian"] = t
+        log.info("alert", kind="pedestrian", t=round(t, 2), priority=Priority.SAFETY.name, track=track, text=text)
+        return Utterance(text=text, kind="alert", priority=Priority.SAFETY, clip="pedestrian", t=t)
+
     def _fire(self, kind: str, t: float, text: str, priority: Priority) -> Utterance | None:
         last = self._last_fired.get(kind)
         if last is not None and 0.0 <= t - last < self.cfg.cooldown_s:
@@ -200,4 +246,5 @@ class AlertEngine:
             self._last_fired.clear()
             self._last_event.clear()
             self._turn_silenced = False
+            self._warned.clear()  # track ids start over with the new segment
             self._generation += 1

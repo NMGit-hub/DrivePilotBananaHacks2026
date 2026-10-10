@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from answers.alerts import LIGHT_GREEN, YOUR_TURN
+from answers.alerts import LIGHT_GREEN, SAFETY_ALERT_TEXTS, YOUR_TURN
 from answers.assistant import CAMERA_LOST, Assistant
 from answers.lanes import VisionLaneReader
 from answers.parking import ParkingWatch
@@ -71,7 +71,7 @@ CAMERA_RETRY_S = 3.0  # first wait after a failed reconnect (doubles, up to CAME
 CAMERA_RETRY_MAX_S = 30.0
 CAMERA_HEALTHY_S = 30.0  # running this long after a reconnect resets the backoff
 STALE_AFTER_NAV = {"nav_rerouted", "nav_not_this_exit", "nav_arrived", "nav_roundabout"}
-FIXED_ALERT_TEXTS = (YOUR_TURN, LIGHT_GREEN, *FIXED_ALERTS)
+FIXED_ALERT_TEXTS = (YOUR_TURN, LIGHT_GREEN, *SAFETY_ALERT_TEXTS, *FIXED_ALERTS)  # pre-rendered: play at once
 
 
 def parse_ask(item: str) -> tuple[float, str]:

@@ -522,6 +522,35 @@ def test_alerts_interrupt_answers_and_the_answer_resumes(tmp_path: Path) -> None
     speaker.close()
 
 
+def test_a_safety_alert_cuts_off_a_long_alert_and_jumps_the_queue(tmp_path: Path) -> None:
+    speaker, _ = make_speaker(tmp_path)
+    nav = Utterance("In half a mile, use the left two lanes for exit 14. " * 2, "alert", Priority.REQUESTED, clip="nav")
+    turn = Utterance("You're up, check and go.", "alert", Priority.INFO, clip="your_turn")
+    speaker.say(Utterance("x" * 400, "answer", Priority.ANSWER))
+    time.sleep(0.1)  # the answer is playing
+    speaker.say(nav)  # cuts off the answer
+    speaker.say(turn)  # queued behind the navigation sentence
+    time.sleep(0.3)  # the navigation sentence (~1 s here) is playing
+    warning = Utterance("Pedestrian ahead.", "alert", Priority.SAFETY, clip="pedestrian")
+    speaker.say(warning)
+    assert speaker.wait_idle(10.0)
+    speaker.close()
+    played = [(r.text[:10], r.interrupted) for r in speaker.records]
+    assert (
+        played
+        == [
+            ("x" * 10, True),  # the answer, cut off by the navigation alert...
+            (nav.text[:10], True),  # ...which the warning cuts off...
+            ("Pedestrian", False),
+            (nav.text[:10], False),  # ...and is said again right after it
+            ("You're up,", False),
+            ("x" * 10, False),  # the answer resumes last
+        ]
+    )
+    record = next(r for r in speaker.records if r.text == warning.text)
+    assert record.latency_ms is not None and record.latency_ms < 100
+
+
 def test_an_alert_that_changes_the_situation_drops_stale_answers(tmp_path: Path) -> None:
     speaker, _ = make_speaker(tmp_path)
     speaker.say(Utterance("Not yet, the light's red. " * 8, "answer", Priority.ANSWER))

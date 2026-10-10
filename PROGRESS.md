@@ -27,6 +27,27 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   vs fast street, parked after a turn), 27 watch/assistant tests, 3 reply-window tests. 903 tests pass.
 - **Parking labels** for evaluation: `eval/parking_labels.yaml` (40 clips, 28 usable; 35 clear + 12 ambiguous open
   spots; 66 look-alikes), by two labeling subagents; not yet spot-checked.
+- **V2-M3 (pedestrian and cyclist alerts), via an agent worktree:** `state/pedestrians.py` (owned by `WorldState`,
+  event `pedestrian_in_path`, snapshot `pedestrians`), spoken by `AlertEngine` from 10 fixed pre-rendered sentences
+  ("Pedestrian stepping into the road on your right.", "Cyclist ahead on your left.", ...), SAFETY priority (kept in
+  quiet mode; the speaker now also puts it ahead of queued alerts and cuts off a playing non-safety alert, which is
+  said again after it), once per track, one per 3 s for a group; config `pedestrians:` + `alerts.safety_gap_s`.
+  Design in the module docstring: distance from ground contact and box height (log-combined); x measured from the
+  focus of expansion (one lot clip's dashcam was aimed ~6° off the car's axis: "straight ahead" was the sidewalk);
+  path = 1.5 m either side, 6 m + 2 s at our speed (≤ 35 m), bent by the homography turn rate less a curvature
+  uncertainty and narrowed far out by it; "about to enter" from the lateral speed in excess of a noise floor
+  (within 15 m); only while moving (ego motion + GPS ≥ 0.5 m/s); cyclist riding ahead with us at our speed: not
+  warned (decision, tested). Verified: 46 synthetic tests (pinhole street sim with jitter, dropouts, ID switches,
+  a 150 m curve, a misread turn rate, a 6°-off camera, a tree, the windshield mount, legs hidden behind a car, a
+  motorcyclist; a mutation check confirmed the tests catch each rule being weakened) + 1 speaker test; replayed
+  through the real WorldState + AlertEngine on cached perception (`scripts/eval_pedestrians.py`, frames drawn and
+  looked at): **0 alerts on all 10 dev clips** (the construction-clip crossing and the SF person with the dog
+  happen while we are stopped or 16-20 m ahead of a 9 m path at walking pace: silent, as specified); on 29
+  parking-lot clips 5 alerts: 2 right (a man stepping out between vans into our path; at night, people stepping
+  into the crosswalk just ahead as we roll up to a stop sign), 3 borderline (someone at an aisle edge, a worker
+  beside a truck in the first 0.1 s, someone at the pump island beside the lane we turned into), 0 clearly false
+  (the first version had 9, all false or borderline). Cost on the world thread: 0.08 ms mean, 0.24 ms p99 per
+  frame (dev clips).
 
 ### V1 polish (2026-10-10): throttle check, the early-wake voice bug fixed and reviewed
 - **Throttle check** (HANDOFF.md section 3 item 2): not throttled. On the charger; under a 4-thread load the busy
@@ -364,6 +385,18 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
+- **Pedestrian alerts (V2-M3) have no drivable-area knowledge yet** (YOLOPv2, V2-M5): the path is a geometric
+  corridor from where we're heading, so people at the edge of a narrow aisle, by a pump island, or beyond a planter
+  we are about to turn around can be called "in our path" (3 borderline alerts on 29 lot clips), and a curb close to
+  our car isn't known. Turns are read from the frame homography (~1°/s off on straight roads, so gentle curves are
+  only partly bent). Further limits: no prediction while turning hard (≥ 10°/s) or for boxes cut off at a frame edge;
+  boxes cut off at a side edge never alert (on a 60° camera that hides someone within ~2.6 m of the bumper's
+  corners; the phone's 114° lens sees them); the first ~1.5 s after a reset use the image centre as our heading
+  and the prior horizon; a new track beyond 9 m waits ~0.3 s for its motion before it can be "in the path"; a
+  bicycle never seen with a rider is treated as parked; a "person" over 1.4× too tall for where it stands is
+  ignored beyond 8 m (trees, poles; also someone whose legs are hidden behind a car). Tuned on BDD100K footage
+  only (narrow 60° dashcams); the dev clips have no real case of someone in our path while we move, so true
+  positives on real footage come from the lot clips (2) and the synthetic tests.
 - **The parking feature has not been run on real footage yet** (only simulated lots): next step, scored against
   `eval/parking_labels.yaml` (HANDOFF.md section 2). Street mode is untested; `config.yaml` has no `parking:`
   section yet (defaults live in `core/config.py`); no overlay yet. On a ~60° camera (BDD100K) a spot is confirmed
