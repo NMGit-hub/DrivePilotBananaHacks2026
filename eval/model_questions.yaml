@@ -1,0 +1,43 @@
+# Vision-model questions on dev clips (BUILD_PLAN M5): signs, parking, lights, road awareness, lane counts.
+# Expected words were set by looking at full-resolution frames. Run: scripts/ask_model.py --suite <this file>
+questions:
+  - clip: data/videos/dev/highway_multilane_overhead_sign__c4c4b88a-d1a38d2f.mov
+    t: 14.4
+    question: What did that white sign on the right say?
+    expect_any: [truck route, truck]          # "LAST LOCAL TRUCK ROUTE"
+  - clip: data/videos/dev/highway_multilane_overhead_sign__c4c4b88a-d1a38d2f.mov
+    t: 33.0
+    question: How many lanes are there going my way?
+    expect_any: [three, "3"]
+  - clip: data/videos/dev/highway_multilane_overhead_sign__c4c4b88a-d1a38d2f.mov
+    t: 33.0
+    question: What does the overhead sign say?
+    expect_any: [can't, cannot, too far, not clear, unclear, hard to read, delays]  # tiny LED board: honest "can't read" is right
+  - clip: data/videos/dev/school_bus_stop_arm_parking__c33700f7-08262a44.mov
+    t: 18.0
+    question: Why is that bus stopped?
+    expect_any: [school bus, stop arm, stop sign, stop-arm, picking up, dropping off]
+  - clip: data/videos/dev/school_bus_stop_arm_parking__c33700f7-08262a44.mov
+    t: 26.0
+    question: What's that building on the right?
+    expect_any: [TD]
+  - clip: data/videos/dev/red_light_construction_pedestrian__b4a99fcc-d849eaf4.mov
+    t: 25.2
+    question: Is the road closed ahead?
+    expect_any: [barrel, drum, cone, construction, work zone]
+  - clip: data/videos/dev/red_light_construction_pedestrian__b4a99fcc-d849eaf4.mov
+    t: 29.0
+    question: Is that person crossing?
+    expect_any: ["yes", crossing, in front]
+  - clip: data/videos/dev/red_light_turns_green_sf__b97b9ee8-612c36ef.mov
+    t: 30.0
+    question: Is the light green?
+    expect_any: [red, "no"]
+  - clip: data/videos/dev/red_light_rain_school_zone__b61456bb-5bfb50ee.mov
+    t: 3.0
+    question: What did that yellow sign say?
+    expect_any: [school, children, pedestrian, crossing, can't, cannot]
+  - clip: data/videos/dev/red_light_rain_school_zone__b61456bb-5bfb50ee.mov
+    t: 9.0
+    question: What's going on on the right?
+    expect_any: [construction, work, barrier, crew]
