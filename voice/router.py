@@ -331,6 +331,8 @@ _ACTION = (
     r"stop or go|get in|slip in|jump in)"
 )
 _GO = r"(?:go|turn|cross|proceed|drive|pull out|go now|turn now)"
+_PASS = r"(?:pass|passing|overtake|overtaking|go around|going around|get around|drive around|go past|get past|get by)"
+_SCHOOL_BUS_PASS = _rx(rf"\b{_PASS}\b.*\bschool bus(?:es)?\b", rf"\bschool bus(?:es)?\b.*\b{_PASS}\b")
 _GAP = _rx(
     rf"\b(?:can|could|should|may|shall|will|would) (?:i|we)(?: still| just| safely)? {_ACTION}\b",
     rf"\b(?:am i|are we) going to {_ACTION}\b",
@@ -475,6 +477,9 @@ def _route_once(text: str) -> Route:
     for intent, pattern in _CONTROLS:
         if pattern.search(norm):
             return make(RouteKind.CONTROL, intent)
+
+    if _SCHOOL_BUS_PASS.search(norm):  # a fixed legal rule, whatever the traffic: never pass a stopped school bus
+        return make(RouteKind.GAP_CHECK, "school_bus")
 
     for intent, pattern in _NAV_FIRST:  # "did I miss my turn", "tell me where to go" before right of way / watches
         if pattern.search(norm):

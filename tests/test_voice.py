@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -189,16 +190,23 @@ class FakeOutput:
     def __init__(self) -> None:
         self.played: list[int] = []
         self._stop = threading.Event()
+        self._lock = threading.Lock()
 
-    def play(self, audio: np.ndarray, rate: int, timeout: float | None = None) -> float | None:
-        self._stop.clear()
+    def play(
+        self, audio: np.ndarray, rate: int, timeout: float | None = None, should_start: Any = None
+    ) -> float | None:
+        with self._lock:  # like AudioOutput: the start check and stop() share a lock
+            if should_start is not None and not should_start():
+                return None
+            self._stop.clear()
         started = time.perf_counter()
         self.played.append(len(audio))
         self._stop.wait(len(audio) / rate / 20)
         return started
 
     def stop(self) -> None:
-        self._stop.set()
+        with self._lock:
+            self._stop.set()
 
 
 class FakeTts:
@@ -240,11 +248,12 @@ def test_an_alert_that_changes_the_situation_drops_stale_answers(tmp_path: Path)
     speaker.say(green)
     speaker.say(Utterance("A newer answer.", "answer", Priority.ANSWER))  # said after the alert: kept
     assert speaker.wait_idle(10.0)
-    said = [(r.kind, r.text[:15], r.interrupted) for r in speaker.records]
+    said = sorted((r.kind, r.text[:15], r.interrupted, r.sound_at is not None) for r in speaker.records)
     assert said == [
-        ("answer", "Not yet, the li", True),
-        ("alert", "Light's green, ", False),
-        ("answer", "A newer answer.", False),
+        ("alert", "Light's green, ", False, True),
+        ("answer", "A newer answer.", False, True),
+        ("answer", "I'll tell you w", True, False),  # queued: dropped, never played
+        ("answer", "Not yet, the li", True, True),  # playing: cut off, not resumed
     ]
     speaker.close()
 
@@ -256,7 +265,9 @@ def test_stop_silences_everything(tmp_path: Path) -> None:
     time.sleep(0.2)
     speaker.stop()
     assert speaker.wait_idle(2.0)
-    assert len(speaker.records) == 1 and speaker.records[0].interrupted
+    records = list(speaker.records)
+    assert len(records) == 3 and all(r.interrupted for r in records)  # every utterance gets a record
+    assert sum(r.sound_at is not None for r in records) == 1  # only the one that was playing made a sound
     speaker.close()
 
 
@@ -368,3 +379,62 @@ def test_real_pipeline_hears_a_synthetic_question() -> None:
     assert len(heard) == 1
     result = route(heard[0].text)
     assert (result.kind.value, result.intent) == ("right_of_way", "can_i_go"), heard[0].text
+
+
+# ------------------------------------------------------------------- M4/M7 review regressions (speaker)
+
+
+class SlowStartOutput(FakeOutput):
+    """Takes 50 ms to prepare a sound (resampling) before the start check, like a busy AudioOutput."""
+
+    def play(
+        self, audio: np.ndarray, rate: int, timeout: float | None = None, should_start: Any = None
+    ) -> float | None:
+        time.sleep(0.05)
+        return super().play(audio, rate, timeout, should_start)
+
+
+def test_a_stop_while_a_sound_is_being_prepared_prevents_it(tmp_path: Path) -> None:
+    tts, output = FakeTts(), SlowStartOutput()
+    speaker = AudioSpeaker(tts, output, ClipCache(tts, tmp_path)).start()  # type: ignore[arg-type]
+    for _ in range(20):
+        speaker.say(Utterance("x" * 400, "answer", Priority.ANSWER))  # 2 s when played
+        time.sleep(0.01)  # rendered; now inside the 50 ms preparation window
+        speaker.stop()
+        assert speaker.wait_idle(2.0)
+    speaker.close()
+    assert all(r.sound_at is None for r in speaker.records)  # never started, not "stopped the previous sound"
+
+
+def test_an_alert_plays_at_once_while_a_long_answer_is_synthesized(tmp_path: Path) -> None:
+    class SlowTts(FakeTts):
+        def synthesize(self, text: str) -> np.ndarray:
+            if text.startswith("long"):
+                time.sleep(0.6)  # Piper on a busy CPU, a long sentence
+            return super().synthesize(text)
+
+    tts = SlowTts()
+    clips = ClipCache(tts, tmp_path)  # type: ignore[arg-type]
+    clips.prepare(["You're up, check and go."])
+    speaker = AudioSpeaker(tts, FakeOutput(), clips).start()  # type: ignore[arg-type]
+    speaker.say(Utterance("long answer " * 10, "answer", Priority.ANSWER))
+    time.sleep(0.05)  # synthesis has started
+    speaker.say(Utterance("You're up, check and go.", "alert", Priority.REQUESTED, clip="your_turn"))
+    assert speaker.wait_idle(5.0)
+    speaker.close()
+    alert = next(r for r in speaker.records if r.kind == "alert")
+    assert alert.latency_ms is not None and alert.latency_ms < 100  # didn't wait for the 0.6 s synthesis
+
+
+def test_the_wake_word_stops_answers_but_not_alerts(tmp_path: Path) -> None:
+    speaker, _ = make_speaker(tmp_path)
+    speaker.say(Utterance("Light's green, check the intersection and go." * 4, "alert", Priority.REQUESTED))
+    speaker.say(Utterance("an answer " * 20, "answer", Priority.ANSWER))
+    time.sleep(0.1)  # the alert is playing, the answer waits
+    speaker.listening()
+    assert speaker.wait_idle(5.0)
+    speaker.close()
+    played = [(r.kind, r.sound_at is not None) for r in speaker.records]
+    assert ("alert", True) in played and ("answer", False) in played and ("cue", True) in played
+    alert = next(r for r in speaker.records if r.kind == "alert")
+    assert not alert.interrupted  # the alert finished

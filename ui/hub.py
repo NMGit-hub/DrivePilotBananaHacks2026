@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import itertools
+import json
 import threading
 import time
 import uuid
@@ -23,12 +24,13 @@ from typing import Any
 
 import cv2
 
-from core.logging_setup import get_logger, to_jsonable
+from core.logging_setup import get_logger, redact, to_jsonable
 from core.types import Frame
 
 log = get_logger(__name__)
 
 PAGE_QUEUE = 500  # messages buffered per open page before the oldest are dropped
+CLOSE = "_close"  # internal: the server closes the page's WebSocket
 
 
 class UiHub:
@@ -62,8 +64,10 @@ class UiHub:
         return self
 
     def stop(self) -> None:
-        """Stop the encoder thread."""
+        """Stop the encoder thread, and tell open pages' connections to close."""
         self._stop.set()
+        with self._lock:
+            self._push_locked({"type": CLOSE})
         with self._frame_cond:
             self._frame_cond.notify_all()
         if self._thread is not None:
@@ -124,19 +128,21 @@ class UiHub:
     # ------------------------------------------------------------------------------- messages
 
     def publish(self, kind: str, **data: Any) -> dict[str, Any]:
-        """Add a message to the conversation feed and push it to every open page (any thread)."""
-        message = {"type": kind, "id": next(self._ids), "wall": round(time.time(), 3), **to_jsonable(data)}
+        """Add a message to the conversation feed and push it to every open page (any thread). Ids, history
+        order and delivery order agree (all under one lock), so a page never sees message N+1 before N."""
+        body = _clean(data)
         with self._lock:
+            message = {"type": kind, "id": next(self._ids), "wall": round(time.time(), 3), **body}
             self._history.append(message)
-        self._push(message)
+            self._push_locked(message)
         return message
 
     def set_status(self, **status: Any) -> None:
         """Replace the status line (any thread)."""
-        message = {"type": "status", **to_jsonable(status)}
+        message = {"type": "status", **_clean(status)}
         with self._lock:
             self._status = message
-        self._push(message)
+            self._push_locked(message)
 
     def history(self) -> list[dict[str, Any]]:
         """The conversation so far (oldest first)."""
@@ -167,13 +173,17 @@ class UiHub:
         with self._lock:
             self._pages.discard(queue)
 
-    def _push(self, message: dict[str, Any]) -> None:
-        with self._lock:
-            loop, pages = self._loop, list(self._pages)
-        if loop is None or not pages:
+    def _push_locked(self, message: dict[str, Any]) -> None:
+        """Deliver to every page (caller holds the lock; call_soon_threadsafe doesn't block)."""
+        if self._loop is None or not self._pages:
             return
         with contextlib.suppress(RuntimeError):  # the loop is closed (shutting down)
-            loop.call_soon_threadsafe(_deliver, pages, message)
+            self._loop.call_soon_threadsafe(_deliver, list(self._pages), message)
+
+
+def _clean(data: dict[str, Any]) -> dict[str, Any]:
+    """Plain JSON values, with any secret redacted (messages reach the page and could carry error text)."""
+    return dict(json.loads(redact(json.dumps(to_jsonable(data)))))
 
 
 def _deliver(pages: list[asyncio.Queue[dict[str, Any]]], message: dict[str, Any]) -> None:

@@ -56,6 +56,7 @@ class VisionRequest:
     text: str  # context + question, after the images
     images: tuple[ImagePart, ...] = ()
     max_tokens: int = 300
+    temperature: float | None = None  # None: the provider's default
 
 
 class VisionError(RuntimeError):
@@ -152,6 +153,7 @@ class VisionModel(ABC):
                 text=request.text,
                 images=request.images,
                 max_tokens=request.max_tokens,
+                temperature=request.temperature,
             ),
             first_token_s,
             total_s,
@@ -215,12 +217,14 @@ class ClaudeVision(VisionModel):
     def stream(self, request: VisionRequest) -> Iterator[str]:
         """Stream text deltas from the Messages API."""
         content = self.content(request)
+        extra: dict[str, Any] = {} if request.temperature is None else {"temperature": request.temperature}
         try:
             with self._client.messages.stream(
                 model=self.model,
                 max_tokens=request.max_tokens,
                 system=request.system,
                 messages=[{"role": "user", "content": content}],
+                **extra,
             ) as stream:
                 yield from stream.text_stream
                 final = stream.get_final_message()
@@ -264,6 +268,7 @@ class GeminiVision(VisionModel):
         config = types.GenerateContentConfig(
             system_instruction=request.system,
             max_output_tokens=request.max_tokens,
+            temperature=request.temperature,
             thinking_config=types.ThinkingConfig(thinking_level=self.thinking_level),
         )
         return contents, config
@@ -310,7 +315,8 @@ class OllamaVision(VisionModel):
         body = {
             "model": self.model,
             "stream": True,
-            "options": {"num_predict": request.max_tokens},
+            "options": {"num_predict": request.max_tokens}
+            | ({} if request.temperature is None else {"temperature": request.temperature}),
             "messages": [
                 {"role": "system", "content": request.system},
                 {

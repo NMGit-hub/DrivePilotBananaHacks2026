@@ -120,7 +120,7 @@ class NavHandler:
 
     # --------------------------------------------------------------------------------- answers
 
-    def answer(self, question: Question, snapshot: WorldSnapshot) -> str:
+    def answer(self, question: Question, snapshot: WorldSnapshot | None) -> str:
         """Answer a DESTINATION / NAV / LANE question."""
         if question.kind is RouteKind.DESTINATION:
             return self.set_destination(question.place or question.text)

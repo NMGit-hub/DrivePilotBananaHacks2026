@@ -25,7 +25,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 
-from answers.local import ahead_of_us, describe
+from answers.local import SCHOOL_BUS_RULE, ahead_of_us, describe
 from answers.sentences import sentences
 from answers.vision import (
     ImagePart,
@@ -57,8 +57,12 @@ out, cross or change lanes, and never say "go", "go ahead", "you're good to go",
 Describe what you see, and when the question is about going, turning or merging, end with "check both ways \
 yourself".
 - If you can't see something clearly (too far, glare, blur, out of view), say so instead of guessing.
-- Read signs exactly. Quote only words you can actually read; never fill in text you can't make out. For \
-time-limited rules (parking, turn restrictions, school zones) use the day and time given.
+- Read signs exactly. Quote only words you can actually read; never fill in text you can't make out, and never \
+name a sign (like "no turn on red") unless you can read those words on it. Electronic message boards are usually \
+too small to read: say so. For time-limited rules (parking, turn restrictions, school zones) use the day and \
+time given.
+- A school bus stopped with its red lights flashing or its STOP arm out is loading or unloading children: \
+traffic must stop and wait until it moves on. Never suggest passing or going around it.
 - To count lanes, count the lanes in your direction between the solid edge lines, using the dashed lane lines \
 and the cars in them; say which one you are in, counted from the left. If the edges aren't visible, say so.
 - The context comes from an automatic tracker and can be wrong: if it disagrees with what you see, trust what \
@@ -81,6 +85,12 @@ GO_QUESTION = re.compile(
     r"(?:safe|clear|ok|okay) to|(?:anyone|anybody|anything|someone|somebody|cars?|traffic) coming|room to|gap)\b",
     re.IGNORECASE,
 )
+# Questions about passing / going around something; a school bus in the answer then gets the fixed rule.
+PASS_QUESTION = re.compile(
+    r"\b(?:pass|passing|overtake|overtaking|go(?:ing)? around|get around|drive around|go past|get past|get by)\b",
+    re.IGNORECASE,
+)
+SCHOOL_BUS = re.compile(r"\bschool ?bus(?:es)?\b", re.IGNORECASE)
 # Permission in any sentence, whatever the question.
 PERMISSION = re.compile(
     r"^\W*(?:yes\W+|ok(?:ay)?\W+|sure\W+)?go\b(?! to\b)"  # "Go.", "Yes, go." (not "Go to the next exit")
@@ -244,7 +254,13 @@ class SceneHandler:
         if latest is None:
             context.append("No camera image is available right now.")
         text = "Context:\n" + "\n".join(f"- {line}" for line in context) + f"\n\nDriver's question: {question}"
-        return VisionRequest(system=SYSTEM_PROMPT, text=text, images=tuple(images), max_tokens=self._max_tokens())
+        return VisionRequest(
+            system=SYSTEM_PROMPT,
+            text=text,
+            images=tuple(images),
+            max_tokens=self._max_tokens(),
+            temperature=vcfg.temperature,
+        )
 
     def _max_tokens(self) -> int:
         by_provider = {"claude": self.cfg.vision.claude.max_tokens, "gemini": self.cfg.vision.gemini.max_tokens}
@@ -257,14 +273,20 @@ class SceneHandler:
         request = self.build_request(route.question or route.text, snapshot)
         vcfg = self.cfg.vision
         pieces = guarded_stream(self.model, request, vcfg.first_token_timeout_s, vcfg.total_timeout_s, cancel)
-        return self._safe(sentences(pieces), strict=is_go_question(route))
+        passing = bool(PASS_QUESTION.search(route.text))
+        return self._safe(sentences(pieces), strict=is_go_question(route), passing=passing)
 
-    def _safe(self, stream: Iterator[str], strict: bool) -> Iterator[str]:
+    def _safe(self, stream: Iterator[str], strict: bool, passing: bool = False) -> Iterator[str]:
         """Safety nets on every sentence, and spoken fallbacks for failures."""
         said = False
         no_vouch_said = False
         try:
             for sentence in stream:
+                if passing and SCHOOL_BUS.search(sentence):
+                    # "Should I go around them?" with a school bus in view: the rule, not the model's judgment.
+                    log.warning("school bus in a passing answer: replaced by the rule", sentence=sentence)
+                    yield SCHOOL_BUS_RULE
+                    return
                 if PERMISSION.search(sentence) or (strict and VOUCHING.search(sentence)):
                     log.warning("replaced a sentence that vouched for traffic", sentence=sentence, strict=strict)
                     if no_vouch_said:

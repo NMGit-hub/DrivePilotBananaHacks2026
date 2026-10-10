@@ -5,7 +5,9 @@ consumer falls behind, frames are skipped so the pipeline always sees "now" (lik
 mode (`realtime=False`) delivers every frame as fast as the consumer takes them, and the clock follows the
 frame timestamps, so benchmarks and evals are deterministic.
 
-Pause / skip work in both modes; every seek or loop restart starts a new `segment` so trackers reset.
+Pause / skip work in both modes; every seek or loop restart starts a new `segment` so trackers reset. With
+`hold_at_end` the source doesn't finish at the end of the file: the clock stops on the last frame (so GPS replay
+and timers stop too) and a seek back plays on from there.
 """
 
 from __future__ import annotations
@@ -39,12 +41,15 @@ class FileSource(VideoSource):
         realtime: bool = True,
         start_s: float = 0.0,
         loop: bool = False,
+        hold_at_end: bool = False,
     ) -> None:
         super().__init__(clock if clock is not None else MediaClock(start=start_s), name=f"file:{Path(path).name}")
         self.path = Path(path)
         self.realtime = realtime
         self.start_s = start_s
         self.loop = loop
+        self.hold_at_end = hold_at_end
+        self._at_end = False
         self._lockstep = not realtime
         self._media_clock: MediaClock = self.clock  # type: ignore[assignment]
         self._cap: cv2.VideoCapture | None = None
@@ -71,6 +76,12 @@ class FileSource(VideoSource):
     def duration(self) -> float:
         """Clip length in seconds (from frame count / fps)."""
         return self._frame_count / self._fps if self._fps else 0.0
+
+    @property
+    def at_end(self) -> bool:
+        """True while holding at the end of the file (`hold_at_end`)."""
+        with self._ctrl_lock:
+            return self._at_end
 
     @property
     def paused(self) -> bool:
@@ -182,6 +193,15 @@ class FileSource(VideoSource):
                     last_t = -math.inf
                     resync_clock = True
                     continue
+                if self.hold_at_end:
+                    with self._ctrl_lock:
+                        self._at_end = True
+                        self._media_clock.pause()
+                    log.info("end of video: holding the last frame", path=str(self.path), late_frames=late_frames)
+                    self._wait_for_seek()
+                    with self._ctrl_lock:
+                        self._at_end = False
+                    continue
                 log.info("end of video", path=str(self.path), late_frames=late_frames)
                 return
 
@@ -243,6 +263,15 @@ class FileSource(VideoSource):
             elif not self.realtime:
                 self._media_clock.seek(t)  # lock-step: the (paused) clock follows the frames
             self._publish(Frame(image=image, t=t, index=index, captured_at=time.perf_counter(), segment=segment))
+
+    def _wait_for_seek(self) -> None:
+        """At the end of the file: wait until a seek (or stop) arrives."""
+        while not self._stop.is_set():
+            with self._ctrl_lock:
+                if self._pending_seek is not None:
+                    return
+            self._wake.wait(_CONTROL_POLL_S)
+            self._wake.clear()
 
     @staticmethod
     def _decode_one(cap: cv2.VideoCapture, segment: int) -> Frame | None:

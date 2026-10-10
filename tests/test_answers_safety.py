@@ -220,3 +220,94 @@ def test_model_answers_stream_and_stop_cuts_them_off() -> None:
     reply = a.ask("What does that sign say?")
     assert reply.text == "The sign says no parking." and speaker.texts() == ["The sign says no parking."]
     assert reply.first_ms is not None and closed == [True]
+
+
+# --------------------------------------------------------------- M4/M7 review regressions (assistant)
+
+
+def test_a_slow_navigation_answer_is_not_spoken_after_stop() -> None:
+    import threading
+    import time
+
+    from answers.assistant import Assistant
+    from answers.speech import TextSpeaker
+    from core.config import load_config
+    from state.world import empty_snapshot
+
+    class SlowNav:
+        def answer(self, route, snapshot):  # type: ignore[no-untyped-def]
+            time.sleep(0.4)  # the lane reader asking the vision model
+            return "For SR 520 in a mile, use the two right lanes."
+
+    speaker = TextSpeaker()
+    assistant = Assistant(load_config(), lambda: empty_snapshot(5.0), speaker, nav=SlowNav())  # type: ignore[arg-type]
+    asking = threading.Thread(target=assistant.ask, args=("which lane for 520 east?",))
+    asking.start()
+    time.sleep(0.1)
+    assert assistant.ask("Hey DrivePilot, stop").text is None
+    asking.join(2.0)
+    assert speaker.texts() == []  # the lane answer arrived after "stop": dropped
+
+
+def test_navigation_is_answered_without_the_camera() -> None:
+    from answers.assistant import Assistant
+    from answers.speech import TextSpeaker
+    from core.config import load_config
+
+    class Nav:
+        def answer(self, route, snapshot):  # type: ignore[no-untyped-def]
+            return f"next step (snapshot={snapshot})"
+
+    assistant = Assistant(load_config(), lambda: None, TextSpeaker(), nav=Nav(), unavailable=lambda: "camera lost")
+    assert assistant.ask("what's my next turn?").text == "next step (snapshot=None)"
+    assert assistant.ask("who got here first?").text == "camera lost"
+
+
+def test_repeat_that_repeats_the_whole_streamed_answer() -> None:
+    from answers.assistant import Assistant
+    from answers.speech import TextSpeaker
+    from core.config import load_config
+    from state.world import empty_snapshot
+
+    class Model:
+        def answer(self, route, snapshot, cancel=None):  # type: ignore[no-untyped-def]
+            yield "The sign says no parking 7 to 9 AM."
+            yield "It's 8:15 now."
+            yield "So no."
+
+    speaker = TextSpeaker()
+    assistant = Assistant(load_config(), lambda: empty_snapshot(5.0), speaker, model=Model())  # type: ignore[arg-type]
+    assistant.ask("can I park here?")
+    assert assistant.ask("repeat that").text == "The sign says no parking 7 to 9 AM. It's 8:15 now. So no."
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["Can I pass the school bus?", "should I go around the school bus", "can I overtake that school bus now?"],
+)
+def test_passing_a_school_bus_gets_the_rule_moving_or_not(question: str) -> None:
+    from answers.assistant import Assistant
+    from answers.local import SCHOOL_BUS_RULE
+    from answers.speech import TextSpeaker
+    from core.config import load_config
+    from state.world import empty_snapshot
+
+    assistant = Assistant(load_config(), lambda: empty_snapshot(5.0), TextSpeaker())
+    reply = assistant.ask(question)
+    assert reply.text == SCHOOL_BUS_RULE and reply.source == "local" and reply.text.startswith("No.")
+
+
+def test_a_model_answer_about_going_around_a_school_bus_becomes_the_rule() -> None:
+    from answers.local import SCHOOL_BUS_RULE
+    from answers.scene import SceneHandler
+    from answers.vision import MockVision
+    from core.config import load_config
+    from state.world import empty_snapshot
+    from voice.router import route
+
+    model = MockVision(
+        "There's a school bus stopped directly ahead of us. Check both ways before attempting to go around it."
+    )
+    scene = SceneHandler(load_config(), model, lambda n, s: [])
+    said = list(scene.answer(route("should I go around them?"), empty_snapshot(5.0)))
+    assert said == [SCHOOL_BUS_RULE]

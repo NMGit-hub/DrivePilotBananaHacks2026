@@ -56,24 +56,29 @@ def frame(t: float = 0.0, width: int = 320) -> Frame:
 def test_latency_of_an_answer_and_an_alert() -> None:
     book = LatencyBook()
     with book.question(7, origin=100.0):
-        book.on_say("answer", "First sentence.")
-        book.on_say("answer", "Second sentence.")  # only the first one is timed
+        book.on_say(1, "answer")
+        book.on_say(2, "answer")  # only the first sentence is timed
     with book.detection(origin=200.0):
-        book.on_say("alert", "You're up, check and go.", "your_turn")
-    assert book.on_played("answer", "Second sentence.", 101.0) is None
-    measured = book.on_played("answer", "First sentence.", 100.8)
+        book.on_say(3, "alert", "your_turn")
+    assert book.on_played(2, 101.0) is None
+    measured = book.on_played(1, 100.8)
     assert measured is not None and measured.seconds == pytest.approx(0.8) and book.answers == {7: pytest.approx(0.8)}
-    alert = book.on_played("alert", "You're up, check and go.", 200.25)
+    assert book.on_played(1, 105.0) is None  # an interrupted answer that resumed: the first sound counts
+    alert = book.on_played(3, 200.25)
     assert alert is not None and alert.key == "your_turn" and alert.seconds == pytest.approx(0.25)
-    book.on_say("answer", "Not inside a question.")  # e.g. "repeat that" from elsewhere: not timed
-    assert book.on_played("answer", "Not inside a question.", 300.0) is None
+    book.on_say(4, "answer")  # e.g. "repeat that" from elsewhere: not timed
+    assert book.on_played(4, 300.0) is None
 
 
-def test_latency_of_a_dropped_utterance_is_not_counted() -> None:
+def test_latency_of_a_dropped_utterance_is_not_counted_or_mixed_up() -> None:
     book = LatencyBook()
     with book.question(1, origin=10.0):
-        book.on_say("answer", "Stopped before it played.")
-    assert book.on_played("answer", "Stopped before it played.", None) is None and book.answers == {}
+        book.on_say(1, "answer")  # "You're first." for question 1: dropped by a newer question
+    with book.question(2, origin=12.0):
+        book.on_say(2, "answer")  # the same words for question 2: played
+    assert book.on_played(1, None) is None
+    measured = book.on_played(2, 12.4)
+    assert measured is not None and book.answers == {2: pytest.approx(0.4)}
 
 
 # ------------------------------------------------------------------------------------------ lane reader
@@ -134,7 +139,7 @@ class Actions:
 
 def test_server_pages_and_api() -> None:
     hub, actions = UiHub(), Actions()
-    with TestClient(create_server(hub, actions)) as client:
+    with TestClient(create_server(hub, actions), base_url="http://localhost") as client:
         assert "DrivePilot" in client.get("/").text and "watchPosition" in client.get("/gps").text
         assert client.post("/api/ask", json={"text": "  who got here first?  "}).json() == {"ok": True}
         assert client.post("/api/ask", data={"text": "hi"}).status_code == 415  # a plain form from another site
@@ -152,7 +157,10 @@ def test_websocket_gets_history_then_live_messages() -> None:
     hub = UiHub()
     hub.publish("question", text="who got here first?", via="typed", t=1.0)
     hub.set_status(t=1.0, live=False)
-    with TestClient(create_server(hub, Actions())) as client, client.websocket_connect("/ws") as socket:
+    with (
+        TestClient(create_server(hub, Actions()), base_url="http://localhost") as client,
+        client.websocket_connect("ws://localhost/ws") as socket,
+    ):
         hello = socket.receive_json()
         assert hello["type"] == "hello" and hello["session"] == hub.session
         assert [m["text"] for m in hello["history"]] == ["who got here first?"] and hello["status"]["live"] is False
@@ -161,12 +169,61 @@ def test_websocket_gets_history_then_live_messages() -> None:
         assert message["type"] == "answer" and message["text"] == "You're first." and message["id"] == 2
 
 
+def test_other_sites_cannot_use_the_server() -> None:
+    from starlette.testclient import WebSocketDenialResponse
+    from starlette.websockets import WebSocketDisconnect
+
+    hub, actions = UiHub(), Actions()
+    hub.publish("question", text="take me to 7525 166th Ave NE", via="voice", t=1.0)
+    page = create_server(hub, actions)
+    with TestClient(page, base_url="http://localhost") as client:
+        # a page on another site (cross-origin fetch with a JSON body would need CORS; this checks the Origin too)
+        evil = {"Origin": "http://evil.example"}
+        assert client.post("/api/ask", json={"text": "hi"}, headers=evil).status_code == 403
+        assert client.post("/api/gps", json={"lat": 1.0, "lon": 2.0}, headers=evil).status_code == 403
+        # WebSockets ignore CORS: without the check, the history (with the destination address) would leak
+        with (
+            pytest.raises((WebSocketDenialResponse, WebSocketDisconnect)),
+            client.websocket_connect("ws://localhost/ws", headers=evil) as socket,
+        ):
+            socket.receive_json()
+        # our own page is fine
+        mine = {"Origin": "http://localhost:8000"}
+        assert client.post("/api/ask", json={"text": "hi"}, headers=mine).status_code == 200
+    with TestClient(page, base_url="http://evil.example") as rebound:  # DNS rebinding: the Host is theirs
+        assert rebound.post("/api/gps", json={"lat": 1.0, "lon": 2.0}).status_code == 400
+        assert rebound.get("/api/state").status_code == 400
+    assert actions.asked == ["hi"] and actions.fixes == []
+
+
+def test_hub_messages_are_redacted_and_in_order() -> None:
+    from core.logging_setup import register_secrets
+
+    register_secrets(["sk-test-secret-123456"])
+    try:
+        hub = UiHub()
+        hub.set_status(vision="claude (failed: bad key sk-test-secret-123456)")
+        message = hub.publish("note", text="error sk-test-secret-123456")
+        assert "sk-test" not in str(hub.status()) and "sk-test" not in message["text"]
+        threads = [
+            threading.Thread(target=lambda: [hub.publish("note", text="x") for _ in range(200)]) for _ in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        ids = [m["id"] for m in hub.history()]
+        assert ids == sorted(ids)
+    finally:
+        register_secrets([])
+
+
 def test_video_stream_sends_jpeg_frames() -> None:
     hub = UiHub(width=160).start()
     hub.offer_frame(frame(width=640))
     assert wait_for(lambda: hub.latest_jpeg()[1] is not None)
     threading.Timer(0.5, hub.stop).start()  # ends the (otherwise endless) stream: TestClient reads it to the end
-    with TestClient(create_server(hub, Actions())) as client:
+    with TestClient(create_server(hub, Actions()), base_url="http://localhost") as client:
         response = client.get("/video.mjpg")
     assert response.headers["content-type"].startswith("multipart/x-mixed-replace")
     assert response.content.startswith(b"--frame\r\nContent-Type: image/jpeg")
@@ -181,12 +238,20 @@ def test_hub_keeps_newest_frame_only_and_bounded_history() -> None:
     for i in range(5):
         hub.publish("note", text=str(i))
     assert [m["text"] for m in hub.history()] == ["2", "3", "4"]
-    hub.start()
+    hub = UiHub(fps=2.0).start()  # at most one frame every 0.5 s
     hub.offer_frame(frame(1.0))
-    hub.offer_frame(frame(2.0))
-    assert wait_for(lambda: hub.encoded >= 1)
+    assert wait_for(lambda: hub.encoded == 1)
+    for brightness in (40, 120, 220):  # three frames arrive before the next slot: only the newest is shown
+        image = np.full((90, 160, 3), brightness, np.uint8)
+        hub.offer_frame(Frame(image=image, t=2.0, index=1, captured_at=time.perf_counter()))
+    assert wait_for(lambda: hub.encoded == 2)
+    time.sleep(0.6)
     hub.stop()
-    assert hub.encoded <= 2
+    assert hub.encoded == 2
+    jpeg = hub.latest_jpeg()[1]
+    assert jpeg is not None
+    shown = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_GRAYSCALE)
+    assert abs(float(shown.mean()) - 220) < 5
 
 
 # ------------------------------------------------------------------------------------------- app wiring
@@ -212,7 +277,7 @@ class InstantSpeaker(TextSpeaker):
         super().say(utterance)
         if self.on_record is not None:
             now = time.perf_counter()
-            self.on_record(SpeechRecord(utterance.kind, utterance.text, now, now + 0.01))
+            self.on_record(SpeechRecord(utterance.kind, utterance.text, now, now + 0.01, uid=utterance.uid))
 
     def listening(self) -> None:
         self.cues += 1
@@ -253,7 +318,8 @@ def test_app_runs_a_replay_end_to_end(tmp_path: Path, clip: Path) -> None:
         speaker.on_record = app.on_speech_record
 
         def speak_later() -> None:  # a spoken question, as the voice pipeline hands it over
-            wait_for(lambda: len(app.questions) >= 2)
+            # both typed answers spoken first (a wake word stops an answer still being said)
+            wait_for(lambda: len(app.questions) >= 2 and all(q.answer for q in app.questions.values()))
             app.on_wake()
             time.sleep(1.0)  # "what's my next turn?" takes a while to say: it ends after the wake word
             now = time.perf_counter()
@@ -341,7 +407,8 @@ class FlakyCamera(VideoSource):
         return 30.0
 
     def _open(self) -> None:
-        pass
+        if not self.fails:
+            time.sleep(RECONNECT_S)  # reconnecting takes a while: the outage the driver notices
 
     def _run(self) -> None:
         image = np.full((90, 160, 3), 80, np.uint8)
@@ -365,16 +432,21 @@ def test_a_lost_camera_is_restarted_and_said_while_it_is_out() -> None:
     runner = threading.Thread(target=lambda: result.append(app.run()))
     runner.start()
     try:
-        assert wait_for(lambda: app.camera_restarts == 1 and app.worker is not None and app.worker.processed > 5)
+        assert wait_for(lambda: app.camera_restarts == 1, timeout=10.0)
+        lost = app.worker  # the worker whose camera failed
+        time.sleep(1.6)  # the outage: no frames for longer than the stale limit (1.5 s)
+        during = app.assistant.ask("who got here first?").text
+        nav = app.assistant.ask("what's my next turn?").text  # navigation doesn't need the camera
+        assert wait_for(lambda: app.worker not in (None, lost) and app.worker.processed > 5, timeout=10.0)
+        after = app.assistant.ask("who got here first?").text
     finally:
         app._stop.set()
         runner.join(10.0)
     assert result == [0] and FlakyCamera.instances == 2
-    time.sleep(STALE_WAIT)  # the camera is stopped now: the snapshot is stale
-    assert app.assistant.ask("who got here first?").text == CAMERA_LOST
+    assert during == CAMERA_LOST and nav != CAMERA_LOST and after != CAMERA_LOST
 
 
-STALE_WAIT = 1.6
+RECONNECT_S = 3.0
 
 
 def test_phone_gps_page_feeds_phone_gps_only(clip: Path) -> None:

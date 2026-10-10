@@ -60,6 +60,7 @@ DEFAULT_QUESTIONS = [
     (31.0, "can I go?"),
 ]
 TARGETS = {"local": 1.0, "model": 2.5}
+MATCH_S = 1.0  # a heard question belongs to the spoken one that ended within this of it
 ALERT_TARGET_MS = 300.0
 FPS_TARGET = 25.2
 
@@ -84,18 +85,25 @@ class SilentOutput:
 
     def __init__(self) -> None:
         self._stop = threading.Event()
+        self._lock = threading.Lock()
 
     def start(self) -> None:
         pass
 
-    def play(self, audio: np.ndarray, rate: int, timeout: float | None = None) -> float | None:
-        self._stop.clear()
+    def play(
+        self, audio: np.ndarray, rate: int, timeout: float | None = None, should_start: Any = None
+    ) -> float | None:
+        with self._lock:  # like AudioOutput: the start check and stop() share a lock
+            if should_start is not None and not should_start():
+                return None
+            self._stop.clear()
         started = time.perf_counter()
         self._stop.wait(len(audio) / rate)
         return started
 
     def stop(self) -> None:
-        self._stop.set()
+        with self._lock:
+            self._stop.set()
 
     def close(self) -> None:
         self._stop.set()
@@ -198,9 +206,10 @@ def main(argv: list[str] | None = None) -> int:
         app.status["voice"] = "bench feeder"
         server = None
         if app.hub is not None:
-            from ui.server import UiServer, create_server
+            from ui.server import UiServer, allowed_hosts, create_server
 
-            server = UiServer(create_server(app.hub, PageActions(app)), cfg.ui.host, cfg.ui.port)
+            page = create_server(app.hub, PageActions(app), allowed_hosts(cfg.ui.host))
+            server = UiServer(page, cfg.ui.host, cfg.ui.port)
             server.start()
             print(f"page: {server.url}")
         time.sleep(3.0)  # let the vision model's startup check finish (it opens the connection)
@@ -225,11 +234,12 @@ def build_report(app: DrivePilotApp, questions: list[Spoken], args: argparse.Nam
     unheard = list(questions)
     by_source: dict[str, list[float]] = {}
     for q in voiced:
-        # Match each heard question to the spoken one that ended just before it was answered.
+        # The spoken question whose true end is nearest to where the pipeline heard it end (VAD: within ~0.3 s).
         ended = q.ended_at or 0.0
-        match = next((s for s in unheard if s.speech_end_at is not None and s.speech_end_at <= ended + 2.0), None)
-        if match is None:
+        candidates = [s for s in unheard if s.speech_end_at is not None and abs(s.speech_end_at - ended) <= MATCH_S]
+        if not candidates:
             continue
+        match = min(candidates, key=lambda s: abs((s.speech_end_at or 0.0) - ended))
         unheard.remove(match)
         expected = route(match.text)
         first_sound = (q.ended_at or 0.0) + q.first_audio_s if q.first_audio_s is not None else None
@@ -280,6 +290,15 @@ def build_report(app: DrivePilotApp, questions: list[Spoken], args: argparse.Nam
             "value": f"{perception.get('fps')} fps",
             "target": f">= {FPS_TARGET} fps",
             "ok": (perception.get("fps") or 0) >= FPS_TARGET,
+        }
+    )
+    unplayed = [r["said"] for r in rows if r["first_audio_s"] is None]
+    checks.append(
+        {
+            "name": "every answer was heard (not stopped or still pending: none left out of the latencies)",
+            "value": f"{len(rows) - len(unplayed)}/{len(rows)}",
+            "target": f"{len(rows)}/{len(rows)}",
+            "ok": not unplayed,
         }
     )
     checks.append(

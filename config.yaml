@@ -123,6 +123,7 @@ vision:
   first_token_timeout_s: 3.0  # no words by then: a spoken "sorry" (PLAN target: answer audio within 2.5 s)
   total_timeout_s: 8.0
   time_override: null       # e.g. "Saturday 17:40" for replays and the test sheet (default: the real clock)
+  temperature: 0.0          # 0 = most literal (fewer invented details, e.g. sign text)
   claude:
     model: claude-haiku-4-5
     max_tokens: 300

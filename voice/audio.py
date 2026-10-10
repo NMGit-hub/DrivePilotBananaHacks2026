@@ -13,6 +13,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+from collections.abc import Callable
 from fractions import Fraction
 
 import numpy as np
@@ -177,15 +178,26 @@ class AudioOutput:
             if n < frames and remaining <= frames and not self._done.is_set():
                 self._done.set()
 
-    def play(self, audio: np.ndarray, rate: int, timeout: float | None = None) -> float | None:
+    def play(
+        self,
+        audio: np.ndarray,
+        rate: int,
+        timeout: float | None = None,
+        should_start: Callable[[], bool] | None = None,
+    ) -> float | None:
         """Play mono audio and wait until it has finished or was interrupted. Returns the time (perf_counter)
-        its first sample reached the speaker (incl. device latency), or None if nothing was played."""
-        samples = (resample(to_float(audio), rate, self.rate) * self.volume).astype(np.float32)
-        with self._lock:
-            self._buffer, self._position, self._started_at = samples, 0, None
-            self._done.clear()
+        its first sample reached the speaker (incl. device latency), or None if nothing was played.
+
+        `should_start` is checked under the same lock as `stop()`, right before the sound is loaded: a stop that
+        lands while the audio is being prepared prevents it (instead of stopping the previous sound)."""
         if self._stream is None:
             raise RuntimeError("AudioOutput.start() was not called")
+        samples = (resample(to_float(audio), rate, self.rate) * self.volume).astype(np.float32)
+        with self._lock:
+            if should_start is not None and not should_start():
+                return None
+            self._buffer, self._position, self._started_at = samples, 0, None
+            self._done.clear()
         self._done.wait(timeout if timeout is not None else len(samples) / self.rate + 2.0)
         with self._lock:
             started = self._started_at

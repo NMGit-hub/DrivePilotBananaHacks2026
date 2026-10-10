@@ -43,7 +43,7 @@ from answers.vision import VisionModel
 from capture.base import VideoSource
 from core.config import AppConfig, ConfigError, load_config
 from core.latency import LatencyBook
-from core.logging_setup import get_logger, setup_logging
+from core.logging_setup import get_logger, redact, setup_logging, to_jsonable
 from core.runlog import RunRecorder
 from core.types import Frame
 from nav.gps import GpsFix, GpsSource, PhoneGps
@@ -66,7 +66,10 @@ TICK_S = 0.1
 GPS_INTERVAL_S = 0.5
 STATUS_INTERVAL_S = 0.5
 STALE_CAMERA_S = 1.5  # a live camera with no processed frame for this long is "lost"
-CAMERA_RETRY_S = 3.0
+CAMERA_RETRY_S = 3.0  # first wait after a failed reconnect (doubles, up to CAMERA_RETRY_MAX_S)
+CAMERA_RETRY_MAX_S = 30.0
+CAMERA_HEALTHY_S = 30.0  # running this long after a reconnect resets the backoff
+STALE_AFTER_NAV = {"nav_rerouted", "nav_not_this_exit", "nav_arrived", "nav_roundabout"}
 FIXED_ALERT_TEXTS = (YOUR_TURN, LIGHT_GREEN, *FIXED_ALERTS)
 
 
@@ -117,7 +120,7 @@ class ScreenSpeaker:
 
     def say(self, utterance: Utterance) -> None:
         """Speak, show and record."""
-        self.latency.on_say(utterance.kind, utterance.text, utterance.clip)
+        self.latency.on_say(utterance.uid, utterance.kind, utterance.clip)
         self.inner.say(utterance)
         if self.hub is not None:
             self.hub.publish(utterance.kind, text=utterance.text, t=round(utterance.t, 2))
@@ -133,6 +136,12 @@ class ScreenSpeaker:
     def stop(self) -> None:
         """Stop speaking."""
         self.inner.stop()
+        if self.hub is not None:
+            self.hub.publish("stopped")
+
+    def stop_answers(self) -> None:
+        """Stop answering; alerts keep playing."""
+        self.inner.stop_answers()
         if self.hub is not None:
             self.hub.publish("stopped")
 
@@ -157,7 +166,6 @@ class DrivePilotApp:
         status: dict[str, str] | None = None,
         scripted: Sequence[tuple[float, str]] = (),
         exit_at_end: bool = False,
-        max_camera_restarts: int = 100,
     ) -> None:
         self.cfg = cfg
         self._make_source = make_source
@@ -173,7 +181,6 @@ class DrivePilotApp:
         self.gpu = gpu
         self.status: dict[str, str] = status if status is not None else {}  # shown on the page; shared
         self.exit_at_end = exit_at_end
-        self.max_camera_restarts = max_camera_restarts
         self.latency = LatencyBook()
         self.questions: dict[int, QuestionRecord] = {}
         self._qids = itertools.count(1)
@@ -186,6 +193,8 @@ class DrivePilotApp:
         self.voice: Any = None  # VoicePipeline, attached with attach_voice()
         self._mic: Any = None
         self.camera_restarts = 0
+        self._reconnect_failures = 0  # in a row (backoff)
+        self._judged_worker: PerceptionWorker | None = None
         self.camera_state = ""
         self._last_fix_t: float | None = None
         self._last_wake_at = 0.0  # perf_counter of the latest wake word
@@ -237,6 +246,8 @@ class DrivePilotApp:
         return CAMERA_LOST if self._camera_lost() else None
 
     def _latest_frame(self) -> Frame | None:
+        if self._camera_lost():
+            return None
         snap = self.world.snapshot()
         return snap.frame if snap is not None else None
 
@@ -270,9 +281,17 @@ class DrivePilotApp:
         self.assistant.on_world_event(event)
 
     def _on_nav_alert(self, kind: str, text: str) -> None:
-        # Guidance the driver asked for by setting a destination: kept in quiet mode.
+        # Guidance the driver asked for by setting a destination: kept in quiet mode. A new route, an exit to
+        # skip or arrival make an answer in progress (about the old route) stale.
         self.assistant.say(
-            Utterance(text=text, kind="alert", priority=Priority.REQUESTED, clip=kind, t=self.media_time())
+            Utterance(
+                text=text,
+                kind="alert",
+                priority=Priority.REQUESTED,
+                clip=kind,
+                t=self.media_time(),
+                drops_answers=kind in STALE_AFTER_NAV,
+            )
         )
 
     # ---------------------------------------------------------------------------------- questions
@@ -293,6 +312,8 @@ class DrivePilotApp:
             # moved on, and an answer now would talk over the new question.
             self._superseded(heard.text, origin, timings)
             return
+        with self._lock:
+            self._answering.add(threading.current_thread())  # the end of a replay waits for it
         self._answer(heard.text, "voice", origin, timings)
 
     def _superseded(self, text: str, origin: float, timings: dict[str, Any]) -> None:
@@ -366,7 +387,7 @@ class DrivePilotApp:
 
     def on_speech_record(self, record: Any) -> None:
         """The audio speaker played (or dropped) an utterance (`SpeechRecord`): measure and log its latency."""
-        measured = self.latency.on_played(record.kind, record.text, record.sound_at)
+        measured = self.latency.on_played(record.uid, record.sound_at)
         if measured is None:
             return
         if measured.kind == "answer":
@@ -470,7 +491,7 @@ class DrivePilotApp:
             live=self.source.is_live,
             paused=bool(getattr(self.source, "paused", False)),
             fps=round(fps, 1),
-            camera=self.camera_state or None,
+            camera=self.camera_state or ("end of the replay" if getattr(self.source, "at_end", False) else None),
             gps=self._gps_state(),
             nav=self._nav_line(),
             quiet=self.assistant.alerts.quiet,
@@ -509,7 +530,7 @@ class DrivePilotApp:
                 if worker is None or worker.running:
                     continue
                 if worker.error is not None:
-                    if self.source.is_live and self.camera_restarts < self.max_camera_restarts:
+                    if self.source.is_live:  # keep trying: voice, navigation and the page keep working meanwhile
                         self._restart_camera()
                         continue
                     log.error("perception stopped", error=repr(worker.error))
@@ -533,13 +554,27 @@ class DrivePilotApp:
         log.warning("camera lost; restarting", attempt=self.camera_restarts)
         if self.recorder is not None:
             self.recorder.event("camera_restart", attempt=self.camera_restarts)
+        worker = self.worker
+        if worker is not self._judged_worker:  # how long did the camera last since the previous reconnect?
+            self._judged_worker = worker
+            ran_s = (
+                worker.last_result_at - worker.started_at
+                if worker is not None and worker.started_at is not None and worker.last_result_at is not None
+                else 0.0
+            )
+            if ran_s >= CAMERA_HEALTHY_S:
+                self._reconnect_failures = 0
+            elif self.camera_restarts > 1:
+                self._reconnect_failures += 1
+        if self._reconnect_failures:  # wait longer after each reconnect that failed or didn't last
+            self._stop.wait(min(CAMERA_RETRY_S * 2 ** (self._reconnect_failures - 1), CAMERA_RETRY_MAX_S))
         self.source.stop()
         try:
             source = self._make_source()
             source.start()
         except Exception as exc:  # noqa: BLE001 - any failure to reconnect: try again shortly
-            log.warning("camera restart failed", error=str(exc))
-            self._stop.wait(CAMERA_RETRY_S)
+            self._reconnect_failures += 1
+            log.warning("camera restart failed", error=str(exc), failures=self._reconnect_failures)
             return
         self.source = source
         self.worker = self._make_worker()
@@ -579,7 +614,8 @@ class DrivePilotApp:
             self.hub.stop()
         summary = self.summary()
         if self.recorder is not None:
-            (self.recorder.dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+            text = redact(json.dumps(to_jsonable(summary), indent=2))
+            (self.recorder.dir / "summary.json").write_text(text, encoding="utf-8")
         log.info("stopped", questions=len(self.questions), answers_timed=len(self.latency.answers))
 
     def summary(self) -> dict[str, Any]:
@@ -678,7 +714,7 @@ def apply_cli(cfg: AppConfig, args: argparse.Namespace) -> AppConfig:
     return cfg.model_copy(update={"video": video})
 
 
-def _source_factory(cfg: AppConfig) -> Callable[[], VideoSource]:
+def _source_factory(cfg: AppConfig, hold_at_end: bool = False) -> Callable[[], VideoSource]:
     if cfg.video.source == "camera":
         from capture.camera_source import ScrcpyCameraSource
         from core.clock import WallClock
@@ -687,7 +723,9 @@ def _source_factory(cfg: AppConfig) -> Callable[[], VideoSource]:
     from capture.file_source import FileSource
 
     f = cfg.video.file
-    return lambda: FileSource(cfg.resolve_path(f.path), realtime=f.realtime, start_s=f.start_s, loop=f.loop)
+    return lambda: FileSource(
+        cfg.resolve_path(f.path), realtime=f.realtime, start_s=f.start_s, loop=f.loop, hold_at_end=hold_at_end
+    )
 
 
 def _gps_source(cfg: AppConfig) -> GpsSource | None:
@@ -797,7 +835,7 @@ def build_app(
     hub = None if args.no_ui else UiHub()
     app = DrivePilotApp(
         cfg,
-        _source_factory(cfg),
+        _source_factory(cfg, hold_at_end=not args.exit_at_end),  # the page stays up: seek back to replay
         detector,
         speaker,
         vision=_vision(cfg, status),
@@ -844,9 +882,10 @@ def main(argv: list[str] | None = None) -> int:
         app = build_app(cfg, args, recorder)
         server = None
         if app.hub is not None:
-            from ui.server import UiServer, create_server
+            from ui.server import UiServer, allowed_hosts, create_server
 
-            server = UiServer(create_server(app.hub, PageActions(app)), cfg.ui.host, cfg.ui.port)
+            page = create_server(app.hub, PageActions(app), allowed_hosts(cfg.ui.host))
+            server = UiServer(page, cfg.ui.host, cfg.ui.port)
             try:
                 server.start()
             except RuntimeError as exc:

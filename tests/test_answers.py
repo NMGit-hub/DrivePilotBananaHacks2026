@@ -326,7 +326,8 @@ def test_can_i_go_then_the_turn_alert_then_repeat() -> None:
     a.on_world_event(WorldEvent("your_turn", 20.0))
     assert speaker.said[-1].text == YOUR_TURN and speaker.said[-1].priority is Priority.REQUESTED
     a.ask("Repeat that.")
-    assert speaker.texts()[-1] == YOUR_TURN and speaker.stops == 1
+    # "repeat that" stops an answer playing, but an alert playing is left alone
+    assert speaker.texts()[-1] == YOUR_TURN and speaker.answer_stops == 1 and speaker.stops == 0
 
 
 def test_quiet_and_normal_mode() -> None:

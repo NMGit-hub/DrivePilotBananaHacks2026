@@ -446,3 +446,19 @@ def test_camera_stop_is_fast_and_stalls_are_detected() -> None:
     start = time.monotonic()
     camera.stop()  # blocked in recv: must return promptly
     assert time.monotonic() - start < 1.0
+
+
+def test_hold_at_end_keeps_the_last_frame_and_lets_you_seek_back(clip: Path) -> None:
+    source = FileSource(clip, realtime=False, hold_at_end=True)
+    source.start()
+    frames = []
+    while (frame := source.read(timeout=0.5)) is not None:
+        frames.append(frame)
+    assert len(frames) == N_FRAMES and not source.finished and source.at_end
+    frozen = source.clock.now()
+    time.sleep(0.2)
+    assert source.clock.now() == pytest.approx(frozen)  # GPS replay and timers stop at the end too
+    source.seek_to(1.0)
+    again = source.read(timeout=2.0)
+    source.stop()
+    assert again is not None and again.t == pytest.approx(1.0, abs=0.05) and not source.at_end

@@ -3,9 +3,9 @@
 Answers and alerts are handed to the speaker on the thread that produced them, so each utterance's origin is
 known there: the end of the spoken question (set around `Assistant.ask` with `question`), or the capture time of
 the frame whose world update raised the alert (set around the world update with `detection`). `on_say` files
-the utterance under its text with that origin; when the audio speaker reports it as played (`on_record`), the
-latency is the moment its first sample reached the speaker minus the origin. Utterances never played (stopped,
-or a text-only speaker) are not counted.
+the utterance under its id with that origin; when the audio speaker reports that utterance (`on_played`, same
+id) the latency is the moment its first sample reached the speaker minus the origin. Utterances that never
+played (stopped, dropped, or a text-only speaker) are not counted, and at most `MAX_PENDING` wait for a report.
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass
 
-MAX_PENDING_PER_TEXT = 20  # a text-only speaker never reports playback: don't grow forever
+MAX_PENDING = 500  # a text-only speaker never reports playback: forget the oldest
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,9 +42,7 @@ class LatencyBook:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._local = threading.local()
-        self._pending: defaultdict[str, deque[tuple[str, str, float]]] = defaultdict(
-            lambda: deque(maxlen=MAX_PENDING_PER_TEXT)
-        )
+        self._pending: OrderedDict[int, tuple[str, str, float]] = OrderedDict()
         self.answers: dict[int, float] = {}  # question id → seconds from the end of the question to first audio
         self.alerts: list[Measured] = []
 
@@ -67,8 +65,8 @@ class LatencyBook:
         finally:
             self._local.detected_at = None
 
-    def on_say(self, kind: str, text: str, clip: str | None = None) -> None:
-        """Call before handing an utterance (`kind` "answer" | "alert") to the speaker."""
+    def on_say(self, uid: int, kind: str, clip: str | None = None) -> None:
+        """Call before handing utterance `uid` (`kind` "answer" | "alert") to the speaker."""
         if kind == "answer":
             question: _Question | None = getattr(self._local, "question", None)
             if question is None or question.first_said:
@@ -81,21 +79,20 @@ class LatencyBook:
         else:
             return
         with self._lock:
-            self._pending[text].append(entry)
+            self._pending[uid] = entry
+            while len(self._pending) > MAX_PENDING:
+                self._pending.popitem(last=False)
 
-    def on_played(self, kind: str, text: str, sound_at: float | None) -> Measured | None:
-        """The speaker played (or dropped, `sound_at` None) an utterance: its latency, if it was being timed."""
-        if kind not in ("answer", "alert"):
-            return None
+    def on_played(self, uid: int, sound_at: float | None) -> Measured | None:
+        """The speaker played (or dropped: `sound_at` None) utterance `uid`: its latency, if it was being timed.
+        Only the first report counts (an interrupted answer that resumes is reported twice)."""
         with self._lock:
-            queue = self._pending.get(text)
-            if not queue:
+            entry = self._pending.pop(uid, None)
+            if entry is None or sound_at is None:
                 return None
-            entry_kind, key, origin = queue.popleft()
-            if sound_at is None:
-                return None
-            measured = Measured(entry_kind, key, sound_at - origin)
-            if entry_kind == "answer":
+            kind, key, origin = entry
+            measured = Measured(kind, key, sound_at - origin)
+            if kind == "answer":
                 self.answers[int(key)] = measured.seconds
             else:
                 self.alerts.append(measured)

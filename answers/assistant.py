@@ -56,8 +56,8 @@ Answer = str | Iterable[str] | None
 class NavAnswerer(Protocol):
     """Navigation handler (M6): destinations, route questions, lane guidance."""
 
-    def answer(self, route: Route, snapshot: WorldSnapshot) -> str:
-        """Answer a DESTINATION / NAV / LANE question."""
+    def answer(self, route: Route, snapshot: WorldSnapshot | None) -> str:
+        """Answer a DESTINATION / NAV / LANE question (the snapshot is None while the camera is out)."""
 
 
 class SceneAnswerer(Protocol):
@@ -154,12 +154,24 @@ class Assistant:
         except Exception:
             log.exception("answer failed", kind=r.kind.value, intent=r.intent)
             answer, source = HANDLER_ERROR, "error"
+        if source == "control":
+            with self._lock:  # "never mind" / "repeat that" stopped what was playing: their own reply still counts
+                turn = self._turn
 
         first_ms: float | None = None
         if isinstance(answer, str):
-            self.say(Utterance(text=answer, kind="answer", priority=Priority.ANSWER, t=t))
-            first_ms = (time.perf_counter() - start) * 1000.0
-            spoken: str | None = answer
+            utterance = Utterance(text=answer, kind="answer", priority=Priority.ANSWER, t=t)
+            with self._lock:  # a slow answer (navigation, lane reading) may have been overtaken meanwhile
+                current = self._turn == turn
+                if current:
+                    self._last = utterance
+                    self.speaker.say(utterance)
+            if current:
+                first_ms = (time.perf_counter() - start) * 1000.0
+                spoken: str | None = answer
+            else:
+                log.info("answer dropped: stop, a newer question or an alert came first", answer=answer)
+                spoken = None
         elif answer is None:
             spoken = None
         else:
@@ -167,11 +179,12 @@ class Assistant:
             try:
                 for sentence in answer:
                     utterance = Utterance(text=sentence, kind="answer", priority=Priority.ANSWER, t=t)
+                    whole = Utterance(text=" ".join([*said, sentence]), kind="answer", priority=Priority.ANSWER, t=t)
                     with self._lock:  # the check and the hand-over are atomic with respect to "stop"
                         if self._turn != turn:  # "stop", "never mind" or a newer question
                             log.info("answer cut off", after_sentences=len(said))
                             break
-                        self._last = utterance
+                        self._last = whole  # "repeat that" repeats the whole answer so far
                         self.speaker.say(utterance)
                     if first_ms is None:
                         first_ms = (time.perf_counter() - start) * 1000.0
@@ -206,14 +219,16 @@ class Assistant:
             return None, "none"
         if r.kind is RouteKind.CONTROL:
             return self._control(r.intent, snap), "control"
+        if r.kind is RouteKind.GAP_CHECK and r.intent == "school_bus":
+            return local.SCHOOL_BUS_RULE, "local"  # a fixed rule: no camera needed
+        if r.kind in (RouteKind.DESTINATION, RouteKind.NAV, RouteKind.LANE):  # GPS and the route, not the camera
+            if self.nav is None:
+                return NO_NAV, "nav"
+            return self.nav.answer(r, snap), "nav"
         if snap is None:
             reason = self._unavailable() if self._unavailable is not None else None
             return reason or STARTING, "local"
         sure_stopped = snap.ego_stopped and snap.ego_motion_confident
-        if r.kind in (RouteKind.DESTINATION, RouteKind.NAV, RouteKind.LANE):
-            if self.nav is None:
-                return NO_NAV, "nav"
-            return self.nav.answer(r, snap), "nav"
         if r.kind is RouteKind.GAP_CHECK:
             if r.intent == "gap_watch":
                 return self._local(lambda s: local.gap_watch(s), snap, generation), "local"
@@ -278,20 +293,24 @@ class Assistant:
             last = self.last
             if last is None:
                 return NOTHING_TO_REPEAT
-            self.speaker.stop()
+            self.speaker.stop_answers()  # an alert playing now is more important than the repeat
             stale = snap is not None and (snap.t - last.t > REPEAT_STALE_S or snap.t < last.t)
             return EARLIER + last.text if stale else last.text
         raise ValueError(f"unknown control intent {intent!r}")
 
     def interrupt(self) -> None:
-        """Stop speaking now and cut off any answer still streaming (the wake word was heard)."""
-        self._interrupt()
+        """The wake word was heard: stop answering (an answer playing or still streaming), but let alerts play:
+        a false wake, or "Hey DrivePilot, quiet mode", must not lose "Light's green"."""
+        self._interrupt(alerts=False)
 
-    def _interrupt(self) -> None:
-        """Stop speaking now and cut off any answer still streaming."""
+    def _interrupt(self, alerts: bool = True) -> None:
+        """Stop speaking now (alerts too, unless `alerts` is False) and cut off any answer still streaming."""
         with self._lock:
             self._turn += 1
             cancel = self._cancel
-            self.speaker.stop()
+            if alerts:
+                self.speaker.stop()
+            else:
+                self.speaker.stop_answers()
         if cancel is not None:
             cancel.set()

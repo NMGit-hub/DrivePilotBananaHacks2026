@@ -428,3 +428,18 @@ def test_dropping_a_lead_in_keeps_real_scene_questions(text: str) -> None:
 def test_a_lead_in_never_hides_a_gap_check() -> None:
     # The whole text is checked first: a split-second question stays a gap check whatever comes before it.
     assert route("Okay, the truck is slow, can I pass it now?").kind is RouteKind.GAP_CHECK
+
+
+@pytest.mark.parametrize(
+    ("text", "kind", "intent"),
+    [
+        ("Can I pass the school bus?", G, "school_bus"),
+        ("should I go around that school bus", G, "school_bus"),
+        ("is it ok to overtake the school bus", G, "school_bus"),
+        ("why is that school bus stopped?", M, "scene"),  # not about passing: the model describes it
+        ("can I pass this truck?", G, "gap_check"),  # any other vehicle: a gap judgment
+    ],
+)
+def test_passing_a_school_bus_is_a_fixed_rule(text: str, kind: RouteKind, intent: str) -> None:
+    result = route(text)
+    assert (result.kind, result.intent) == (kind, intent)

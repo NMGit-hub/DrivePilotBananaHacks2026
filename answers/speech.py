@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import itertools
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Protocol
 
 from core.logging_setup import get_logger
 
 log = get_logger(__name__)
+_uids = itertools.count(1)
 
 
 class Priority(IntEnum):
@@ -31,6 +33,7 @@ class Utterance:
     clip: str | None = None  # pre-rendered audio clip for alerts (instant playback, M4)
     t: float = 0.0  # media time it refers to
     drops_answers: bool = False  # an alert that changes the situation ("You're up"): answers in progress are stale
+    uid: int = field(default_factory=lambda: next(_uids), compare=False)  # follows it into the speech records
 
 
 class Speaker(Protocol):
@@ -42,6 +45,9 @@ class Speaker(Protocol):
     def stop(self) -> None:
         """Stop speaking now and drop anything queued."""
 
+    def stop_answers(self) -> None:
+        """Stop an answer playing now and drop queued answers; alerts keep playing."""
+
 
 class TextSpeaker:
     """A speaker that logs and keeps what it was told to say (text mode, the V1 screen, tests)."""
@@ -50,6 +56,7 @@ class TextSpeaker:
         self._lock = threading.Lock()
         self.said: list[Utterance] = []
         self.stops = 0
+        self.answer_stops = 0
 
     def say(self, utterance: Utterance) -> None:
         """Record the utterance."""
@@ -61,6 +68,11 @@ class TextSpeaker:
         """Count stop requests."""
         with self._lock:
             self.stops += 1
+
+    def stop_answers(self) -> None:
+        """Count answer-only stop requests."""
+        with self._lock:
+            self.answer_stops += 1
 
     def texts(self) -> list[str]:
         """Everything said so far."""

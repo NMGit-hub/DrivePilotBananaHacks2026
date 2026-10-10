@@ -26,6 +26,10 @@ CHECK = "check the intersection before you go"
 MOVING_REFUSAL = "I can't judge that safely while we're moving. Check around you."
 UNSURE_REFUSAL = "I'm not sure we're fully stopped, so I can't judge that. Check around you."
 GAP_REFUSAL = "I can't judge that safely while we're moving. Check your mirrors and blind spot."
+SCHOOL_BUS_RULE = (
+    "No. Never pass a school bus that's stopped with its red lights flashing or its stop arm out. "
+    "Stop and wait until it moves on."
+)
 GAP_WATCH_MOVING = "I can't judge gaps in traffic safely. Check your mirrors and blind spot."
 GAP_WATCH_STOPPED = "I can't judge gaps in moving traffic. Check both ways yourself before you go."
 PEDESTRIAN_YIELD = "Yes, let them cross first, then check again before you go."

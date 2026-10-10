@@ -70,7 +70,9 @@ class VisionLaneReader:
         if self._on_frame is not None:
             self._on_frame(frame)
         image = ImagePart(encode_jpeg(frame.image, self.cfg.latest_width, self.cfg.jpeg_quality), "Now")
-        request = VisionRequest(system=SYSTEM_PROMPT, text=QUESTION, images=(image,), max_tokens=60)
+        request = VisionRequest(
+            system=SYSTEM_PROMPT, text=QUESTION, images=(image,), max_tokens=60, temperature=self.cfg.temperature
+        )
         try:
             data = self.model.complete_json(request, self.cfg.first_token_timeout_s, self.cfg.total_timeout_s)
         except VisionError as exc:
