@@ -4,7 +4,51 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
-### M5 (part 1): vision-model answers (2026-10-10; independent review next)
+### M6: navigation (2026-10-10; independent review done, all findings fixed)
+- `nav/mapbox.py`: "take me to ..." via Mapbox Search Box + Geocoding v6 candidates, picked by spoken-word
+  match vs distance (`pick_place`; plain geocoding alone sent "Space Needle" to Arizona); Directions v5
+  driving-traffic with steps, banners, lanes, `roundabout_exits=true` and our heading. `FixtureClient` for tests.
+- `nav/route.py` (steps, lanes at the maneuver, exit numbers, roundabout exits passed), `nav/progress.py`
+  (snapping within reach of the last fix, off route > 50 m for 5 s or wrong way, joining from a parking lot,
+  arrival incl. turning into the lot), `nav/handler.py` (route/lane answers, lane reminders at ~1 mi and
+  ~0.25 mi, roundabout "not this one", background reroutes with backoff, navigation ends on arrival),
+  `nav/phrasing.py` (US units, passenger-style lanes), `nav/gps.py` (GPX replay, phone fixes).
+- `scripts/fetch_route.py`: real routes printed and saved under `data/routes/` (gitignored: Mapbox terms).
+  Checked by eye on real routes: lanes on I-405/SR 520 ramps, exit refs, Carmel roundabouts (exit counts).
+- **Independent review found 11 issues, all confirmed with offline probes; all fixed**, 26 regression tests
+  (`tests/test_nav_review.py`): "did I miss my turn?" said "No, you're on the route" just after missing it;
+  lane answers could name the opposite lane (skipped the imminent maneuver, read "right" in "the right lane"
+  as a road name, said "any lane" when Mapbox had no lane data); "how far to my turn?" gave the destination;
+  the arrive step was spoken as "You have arrived ... in 800 feet"; reroute storms (starting in a parking lot,
+  turning into the destination's lot, after arrival, offline failures every 20 s); one noisy fix at a
+  cloverleaf crossing jumped progress ahead for good; reroute races (spoke after cancel, landed after a new
+  destination, stale "rerouted"); stale GPS answered as current; parse errors / NaN headings escaped;
+  1st-exit roundabouts; "take me home", "stop navigating". Probes re-run: all fixed.
+- Tests: 70 navigation tests (fixture route + synthetic GPS tracks), 3 runs clean.
+
+### M4 (part 1): voice pipeline (2026-10-10; review with M7)
+- `voice/`: mic (16 kHz), wake word (openWakeWord, 0.25), streaming Silero VAD v6 endpointing (0.6 s silence,
+  speculative transcription at 0.25 s), faster-whisper small.en float16 on CUDA (cuBLAS from PyTorch's CUDA 12
+  build), Piper TTS with pre-rendered alert clips and a chime, `AudioSpeaker` with priorities (alerts interrupt
+  an answer, which resumes), "stop" silences everything.
+- **Synthetic spoken-question benchmark** (`scripts/voice_eval.py`, 245 questions from both router tables,
+  6 held-out Piper voices, clean + car noise at 10 dB SNR, 31 min; `runs/20261010-064344_voice/`):
+  wake rate 94.6% clean / 95.6% car noise on clips where the wake phrase is intelligible (5 of 6 voices
+  97.6-100%; the 6th, en_US-reza_ibrahim, 52-62%: its "Hey DrivePilot" comes out as "Hi-Lac" / "a drive
+  highlight" even to Whisper); **0 false wakes** in 10 min of speech + car noise; WER 7-8%; routing of what
+  was heard 94.1%, now **95.9%** (97.5% without that voice) after router fixes re-scored on the saved
+  transcripts. Local answer audio: median **2.0 s** vs the 1.0 s target: Whisper takes 1.7 s because the GPU
+  is throttled (see Known issues); endpointing itself is 0.5 s.
+
+### M5 review (2026-10-10)
+- Independent review found 5 bugs (3 safety) and several risks; all fixed with tests
+  (`tests/test_vision_safety.py`): a per-sentence net replaces any sentence that vouches for traffic ("Looks
+  clear, go ahead", "Merge now.") with "I can't judge moving traffic, so check both ways yourself before you
+  go."; the prompt never implies it's safe; tracker context gives right-of-way verdicts; deadlines and "stop"
+  close the HTTP stream within 0.5 s; up to 3 light close-ups; sign questions reach further back. Live re-run
+  (Claude Haiku): 9/10, first sentence median 1.0 s.
+
+### M5 (part 1): vision-model answers (2026-10-10)
 - `answers/vision.py`: one `VisionModel` interface (streaming text + JSON) with Claude Haiku (default),
   Gemini, Ollama and Mock providers, picked by `vision_model`; failures become `VisionError`.
 - `answers/scene.py`: frames (latest full-size, earlier smaller), a traffic-light close-up for light questions,
@@ -144,8 +188,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
-- M5 independent review; M4 (voice audio: wake word ready, then Silero VAD, faster-whisper, Piper TTS, synthetic
-  spoken-question tests); M6 (navigation), M7 (app + screen), M8 (test sheet).
+- M7 (in progress): `app.py` wiring (camera/file, perception, world state, assistant, voice, navigation, vision),
+  the V1 page (video + question/answer text, hotkeys) and phone GPS page (`ui/`), run logging, a full-pipeline
+  headless benchmark; then the M4 + M7 independent review. M8 (test sheet), M9 (hardware, needs you).
 
 ## Test data
 - Source: BDD100K `videos/100k/val` clips (720p, 30 fps, ~40 s, US cities), pulled by HTTP range requests
@@ -157,6 +202,15 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   tested with synthetic GPX files in tests until real drives are recorded.
 
 ## Known issues / compromises
+- **The GPU is throttled to ~1/10 of its speed** (2026-10-10, Surface Laptop Studio 2): it stays at 210 MHz
+  (P8) under load, throttle reasons "SW power cap" + "SW thermal slowdown" at 48 °C, charger connected, Windows
+  power mode Balanced. fp16 matmul ~2.1 TFLOPS (21 on 2026-10-09), YOLO 28 ms/frame (2.7), Whisper 1.7 s per
+  question. Every latency number measured while throttled is pessimistic; re-measure once fixed (likely the
+  120 W Surface Connect charger instead of USB-C, Best performance mode, and the Surface app's performance
+  setting).
+- **Navigation edge cases left:** a 15 m overshoot of a turn is still "on the route" when asked (GPS noise is
+  ~5-10 m; at 30 m it reroutes); arrival by turning into a lot within 150 m of the end is assumed (a missed
+  final turn that close is called "arrived"); `fork` steps count as exits for "which exit?".
 - **Wake word trained on synthetic speech only** (Piper voices): real voices through the laptop mics may trigger
   less often. Record 20-50 real "Hey DrivePilot" utterances in the car before the demo (threshold 0.10 is a safe
   fallback: also 0 false accepts). Held-out car noise is one car; no in-car conversation/radio in the false-
