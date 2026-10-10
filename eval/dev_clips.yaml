@@ -1,0 +1,33 @@
+# Development clips: public BDD100K validation videos (720p, 30 fps, ~40 s, US cities).
+# For tuning and tests only; the submission uses our own drives. Download with:
+#     .venv/Scripts/python scripts/fetch_dev_clips.py
+# Files land in data/videos/dev/<name>__<bdd_id>.mov (gitignored). No GPS tracks are included.
+source: "BDD100K videos/100k/val via the byte-for-byte Hugging Face mirror linxxx3/bdd100k_videos"
+clips:
+  - name: stop_sign_cross_traffic_sf_dawn
+    bdd_id: be986afd-012d020c
+    notes: San Francisco at dawn; stop signs, cars crossing the intersection, ego stops around 18 s.
+  - name: stop_sign_turn_lanes_red_light
+    bdd_id: c4130097-887da34f
+    notes: Suburban; STOP line at ~3.6 s with a pickup crossing; left-turn lane arrows ~18-25 s; queue at a red light from ~29 s.
+  - name: red_light_turns_green_sf
+    bdd_id: b97b9ee8-612c36ef
+    notes: San Francisco; ego waits at a red light from ~21 s with cross traffic; the light turns green near 39 s.
+  - name: red_light_construction_pedestrian
+    bdd_id: b4a99fcc-d849eaf4
+    notes: Queens at dusk; red light from ~21 s, construction barrels in the intersection, pedestrian crossing at ~29 s.
+  - name: red_light_under_overpass
+    bdd_id: b44a71bf-4d366798
+    notes: NYC under an elevated highway; red lights, a car turning across at ~22 s; strong shadows.
+  - name: red_light_rain_school_zone
+    bdd_id: b61456bb-5bfb50ee
+    notes: NYC in rain; school-zone signs, construction, then a red light with buses and taxis crossing. Mount visible.
+  - name: highway_multilane_overhead_sign
+    bdd_id: c4c4b88a-d1a38d2f
+    notes: Multi-lane highway in traffic; overhead message sign and truck-route sign (lane questions).
+  - name: stopped_behind_school_bus
+    bdd_id: b967b2a7-2003bfd2
+    notes: Rainy street under elevated tracks; stopped behind a car that waits behind a school bus (road awareness).
+  - name: school_bus_stop_arm_parking
+    bdd_id: c33700f7-08262a44
+    notes: Brooklyn; school bus with STOP arm, ends parked at a curb beside a bank (parking questions).
