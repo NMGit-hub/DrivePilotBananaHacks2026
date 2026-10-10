@@ -263,7 +263,7 @@ def run_clip(
             row.alert_said_at = round(said[0], 2) if said else None
 
 
-def judge(model: VisionModel | None, row: Row) -> None:
+def judge(model: VisionModel | None, row: Row, temperature: float | None = 0.0) -> None:
     """Have the AI judge mark the answer."""
     if row.answer is None:
         row.judge, row.judge_reason = "wrong", f"no answer ({row.source})"
@@ -287,7 +287,7 @@ def judge(model: VisionModel | None, row: Row) -> None:
             f"Co-pilot's answer: {row.answer}{alert}\n\n{JUDGE_FORMAT}"
         ),
         max_tokens=300,
-        temperature=0.0,
+        temperature=temperature,
     )
     data: dict[str, Any] = {}
     for attempt in range(JUDGE_ATTEMPTS):  # an occasional reply that isn't valid JSON: ask again
@@ -420,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
             run_clip(cfg, path, clip_rows, detector, vision, tts, voice)
         judge_model = None if args.no_judge else vision
         for row in rows:
-            judge(judge_model, row)
+            judge(judge_model, row, cfg.vision.temperature)
             print(f"  {row.index:3}. [{row.verdict or '?':6}] {row.question} -> {row.answer}", flush=True)
         summary = summarize(rows)
         meta = {

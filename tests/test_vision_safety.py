@@ -334,3 +334,44 @@ def test_deadlines_must_be_ordered() -> None:
 )
 def test_sentence_ends(text: str, expected: list[str]) -> None:
     assert list(sentences([text])) == expected
+
+
+def test_real_claude_client_sends_temperature_in_the_body_and_streams() -> None:
+    # The 1.x SDK has no `temperature` argument (passing it was a TypeError that turned every answer into
+    # "Sorry, I can't reach the vision model"); it must go in the request body.
+    import httpx2
+
+    sent: list[dict[str, Any]] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        sent.append(json.loads(request.content))
+        message = {
+            "id": "m",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        block = {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        delta = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "It's red."}}
+        body = (
+            sse("message_start", {"type": "message_start", "message": message})
+            + sse("content_block_start", block)
+            + sse("content_block_delta", delta)
+            + sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+            + sse(
+                "message_delta",
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
+            )
+            + sse("message_stop", {"type": "message_stop"})
+        )
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+    http = httpx2.Client(transport=httpx2.MockTransport(respond))
+    model = ClaudeVision("sk-ant-test", "claude-haiku-4-5", total_s=5.0, read_s=3.0, http_client=http)
+    assert model.complete(VisionRequest(system="s", text="q", temperature=0.0)) == "It's red."
+    assert model.complete(VisionRequest(system="s", text="q")) == "It's red."
+    assert sent[0]["temperature"] == 0.0 and "temperature" not in sent[1]

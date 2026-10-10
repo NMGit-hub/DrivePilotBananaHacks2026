@@ -217,7 +217,11 @@ class ClaudeVision(VisionModel):
     def stream(self, request: VisionRequest) -> Iterator[str]:
         """Stream text deltas from the Messages API."""
         content = self.content(request)
-        extra: dict[str, Any] = {} if request.temperature is None else {"temperature": request.temperature}
+        # The 1.x SDK has no sampling parameters; Haiku 4.5 still honours `temperature` in the request body
+        # (newer Claude models reject it: set vision.temperature to null for them).
+        extra: dict[str, Any] = (
+            {} if request.temperature is None else {"extra_body": {"temperature": request.temperature}}
+        )
         try:
             with self._client.messages.stream(
                 model=self.model,

@@ -755,7 +755,10 @@ def _vision(cfg: AppConfig, status: dict[str, str]) -> VisionModel | None:
     def check() -> None:  # a tiny request: verifies the key and opens the connection before the first question
         start = time.perf_counter()
         try:
-            model.complete(VisionRequest(system="Reply with one word.", text="Say OK.", max_tokens=5), 5.0, 10.0)
+            check = VisionRequest(
+                system="Reply with one word.", text="Say OK.", max_tokens=5, temperature=cfg.vision.temperature
+            )
+            model.complete(check, 5.0, 10.0)  # same settings as real questions
         except VisionError as exc:
             log.warning("vision model check failed", error=str(exc))
             status["vision"] = f"{model.name} (failed: {exc})"

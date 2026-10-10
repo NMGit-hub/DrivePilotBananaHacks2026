@@ -394,7 +394,9 @@ class VisionConfig(_Strict):
     time_override: str | None = Field(
         None, description="Fixed day and time for prompts, e.g. 'Saturday 17:40' (replays / test sheet)."
     )
-    temperature: float = Field(0.0, ge=0.0, le=1.0, description="0 = the most literal (fewer invented details).")
+    temperature: float | None = Field(
+        0.0, ge=0.0, le=1.0, description="0 = most literal; null for Claude models that reject it (after 4.6)."
+    )
     claude: ClaudeVisionConfig = ClaudeVisionConfig()
     gemini: GeminiVisionConfig = GeminiVisionConfig()
     ollama: OllamaVisionConfig = OllamaVisionConfig()
