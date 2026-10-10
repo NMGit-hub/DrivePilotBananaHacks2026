@@ -18,6 +18,7 @@ so instead of quoting stale distances.
 
 from __future__ import annotations
 
+import math
 import re
 import threading
 from collections.abc import Callable
@@ -485,18 +486,21 @@ class NavHandler:
     # ------------------------------------------------------------------------------ model context
 
     def extra_context(self) -> list[str]:
-        """Navigation lines for the vision model's prompt (speed, next maneuver, its lanes)."""
+        """Lines for the vision model's prompt: our speed (whenever the GPS has a fresh fix, navigating or not) and,
+        while navigating, the next maneuver and its lanes."""
         with self._lock:
             progress = self.progress
             navigating = self.route is not None
-        if progress is None:
-            return []
-        if navigating and self._gps() is None:
+        fix = self._gps()
+        if navigating and fix is None:
             return ["Navigation: the GPS signal is lost."]
         lines = []
-        if progress.speed_mps is not None:
-            lines.append(f"Speed: {progress.speed_mps * 2.23694:.0f} mph.")
-        if navigating and progress.next_step is not None and progress.to_next_m is not None:
+        speed = fix.speed_mps if fix is not None else None
+        if speed is not None and math.isfinite(speed):
+            lines.append(f"Speed: {speed * 2.23694:.0f} mph.")
+        if not navigating or progress is None:
+            return lines
+        if progress.next_step is not None and progress.to_next_m is not None:
             step = progress.next_step
             lines.append(f"Navigation: next, {maneuver_phrase(step)} {in_distance(progress.to_next_m)}.")
             lanes = describe_lanes(step.lanes)

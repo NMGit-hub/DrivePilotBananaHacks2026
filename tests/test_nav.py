@@ -297,6 +297,14 @@ def test_lane_questions_with_and_without_a_lane_count() -> None:
     assert "I can't tell exactly which lane you're in" in nav.answer(ask("Am I in the right lane?"), empty_snapshot())
 
 
+def test_the_model_gets_our_speed_without_a_route_too() -> None:
+    # Found replaying a dev clip with its real GPS: "how fast am I going?" got "I can't see your speedometer"
+    # because the speed line was only built while navigating (PLAN.md: every model question gets our speed).
+    nav, gps, _ = handler()  # no destination set
+    drive(nav, gps, fixes(start_m=2500.0, until_m=2600.0))
+    assert nav.extra_context() == ["Speed: 34 mph."]
+
+
 def test_model_context_lines() -> None:
     nav, gps, _ = handler()
     nav.set_destination("Redmond Town Center")

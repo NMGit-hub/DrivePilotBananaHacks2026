@@ -1,9 +1,12 @@
 """GPS input: a GPX track replayed in sync with the video, or live fixes from the phone's web page.
 
-`GpxReplay.fix_at(t)` interpolates the recorded track at video time `t` (the GPX clock is aligned with
-`video.file.gpx_offset_s` = GPX time at video t=0 minus the first point's time); speed and heading come from the
-file when recorded, otherwise from the neighbouring points. `PhoneGps` keeps the latest fix posted by the phone
-(M7 serves the page over `adb reverse`) and reports nothing once it is stale.
+`GpxReplay.fix_at(t)` interpolates the recorded track at video time `t`. The GPX clock is aligned with
+`video.file.gpx_offset_s` = GPX time at video t=0 minus the first point's time, or, when the file has a waypoint
+named `video_start` (written by `scripts/bdd_info_to_gpx.py`), video t=0 is that waypoint's time (plus
+`gpx_offset_s` as a further correction). Speed and heading come from the file when recorded, otherwise from the
+neighbouring points; nothing is interpolated across track segments (a gap in the recording is reported as no
+fix). `PhoneGps` keeps the latest fix posted by the phone (M7 serves the page over `adb reverse`) and reports
+nothing once it is stale.
 """
 
 from __future__ import annotations
@@ -18,6 +21,8 @@ from typing import Protocol
 import numpy as np
 
 from nav.geo import LatLon, bearing_deg, haversine_m
+
+VIDEO_START = "video_start"  # name of a GPX waypoint whose time is the video's first frame
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,17 +62,24 @@ class GpxReplay:
 
         with path.open(encoding="utf-8") as f:
             gpx = gpxpy.parse(f)
-        points = [p for track in gpx.tracks for segment in track.segments for p in segment.points]
-        points = [p for p in points if p.time is not None]
+        points, segment_of = [], []  # segment_of[i]: which track segment point i is in
+        segments = [s for track in gpx.tracks for s in track.segments]
+        for index, segment in enumerate(segments):
+            timed = [p for p in segment.points if p.time is not None]
+            points += timed
+            segment_of += [index] * len(timed)
         if len(points) < 2:
             raise ValueError(f"{path}: needs at least two timed track points")
-        t0 = points[0].time
+        anchors = [w.time for w in gpx.waypoints if w.name == VIDEO_START and w.time is not None]
+        t0 = anchors[0] if anchors else points[0].time
         assert t0 is not None
         self._t = np.array([(p.time - t0).total_seconds() for p in points if p.time is not None]) - offset_s
+        self._segment = np.array(segment_of)
         self._lat = np.array([p.latitude for p in points])
         self._lon = np.array([p.longitude for p in points])
         self._speed = np.array([p.speed if p.speed is not None else np.nan for p in points], dtype=float)
-        self._course = np.array([getattr(p, "course", None) or np.nan for p in points], dtype=float)
+        courses = [getattr(p, "course", None) for p in points]  # (0.0 is due north, not "unknown")
+        self._course = np.array([c if c is not None else np.nan for c in courses], dtype=float)
 
     @classmethod
     def from_points(cls, times: list[float], points: list[LatLon], speeds: list[float] | None = None) -> GpxReplay:
@@ -78,6 +90,7 @@ class GpxReplay:
         replay._lon = np.array([p[1] for p in points])
         replay._speed = np.asarray(speeds if speeds is not None else [np.nan] * len(points), dtype=float)
         replay._course = np.full(len(points), np.nan)
+        replay._segment = np.zeros(len(points), dtype=int)
         return replay
 
     @property
@@ -86,18 +99,30 @@ class GpxReplay:
         return float(self._t[-1] - self._t[0])
 
     def fix_at(self, t: float) -> GpsFix | None:
-        """Interpolated position at video time `t` (None outside the track)."""
+        """Interpolated position at video time `t` (None outside the track or in a gap between its segments)."""
         if t < self._t[0] or t > self._t[-1]:
             return None
         i = int(np.searchsorted(self._t, t, side="right") - 1)
         i = min(max(i, 0), len(self._t) - 2)
         t0, t1 = self._t[i], self._t[i + 1]
+        if self._segment[i] != self._segment[i + 1]:  # between two segments: the recording has a gap here
+            if t != t0:
+                return None
+            speed_i = None if np.isnan(self._speed[i]) else float(self._speed[i])
+            course_i = None if np.isnan(self._course[i]) else float(self._course[i])
+            return GpsFix(t, float(self._lat[i]), float(self._lon[i]), speed_i, course_i)
         f = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
         lat = float(self._lat[i] + (self._lat[i + 1] - self._lat[i]) * f)
         lon = float(self._lon[i] + (self._lon[i + 1] - self._lon[i]) * f)
         a, b = (self._lat[i], self._lon[i]), (self._lat[i + 1], self._lon[i + 1])
         distance = haversine_m(a, b)
-        speed = float(self._speed[i]) if not np.isnan(self._speed[i]) else (distance / (t1 - t0) if t1 > t0 else 0.0)
+        s0, s1 = self._speed[i], self._speed[i + 1]
+        if not np.isnan(s0) and not np.isnan(s1):  # interpolated like the position (holding s0 lagged up to 1 s)
+            speed = float(s0 + (s1 - s0) * f)
+        elif not np.isnan(s0):
+            speed = float(s0)
+        else:
+            speed = distance / (t1 - t0) if t1 > t0 else 0.0
         heading = (
             float(self._course[i]) if not np.isnan(self._course[i]) else (bearing_deg(a, b) if distance > 0.5 else None)
         )
