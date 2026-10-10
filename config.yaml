@@ -97,17 +97,25 @@ alerts:                     # spoken on their own: "You're up, check and go." / 
 
 vision_model: claude        # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
 vision:
+  frames: 3                 # latest frame at full width + 2 earlier, smaller ones (motion, things just passed)
+  frame_spacing_s: 0.7
+  sign_frame_spacing_s: 1.2 # "what did that sign say?": reach further back, at full width
+  latest_width: 1280
+  older_width: 640
+  jpeg_quality: 80
+  first_token_timeout_s: 3.0  # no words by then: a spoken "sorry" (PLAN target: answer audio within 2.5 s)
+  total_timeout_s: 8.0
+  time_override: null       # e.g. "Saturday 17:40" for replays and the test sheet (default: the real clock)
   claude:
     model: claude-haiku-4-5
     max_tokens: 300
-    timeout_s: 8.0
+    max_retries: 0          # a retry can't arrive in time; failures get a spoken fallback instead
   gemini:
     model: gemini-3.8-flash
     thinking_level: low
     max_tokens: 300
-    timeout_s: 8.0
   ollama:
-    model: qwen2.5vl:7b
+    model: qwen2.5vl:7b     # note: a 7B vision model won't fit in 6 GB next to YOLO and Whisper
     host: http://localhost:11434
     timeout_s: 15.0
 

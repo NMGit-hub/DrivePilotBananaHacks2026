@@ -62,8 +62,11 @@ class NavAnswerer(Protocol):
 class SceneAnswerer(Protocol):
     """Vision-model handler (M5): questions about what the camera sees."""
 
-    def answer(self, route: Route, snapshot: WorldSnapshot) -> str | Iterable[str]:
-        """Answer a MODEL (or stopped GAP_CHECK) question; a stream of sentences, or one string."""
+    def answer(
+        self, route: Route, snapshot: WorldSnapshot, cancel: threading.Event | None = None
+    ) -> str | Iterable[str]:
+        """Answer a MODEL (or stopped GAP_CHECK) question; a stream of sentences, or one string. `cancel` is set
+        when the driver says "stop" or asks something else: the request should end as soon as possible."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +100,7 @@ class Assistant:
         self._lock = threading.Lock()
         self._last: Utterance | None = None
         self._turn = 0  # bumped by every question and by stop/cancel: a streaming answer stops when it changes
+        self._cancel: threading.Event | None = None  # set to cut off the model request of the current answer
 
     # ------------------------------------------------------------------------------------ output
 
@@ -124,15 +128,19 @@ class Assistant:
     def ask(self, text: str) -> Reply:
         """Answer one question (voice thread or typed). Speaks the answer and returns it."""
         start = time.perf_counter()
+        cancel = threading.Event()
         with self._lock:
             self._turn += 1
             turn = self._turn
+            previous, self._cancel = self._cancel, cancel
+        if previous is not None:
+            previous.set()  # a newer question supersedes an answer still streaming
         r = route(text)
         generation = self.alerts.generation
         snap = self._snapshot()
         t = snap.t if snap is not None else 0.0
         try:
-            answer, source = self._answer(r, snap, generation)
+            answer, source = self._answer(r, snap, generation, cancel)
         except Exception:
             log.exception("answer failed", kind=r.kind.value, intent=r.intent)
             answer, source = HANDLER_ERROR, "error"
@@ -148,10 +156,13 @@ class Assistant:
             said: list[str] = []
             try:
                 for sentence in answer:
-                    if self._turn != turn:  # "stop", "never mind" or a newer question
-                        log.info("answer cut off", after_sentences=len(said))
-                        break
-                    self.say(Utterance(text=sentence, kind="answer", priority=Priority.ANSWER, t=t))
+                    utterance = Utterance(text=sentence, kind="answer", priority=Priority.ANSWER, t=t)
+                    with self._lock:  # the check and the hand-over are atomic with respect to "stop"
+                        if self._turn != turn:  # "stop", "never mind" or a newer question
+                            log.info("answer cut off", after_sentences=len(said))
+                            break
+                        self._last = utterance
+                        self.speaker.say(utterance)
                     if first_ms is None:
                         first_ms = (time.perf_counter() - start) * 1000.0
                     said.append(sentence)
@@ -178,7 +189,9 @@ class Assistant:
         )
         return Reply(route=r, text=spoken, source=source, elapsed_ms=elapsed_ms, first_ms=first_ms)
 
-    def _answer(self, r: Route, snap: WorldSnapshot | None, generation: int) -> tuple[Answer, str]:
+    def _answer(
+        self, r: Route, snap: WorldSnapshot | None, generation: int, cancel: threading.Event
+    ) -> tuple[Answer, str]:
         if r.kind is RouteKind.EMPTY:
             return None, "none"
         if r.kind is RouteKind.CONTROL:
@@ -196,12 +209,12 @@ class Assistant:
             answer = local.gap_check(snap, r.text)
             if answer is not None:
                 return self._local(lambda s: local.gap_check(s, r.text) or answer, snap, generation), "local"
-            return self._model(r, snap), "model"
+            return self._model(r, snap, cancel), "model"
         if r.kind is RouteKind.RIGHT_OF_WAY:
             if r.intent == "should_wait":
                 wait = local.should_wait(snap, r.text)
                 if wait is None:
-                    return self._model(r, snap), "model"
+                    return self._model(r, snap, cancel), "model"
                 return self._local(lambda s: local.should_wait(s, r.text) or wait, snap, generation), "local"
             handler = {"who_first": local.who_first, "can_i_go": local.can_i_go, "position": local.position}[r.intent]
             return self._local(handler, snap, generation), "local"
@@ -211,7 +224,7 @@ class Assistant:
         if not sure_stopped and GAP_HINT.search(r.text):
             log.info("gap-like question refused while moving", question=r.question)
             return local.GAP_REFUSAL, "local"
-        return self._model(r, snap), "model"
+        return self._model(r, snap, cancel), "model"
 
     def _local(
         self, compute: Callable[[WorldSnapshot], local.LocalAnswer], snap: WorldSnapshot, generation: int
@@ -232,10 +245,10 @@ class Assistant:
                 return {local.Watch.TURN: YOUR_TURN, local.Watch.LIGHT: LIGHT_GREEN}[watch]
         return answer.text
 
-    def _model(self, r: Route, snap: WorldSnapshot) -> Answer:
+    def _model(self, r: Route, snap: WorldSnapshot, cancel: threading.Event) -> Answer:
         if self.model is None:
             return NO_MODEL
-        return self.model.answer(r, snap)
+        return self.model.answer(r, snap, cancel=cancel)
 
     def _control(self, intent: str, snap: WorldSnapshot | None) -> str | None:
         if intent == "quiet":
@@ -263,4 +276,7 @@ class Assistant:
         """Stop speaking now and cut off any answer still streaming."""
         with self._lock:
             self._turn += 1
-        self.speaker.stop()
+            cancel = self._cancel
+            self.speaker.stop()
+        if cancel is not None:
+            cancel.set()

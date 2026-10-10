@@ -6,19 +6,26 @@
 - `gemini`: Google Gemini Flash via google-genai, low thinking, streaming;
 - `ollama`: a local model through Ollama's HTTP chat API, streaming;
 - `mock`: scripted replies for tests and offline runs (records every request).
-Failures (missing key, network, timeouts, refusals) raise `VisionError`; callers turn that into a spoken
-fallback. Images are JPEG bytes; prompts are built in `answers/scene.py`.
+Any failure (missing key or SDK, network, timeouts, refusals, bad output) raises `VisionError`; callers turn
+that into a spoken fallback. Images are JPEG bytes; prompts are built in `answers/scene.py`.
+
+`guarded_stream` runs a provider's stream on a worker thread with a first-token deadline, a total deadline and
+a cancel event; when the consumer stops (deadline, cancel, or it simply stops reading) the worker closes the
+provider's generator itself, which closes the HTTP stream, so no request keeps running (and billing) after
+nobody is listening. Provider read timeouts match the first-token deadline and there are no SDK retries: a
+retry can't arrive within the 2.5 s answer budget anyway.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import queue
 import re
 import threading
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -59,6 +66,69 @@ class VisionTimeout(VisionError):
     """The model did not answer in time."""
 
 
+class VisionCancelled(VisionError):
+    """The listener went away (the driver said "stop" or asked something else)."""
+
+
+_POLL_S = 0.05  # how often a waiting consumer checks for cancellation
+
+
+def guarded_stream(
+    model: VisionModel,
+    request: VisionRequest,
+    first_token_s: float,
+    total_s: float,
+    cancel: threading.Event | None = None,
+) -> Iterator[str]:
+    """The provider's stream with deadlines and cancellation (see the module docstring)."""
+    items: queue.Queue[str | BaseException | None] = queue.Queue()  # text piece, error, or None = done
+    stop = threading.Event()
+
+    def run() -> None:
+        pieces = model.stream(request)
+        try:
+            for piece in pieces:
+                if stop.is_set():
+                    return
+                items.put(piece)
+            items.put(None)
+        except Exception as exc:  # noqa: BLE001 - any provider failure is handed to the consumer below
+            items.put(exc)
+        finally:
+            close = getattr(pieces, "close", None)
+            if close is not None:
+                close()  # closes the SDK stream / HTTP response from the thread that owns it
+
+    threading.Thread(target=run, name=f"vision-{model.name}", daemon=True).start()
+    start = time.perf_counter()
+    first = True
+    try:
+        while True:
+            if cancel is not None and cancel.is_set():
+                raise VisionCancelled(f"{model.name}: cancelled")
+            elapsed = time.perf_counter() - start
+            limit = (first_token_s if first else total_s) - elapsed
+            if limit <= 0:
+                what = "no reply" if first else "reply too slow"
+                raise VisionTimeout(f"{model.name}: {what} after {elapsed:.1f} s")
+            try:
+                item = items.get(timeout=min(limit, _POLL_S))
+            except queue.Empty:
+                continue
+            if item is None:
+                return
+            if isinstance(item, BaseException):
+                if isinstance(item, VisionError):
+                    raise item
+                raise VisionError(f"{model.name}: {type(item).__name__}: {item}") from item
+            if first:
+                log.info("vision first token", provider=model.name, ms=round(elapsed * 1000))
+                first = False
+            yield item
+    finally:
+        stop.set()  # the worker drops out after its next piece and closes the provider stream
+
+
 class VisionModel(ABC):
     """A vision-language model provider."""
 
@@ -68,11 +138,13 @@ class VisionModel(ABC):
     def stream(self, request: VisionRequest) -> Iterator[str]:
         """Yield the answer's text in pieces as it is generated. Raises VisionError."""
 
-    def complete(self, request: VisionRequest) -> str:
-        """The whole answer."""
-        return "".join(self.stream(request))
+    def complete(self, request: VisionRequest, first_token_s: float = 4.0, total_s: float = 10.0) -> str:
+        """The whole answer, within the deadlines."""
+        return "".join(guarded_stream(self, request, first_token_s, total_s))
 
-    def complete_json(self, request: VisionRequest) -> dict[str, Any]:
+    def complete_json(
+        self, request: VisionRequest, first_token_s: float = 4.0, total_s: float = 10.0
+    ) -> dict[str, Any]:
         """Ask for a JSON object and parse it (the request text must describe the object). Raises VisionError."""
         text = self.complete(
             VisionRequest(
@@ -80,7 +152,9 @@ class VisionModel(ABC):
                 text=request.text,
                 images=request.images,
                 max_tokens=request.max_tokens,
-            )
+            ),
+            first_token_s,
+            total_s,
         )
         match = re.search(r"\{.*\}", text, re.DOTALL)
         if match is None:
@@ -105,15 +179,18 @@ class ClaudeVision(VisionModel):
 
     name = "claude"
 
-    def __init__(self, api_key: str, model: str, timeout_s: float, max_retries: int = 1) -> None:
+    def __init__(
+        self, api_key: str, model: str, total_s: float, read_s: float, max_retries: int = 0, http_client: Any = None
+    ) -> None:
         import anthropic  # deferred: only the selected provider's SDK is imported
 
         self._anthropic = anthropic
         self.model = model
         self._client = anthropic.Anthropic(
             api_key=api_key,
-            timeout=anthropic.Timeout(timeout_s, connect=3.0),
+            timeout=anthropic.Timeout(total_s, read=read_s, connect=3.0),
             max_retries=max_retries,
+            http_client=http_client,
         )
 
     @staticmethod
@@ -147,7 +224,9 @@ class ClaudeVision(VisionModel):
             ) as stream:
                 yield from stream.text_stream
                 final = stream.get_final_message()
-        except self._anthropic.APIError as exc:
+        except GeneratorExit:
+            raise  # closed by the consumer: the `with` above closed the HTTP stream
+        except Exception as exc:  # the SDK wraps request errors, but not errors while reading the stream
             raise VisionError(f"claude: {type(exc).__name__}: {exc}") from exc
         if final.stop_reason == "refusal":
             raise VisionError("claude: refused")
@@ -165,14 +244,14 @@ class GeminiVision(VisionModel):
 
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str, timeout_s: float, thinking_level: str = "low") -> None:
+    def __init__(self, api_key: str, model: str, total_s: float, thinking_level: str = "low") -> None:
         from google import genai  # deferred import
         from google.genai import types
 
         self._types = types
         self.model = model
         self.thinking_level = thinking_level
-        self._client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=int(timeout_s * 1000)))
+        self._client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=int(total_s * 1000)))
 
     def build(self, request: VisionRequest) -> tuple[list[Any], Any]:
         """Contents and config for generate_content_stream (separate for testing)."""
@@ -198,8 +277,16 @@ class GeminiVision(VisionModel):
             ):
                 if chunk.text:
                     yield chunk.text
+        except GeneratorExit:
+            raise
         except Exception as exc:  # the SDK raises several unrelated error types
             raise VisionError(f"gemini: {type(exc).__name__}: {exc}") from exc
+
+    def close(self) -> None:
+        """Close the HTTP client."""
+        close = getattr(self._client, "close", None)
+        if close is not None:
+            close()
 
 
 # ------------------------------------------------------------------------------------------- Ollama
@@ -210,9 +297,12 @@ class OllamaVision(VisionModel):
 
     name = "ollama"
 
-    def __init__(self, model: str, host: str, timeout_s: float, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self, model: str, host: str, total_s: float, read_s: float, transport: httpx.BaseTransport | None = None
+    ) -> None:
         self.model = model
-        self._client = httpx.Client(base_url=host, timeout=httpx.Timeout(timeout_s, connect=2.0), transport=transport)
+        timeout = httpx.Timeout(total_s, read=read_s, connect=2.0)
+        self._client = httpx.Client(base_url=host, timeout=timeout, transport=transport)
 
     def stream(self, request: VisionRequest) -> Iterator[str]:
         """Stream message content from /api/chat."""
@@ -238,14 +328,21 @@ class OllamaVision(VisionModel):
                     if not line.strip():
                         continue
                     data = json.loads(line)
-                    if "error" in data:
+                    if not isinstance(data, dict):
+                        raise VisionError("ollama: unexpected reply")
+                    if data.get("error"):
                         raise VisionError(f"ollama: {data['error']}")
-                    piece = data.get("message", {}).get("content", "")
+                    message = data.get("message") or {}
+                    piece = message.get("content") if isinstance(message, dict) else None
                     if piece:
-                        yield piece
+                        yield str(piece)
                     if data.get("done"):
                         return
-        except (httpx.HTTPError, json.JSONDecodeError) as exc:
+        except GeneratorExit:
+            raise
+        except VisionError:
+            raise
+        except Exception as exc:  # httpx errors, bad JSON, ...
             raise VisionError(f"ollama: {type(exc).__name__}: {exc}") from exc
 
     def close(self) -> None:
@@ -275,55 +372,57 @@ class MockVision(VisionModel):
         self.first_delay_s = first_delay_s
         self.error = error
         self.requests: list[VisionRequest] = []
+        self.closed_streams = 0
         self._lock = threading.Lock()
 
     def stream(self, request: VisionRequest) -> Iterator[str]:
         """Yield the scripted reply in small chunks, with optional delays."""
         with self._lock:
             self.requests.append(request)
-        if self.first_delay_s:
-            time.sleep(self.first_delay_s)
-        if self.error is not None:
-            raise self.error
-        text = self.reply(request) if callable(self.reply) else self.reply
-        for i in range(0, len(text), self.chunk_chars):
-            if self.delay_s and i:
-                time.sleep(self.delay_s)
-            yield text[i : i + self.chunk_chars]
+        try:
+            if self.first_delay_s:
+                time.sleep(self.first_delay_s)
+            if self.error is not None:
+                raise self.error
+            text = self.reply(request) if callable(self.reply) else self.reply
+            for i in range(0, len(text), self.chunk_chars):
+                if self.delay_s and i:
+                    time.sleep(self.delay_s)
+                yield text[i : i + self.chunk_chars]
+        finally:
+            with self._lock:
+                self.closed_streams += 1
 
 
 # ------------------------------------------------------------------------------------------ factory
 
 
 def create_vision_model(cfg: AppConfig, name: str | None = None) -> VisionModel:
-    """The provider selected by `vision_model` (or `name`). Raises VisionError if its key is missing."""
+    """The provider selected by `vision_model` (or `name`). Raises VisionError if it can't be set up."""
     name = name or cfg.vision_model
-    secrets = cfg.secrets
-    if name == "claude":
-        if secrets.anthropic_api_key is None:
-            raise VisionError("claude: ANTHROPIC_API_KEY is not set (.env)")
-        c = cfg.vision.claude
-        return ClaudeVision(secrets.anthropic_api_key.get_secret_value(), c.model, c.timeout_s)
-    if name == "gemini":
-        if secrets.gemini_api_key is None:
-            raise VisionError("gemini: GEMINI_API_KEY is not set (.env)")
-        g = cfg.vision.gemini
-        return GeminiVision(secrets.gemini_api_key.get_secret_value(), g.model, g.timeout_s, g.thinking_level)
-    if name == "ollama":
-        o = cfg.vision.ollama
-        return OllamaVision(o.model, o.host, o.timeout_s)
-    if name == "mock":
-        return MockVision()
+    secrets, v = cfg.secrets, cfg.vision
+    try:
+        if name == "claude":
+            if secrets.anthropic_api_key is None:
+                raise VisionError("claude: ANTHROPIC_API_KEY is not set (.env)")
+            c = v.claude
+            return ClaudeVision(
+                secrets.anthropic_api_key.get_secret_value(),
+                c.model,
+                v.total_timeout_s,
+                v.first_token_timeout_s,
+                c.max_retries,
+            )
+        if name == "gemini":
+            if secrets.gemini_api_key is None:
+                raise VisionError("gemini: GEMINI_API_KEY is not set (.env)")
+            g = v.gemini
+            return GeminiVision(secrets.gemini_api_key.get_secret_value(), g.model, v.total_timeout_s, g.thinking_level)
+        if name == "ollama":
+            o = v.ollama
+            return OllamaVision(o.model, o.host, o.timeout_s, o.timeout_s)
+        if name == "mock":
+            return MockVision()
+    except ImportError as exc:
+        raise VisionError(f"{name}: SDK not installed ({exc})") from exc
     raise VisionError(f"unknown vision model {name!r}")
-
-
-def max_tokens_for(cfg: AppConfig, name: str | None = None) -> int:
-    """The configured answer length for a provider."""
-    name = name or cfg.vision_model
-    by_name: dict[str, int] = {"claude": cfg.vision.claude.max_tokens, "gemini": cfg.vision.gemini.max_tokens}
-    return by_name.get(name, 300)
-
-
-def describe_providers() -> Sequence[str]:
-    """Provider names accepted by `vision_model`."""
-    return ("claude", "gemini", "ollama", "mock")

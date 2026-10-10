@@ -13,6 +13,7 @@ test sheet has the full judge). Uses the API key from .env; each question is one
 from __future__ import annotations
 
 import argparse
+import re
 import statistics
 import sys
 import time
@@ -125,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         answer = " ".join(said)
         verdict = ""
         if q.expect_any:
-            ok = any(str(word).lower() in answer.lower() for word in q.expect_any)
+            ok = any(re.search(rf"\b{re.escape(str(word).lower())}\b", answer.lower()) for word in q.expect_any)
             checks.append(ok)
             verdict = "  [OK]" if ok else f"  [MISSING one of {list(q.expect_any)}]"
         print(f"{q.clip.stem.split('__')[-1][:8]} @{q.t:5.1f}s  Q: {q.text}")

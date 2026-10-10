@@ -187,7 +187,7 @@ def test_dropped_car_ahead_is_never_you_are_first() -> None:
 
 def test_a_failing_handler_gives_a_spoken_fallback() -> None:
     class Broken:
-        def answer(self, route: Route, snapshot: WorldSnapshot) -> str:
+        def answer(self, route: Route, snapshot: WorldSnapshot, cancel: object = None) -> str:
             raise RuntimeError("network down")
 
     a, speaker = assistant(snap(), model=Broken())
@@ -207,7 +207,7 @@ def test_model_answers_stream_and_stop_cuts_them_off() -> None:
     holder: dict[str, Assistant] = {}
 
     class Streaming:
-        def answer(self, route: Route, snapshot: WorldSnapshot) -> Iterator[str]:
+        def answer(self, route: Route, snapshot: WorldSnapshot, cancel: object = None) -> Iterator[str]:
             try:
                 yield "The sign says no parking."
                 holder["a"].ask("Stop")  # the driver says "stop" while the answer is still coming

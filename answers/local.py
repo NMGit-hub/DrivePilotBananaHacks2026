@@ -93,7 +93,8 @@ def _with_caveats(text: str, snapshot: WorldSnapshot) -> str:
     return " ".join([text, *caveats(snapshot)])
 
 
-def _ahead_of_us(queue: QueueSnapshot) -> list[QueueEntry]:
+def ahead_of_us(queue: QueueSnapshot) -> list[QueueEntry]:
+    """The waiting cars that go before us, in order."""
     out = []
     for entry in queue.order:
         if entry.is_ego:
@@ -142,7 +143,7 @@ def _first_text(queue: QueueSnapshot) -> str:
 
 
 def _not_yet(queue: QueueSnapshot, prefix: str = "Not yet") -> LocalAnswer:
-    ahead = _ahead_of_us(queue)
+    ahead = ahead_of_us(queue)
     if len(ahead) == 1:
         text = f"{prefix}, {describe(ahead[0])} is next. I'll tell you."
     else:
@@ -161,7 +162,7 @@ def who_first(snapshot: WorldSnapshot) -> LocalAnswer:
         return LocalAnswer(_not_at_a_stop(snapshot))
     if queue.deadlock:
         return LocalAnswer(_with_caveats(_deadlock_text(), snapshot))
-    ahead = _ahead_of_us(queue)
+    ahead = ahead_of_us(queue)
     behind = [e for e in queue.order if not e.is_ego][len(ahead) :]
     if not ahead:
         if queue.dropped:
@@ -234,7 +235,7 @@ def position(snapshot: WorldSnapshot) -> LocalAnswer:
         return LocalAnswer(_not_at_a_stop(snapshot))
     if queue.deadlock:
         return LocalAnswer(_with_caveats(_deadlock_text(), snapshot))
-    ahead = _ahead_of_us(queue)
+    ahead = ahead_of_us(queue)
     if not ahead:
         first = "Nobody I can see is ahead of you." if queue.dropped else "You're first."
         return LocalAnswer(_with_caveats(f"{first} {_sentence(CHECK)}.", snapshot))

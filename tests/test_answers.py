@@ -302,7 +302,7 @@ class FakeHandler:
         self.reply = reply
         self.routes: list[Route] = []
 
-    def answer(self, route: Route, snapshot: WorldSnapshot) -> str:
+    def answer(self, route: Route, snapshot: WorldSnapshot, cancel: object = None) -> str:
         self.routes.append(route)
         return self.reply
 

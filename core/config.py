@@ -333,7 +333,7 @@ class ClaudeVisionConfig(_Strict):
 
     model: str = "claude-haiku-4-5"
     max_tokens: int = Field(300, gt=0)
-    timeout_s: float = Field(8.0, gt=0.0)
+    max_retries: int = Field(0, ge=0, description="A retry can't arrive within the answer budget anyway.")
 
 
 class GeminiVisionConfig(_Strict):
@@ -342,7 +342,6 @@ class GeminiVisionConfig(_Strict):
     model: str = "gemini-3.8-flash"
     thinking_level: Literal["low", "medium", "high"] = "low"
     max_tokens: int = Field(300, gt=0)
-    timeout_s: float = Field(8.0, gt=0.0)
 
 
 class OllamaVisionConfig(_Strict):
@@ -358,14 +357,83 @@ class VisionConfig(_Strict):
 
     frames: int = Field(3, ge=1, le=6, description="Recent frames sent with each question (latest last).")
     frame_spacing_s: float = Field(0.7, gt=0.0, description="Time between the frames sent.")
+    sign_frame_spacing_s: float = Field(1.2, gt=0.0, description="...for questions about a sign just passed.")
     latest_width: int = Field(1280, ge=320, description="The latest frame is sent at up to this width...")
     older_width: int = Field(640, ge=160, description="...earlier frames smaller (motion, things just passed).")
-    jpeg_quality: int = Field(85, ge=30, le=100)
-    first_token_timeout_s: float = Field(4.0, gt=0.0, description="No text by then: spoken fallback.")
-    total_timeout_s: float = Field(9.0, gt=0.0, description="The whole answer must arrive by then.")
+    jpeg_quality: int = Field(80, ge=30, le=100)
+    first_token_timeout_s: float = Field(3.0, gt=0.0, description="No text by then: spoken fallback.")
+    total_timeout_s: float = Field(8.0, gt=0.0, description="The whole answer must arrive by then.")
+    time_override: str | None = Field(
+        None, description="Fixed day and time for prompts, e.g. 'Saturday 17:40' (replays / test sheet)."
+    )
     claude: ClaudeVisionConfig = ClaudeVisionConfig()
     gemini: GeminiVisionConfig = GeminiVisionConfig()
     ollama: OllamaVisionConfig = OllamaVisionConfig()
+
+    @model_validator(mode="after")
+    def _deadlines(self) -> VisionConfig:
+        if self.first_token_timeout_s > self.total_timeout_s:
+            raise ValueError("first_token_timeout_s must be <= total_timeout_s")
+        return self
+
+
+# --------------------------------------------------------------------------------------------- voice
+
+
+class WakeWordConfig(_Strict):
+    """openWakeWord "Hey DrivePilot" (voice/wakeword.py)."""
+
+    model: ConfigPath = Path("models/wakeword/hey_drivepilot.onnx")
+    threshold: float = Field(0.25, gt=0.0, lt=1.0, description="Chosen on validation data (scripts/wakeword).")
+    debounce_s: float = Field(2.0, ge=0.0, description="Ignore further triggers for this long after one.")
+
+
+class EndpointConfig(_Strict):
+    """When the question ends: Silero VAD after the wake word (voice/endpoint.py)."""
+
+    speech_threshold: float = Field(0.5, gt=0.0, lt=1.0, description="VAD probability that counts as speech.")
+    end_silence_s: float = Field(0.6, gt=0.0, description="PLAN.md: stop listening after ~0.6 s of silence.")
+    speculative_silence_s: float = Field(
+        0.25, ge=0.0, description="Start transcribing after this much silence (kept if the silence lasts)."
+    )
+    no_speech_timeout_s: float = Field(4.0, gt=0.0, description="Give up if nothing is said after the wake word.")
+    max_utterance_s: float = Field(10.0, gt=0.0)
+    pre_roll_s: float = Field(0.4, ge=0.0, description="Audio kept from just before the wake word fired.")
+
+
+class SttConfig(_Strict):
+    """faster-whisper on the GPU (voice/stt.py)."""
+
+    model: str = Field("small.en", description="faster-whisper model name (downloaded once) or a local path.")
+    device: Literal["cuda", "cpu"] = "cuda"
+    compute_type: str = "float16"
+    beam_size: int = Field(1, ge=1, le=10)
+    initial_prompt: str = Field(
+        "Hey DrivePilot. A driver asks about the road: stop signs, traffic lights, lanes, exits, merging, "
+        "parking, turns.",
+        description="Biases spelling and vocabulary.",
+    )
+
+
+class TtsConfig(_Strict):
+    """Piper text-to-speech and the alert clips (voice/tts.py, voice/speaker.py)."""
+
+    voice: ConfigPath = Path("models/piper/en_US-lessac-medium.onnx")
+    length_scale: float = Field(0.95, gt=0.3, lt=3.0, description="< 1 speaks faster.")
+    clips_dir: ConfigPath = Path("models/piper/clips")
+    chime_volume: float = Field(0.25, ge=0.0, le=1.0)
+    listen_chime: bool = Field(True, description="A short tone when the wake word is heard.")
+
+
+class VoiceConfig(_Strict):
+    """Microphone in, speech out."""
+
+    input_device: str | int | None = Field(None, description="sounddevice name/index; null = system default.")
+    output_device: str | int | None = None
+    wakeword: WakeWordConfig = WakeWordConfig()
+    endpoint: EndpointConfig = EndpointConfig()
+    stt: SttConfig = SttConfig()
+    tts: TtsConfig = TtsConfig()
 
 
 # ------------------------------------------------------------------------------------- ui / logging
@@ -427,6 +495,7 @@ class AppConfig(_Strict):
     alerts: AlertsConfig = AlertsConfig()
     vision_model: Literal["claude", "gemini", "ollama", "mock"] = "claude"
     vision: VisionConfig = VisionConfig()
+    voice: VoiceConfig = VoiceConfig()
     ui: UiConfig = UiConfig()
     logging: LoggingConfig = LoggingConfig()
 

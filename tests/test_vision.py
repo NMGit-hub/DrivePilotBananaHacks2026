@@ -17,7 +17,8 @@ from answers.scene import (
     FALLBACK_EMPTY,
     FALLBACK_ERROR,
     FALLBACK_TIMEOUT,
-    SAFE_GO,
+    LOST_REST,
+    NO_VOUCH,
     SceneHandler,
     describe_world,
     spoken_time,
@@ -149,7 +150,7 @@ class FakeMessages:
 
 
 def claude_with(stream: FakeStream | Exception) -> tuple[ClaudeVision, FakeMessages]:
-    model = ClaudeVision("sk-ant-test", "claude-haiku-4-5", timeout_s=5.0)
+    model = ClaudeVision("sk-ant-test", "claude-haiku-4-5", total_s=5.0, read_s=3.0)
     messages = FakeMessages(stream)
     model._client = type("Client", (), {"messages": messages, "close": lambda self: None})()  # type: ignore[assignment]
     return model, messages
@@ -188,7 +189,7 @@ def test_claude_errors_and_refusals_become_vision_errors() -> None:
 
 
 def test_gemini_request() -> None:
-    model = GeminiVision("gm-test", "gemini-3.8-flash", timeout_s=5.0, thinking_level="low")
+    model = GeminiVision("gm-test", "gemini-3.8-flash", total_s=5.0, thinking_level="low")
     contents, config = model.build(
         VisionRequest(system="SYS", text="Q", images=(ImagePart(JPEG, "Now"),), max_tokens=77)
     )
@@ -198,7 +199,7 @@ def test_gemini_request() -> None:
 
 
 def ollama_with(handler_fn: Any) -> OllamaVision:
-    return OllamaVision("qwen2.5vl:7b", "http://localhost:11434", 5.0, transport=httpx.MockTransport(handler_fn))
+    return OllamaVision("qwen2.5vl:7b", "http://localhost:11434", 5.0, 5.0, transport=httpx.MockTransport(handler_fn))
 
 
 def test_ollama_streams_ndjson() -> None:
@@ -258,10 +259,10 @@ def test_prompt_has_frames_time_motion_and_tracker_state() -> None:
     assert "Local time: Saturday 5:40 PM." in text
     assert "We are stopped (for 12 s)." in text
     assert "silver car directly ahead of us (stopped)" in text
-    assert "4-way stop order (who goes first): white car on the left, then us." in text
+    assert "Right of way: not our turn yet; 1 car(s) go before us: the white car on your left." in text
     assert "Traffic light facing us looks red." in text and "1 pedestrian ahead." in text
     assert text.endswith("Driver's question: can I park here?")
-    assert "never" in request.system.lower() and "check before you go" in request.system
+    assert "cannot judge moving traffic" in request.system and "check both ways" in request.system
 
 
 def test_light_questions_add_a_close_up_of_the_light() -> None:
@@ -269,7 +270,7 @@ def test_light_questions_add_a_close_up_of_the_light() -> None:
     snap = snapshot(light=LightReading(20.0, LightColor.GREEN, True, 1, ((600.0, 100.0, 620.0, 160.0),)))
     ask(handler(model), "Is the left arrow green?", snap)
     labels = [i.label for i in model.requests[0].images]
-    assert labels[-1] == "Close-up of the traffic light ahead"
+    assert labels[-1] == "Close-up of the traffic light in the middle"
     crop = cv2.imdecode(np.frombuffer(model.requests[0].images[-1].jpeg, np.uint8), cv2.IMREAD_COLOR)
     assert crop.shape[0] == 256  # upscaled so the lamps are visible
 
@@ -317,8 +318,8 @@ def test_no_first_token_in_time_gives_a_spoken_fallback() -> None:
 
 def test_a_slow_answer_is_cut_off_after_what_was_said() -> None:
     model = MockVision("First sentence is here. Second one comes far too slowly.", chunk_chars=6, delay_s=0.1)
-    said = ask(handler(model, cfg(total_timeout_s="0.5")), "what's ahead?")
-    assert said == ["First sentence is here."]  # no fallback tacked on after real content
+    said = ask(handler(model, cfg(first_token_timeout_s="0.4", total_timeout_s="0.5")), "what's ahead?")
+    assert said == ["First sentence is here.", LOST_REST]  # says the rest was lost (a caveat may have been in it)
 
 
 @pytest.mark.parametrize("error", [VisionError("claude: APIConnectionError"), RuntimeError("socket closed")])
@@ -337,7 +338,7 @@ def test_empty_answer() -> None:
 
 @pytest.mark.parametrize("bare", ["Go.", "Yes, go ahead.", "You're clear!", "Merge now.", "go now"])
 def test_a_bare_go_from_the_model_is_rewritten(bare: str) -> None:
-    assert ask(handler(MockVision(bare)), "is it clear?") == [SAFE_GO]
+    assert ask(handler(MockVision(bare)), "is it clear?") == [NO_VOUCH]
 
 
 def test_normal_answers_are_not_rewritten() -> None:
