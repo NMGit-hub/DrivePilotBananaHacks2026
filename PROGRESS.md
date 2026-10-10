@@ -4,6 +4,30 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### V2 (in progress, 2026-10-10): 5A, V2-M0 done; V2-M1 parking part 1 built (not yet run on real footage)
+- **5A (BDD100K GPS):** `nav/bdd_info.py` + `scripts/bdd_info_to_gpx.py` read `data/bdd100k/bdd100k_info.zip` without
+  unpacking (fields checked on real files and a 3,000-file survey: -1 = unknown speed/course, bad accuracy, repeated
+  timestamps, gaps up to 23 s), write GPX 1.0 with a `video_start` waypoint; `GpxReplay` aligns on it, never
+  interpolates across a gap, interpolates speed. All 10 dev clips converted. Alignment checked against the
+  hand-labeled stops: GPS positions stop within −0.26 / +0.19 s of the labels (the phone's speed field lags 0.5-1 s).
+  Found and fixed: the vision model only got our speed while navigating ("how fast am I going?" → "I can't see your
+  speedometer"); now "You're going 17 miles per hour" (GPX: 17.0 mph).
+- **V2-M0 (test inputs without a drive), via an agent worktree:** simulated drives along the six saved Mapbox routes
+  (`nav/sim_drive.py`, `scripts/route_to_gpx.py`: speeds from step durations, braking for maneuvers by type, stops,
+  correlated GPS noise, missed turns) checked through the real `NavHandler` (`scripts/sim_nav_check.py`): 11/11 drives
+  pass (lane reminders −4..+1 % of 1 mi / 0.25 mi, roundabout callouts, arrival, reroute 4.6-5.7 s after a missed
+  turn; 220/220 over 20 seeds at 3-4 m noise; 216/220 at 5 m, failures kept). Looping clips: the clock runs on
+  across passes (a long GPX plays to its end; checked live for 110 s). `scripts/find_bdd_clips.py`: clips by scene
+  (public scene labels, 426 "parking lot") and GPS motion; 40 parking-lot clips + GPX fetched.
+- **V2-M1 part 1 (find me a parking spot):** `state/parking.py`, `answers/parking.py`, router PARKING intents,
+  plain yes/no reply window (`VoicePipeline.expect_reply`), wiring; design and the user's rules in their docstrings
+  and HANDOFF.md section 1. Verified so far only in simulation: 12 simulated-lot scenes (one open stall found once
+  with the right side and distance, two adjacent stalls, full rows with jitter, dropouts, row ends, a small car
+  pulled in behind an SUV, a person in a stall, a car in the aisle, a wrong field of view, a car pulling out, lot
+  vs fast street, parked after a turn), 27 watch/assistant tests, 3 reply-window tests. 903 tests pass.
+- **Parking labels** for evaluation: `eval/parking_labels.yaml` (40 clips, 28 usable; 35 clear + 12 ambiguous open
+  spots; 66 look-alikes), by two labeling subagents; not yet spot-checked.
+
 ### V1 polish (2026-10-10): throttle check, the early-wake voice bug fixed and reviewed
 - **Throttle check** (HANDOFF.md section 3 item 2): not throttled. On the charger; under a 4-thread load the busy
   cores ran at ~135% of rated speed (~3.9 GHz); all 20 threads busy: 89% (2.66 GHz, the package power limit,
@@ -312,10 +336,10 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
-- **V2 build plan** (`V2_BUILD_PLAN.md`, 2026-10-10): milestones V2-M0..M8 with "done when" tests and how each
+- **V2 next steps: see HANDOFF.md section 2** (parking on real footage first). **V2 build plan** (`V2_BUILD_PLAN.md`, 2026-10-10): milestones V2-M0..M8 with "done when" tests and how each
   feature is tested without a live drive. The user answered the parking questions, set the deadline (**Sunday
   2026-10-11, 8:59 pm PDT**) and moved the sign fine-tune to a separate session (`SIGN_FINETUNE_PROMPT.md`).
-  **Waiting for the user's go before any V2 work.**
+  The user said go on 2026-10-10.
 - **Before calling V1 done (needs the team):** check the CPU throttling (below) and re-run
   `scripts/bench_app.py --silent` (all targets were met at 10:01; at 10:20 the CPU was stuck at ~0.75 GHz);
   ask a few questions live by voice with the phone camera (`python -m app --camera`) and try the phone GPS page;
@@ -340,6 +364,15 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
+- **The parking feature has not been run on real footage yet** (only simulated lots): next step, scored against
+  `eval/parking_labels.yaml` (HANDOFF.md section 2). Street mode is untested; `config.yaml` has no `parking:`
+  section yet (defaults live in `core/config.py`); no overlay yet. On a ~60° camera (BDD100K) a spot is confirmed
+  only ~6 m ahead, because it must be seen 1 m deep past its neighbour (the hidden-small-car rule); the lot offer
+  needs the vision model.
+- **A looping clip played with its own GPX gets GPS only on its first pass** (the clock runs on across passes so a
+  long simulated drive plays to its end).
+- PLAN.md was deleted from the working tree by an unknown process on 2026-10-10 (not the user, not this session);
+  restored from git.
 - **After the wake word, the microphone listens for up to 4 s** (`voice.endpoint.no_speech_timeout_s`, counted from
   the latest wake word), now also after an empty transcript (noise, a cough, a hallucination): a passenger
   talking in that window can be taken as the question. The price of not losing a question asked after a pause.

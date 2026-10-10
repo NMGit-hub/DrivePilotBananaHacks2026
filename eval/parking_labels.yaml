@@ -1,0 +1,1403 @@
+# Hand labels for the "find me a parking spot" feature (V2-M1): 40 BDD100K clips tagged "parking lot".
+# Videos: data/videos/parking_lot/<id>.mov, GPS: data/gps/<id>.gpx (fetch both with
+#     .venv/Scripts/python scripts/find_bdd_clips.py --scene "parking lot" --min-slow-s 15 --limit 426 --fetch 40).
+# Labeled 2026-10-10 by two Claude subagents from contact sheets + zoomed full-resolution frames
+# (scripts/contact_sheet.py); NOT yet spot-checked by a second pass (see HANDOFF.md). Times are video seconds.
+#   scene: lot_aisles | lot_other | street | garage | other;  usable: false = night/glare/rain, don't score
+#   in_lot: [[t0, t1]]; parked_at: when our car comes to rest in a space (or null)
+#   open_spots: the row next to our path, <= ~6 stalls ahead: side, kind (stall|curb), t_visible (first clearly
+#     visible AND empty), t_pass (leaves the frame; null = never), restriction (none|handicap|ev|reserved|compact|
+#     fire_lane|no_parking|unknown), neighbor_before, stalls (adjacent run), certainty (clear|ambiguous)
+#   look_alikes: things that must NOT be called open spots (false-alarm tests); pulling_out: other cars backing out
+# Labelers' notes: stall counts on long runs are +-1-2; in fast clips (46021ee2, 4025360f, a0eace64) single gaps are
+# visible ~0.5-1 s, so times may be off by 0.5 s. Not US despite the tag: 1fcadd07, 27f5a0bf, 664ab48c; not a lot:
+# 5022e6cc. Best positives: 056db1a0, 4025360f, a0b98409, a0eace64, 46021ee2, 509bdcdf. Clean negatives: 18add974,
+# 345cd125, 3043475a, 161d0d48, 6360329d, 657bfe8f, a4c6b745, 592aaebe, 9997fe0b, a8db5ab8.
+clips:
+- id: 056db1a0-b6a1bb41
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 4.5
+    - 18.0
+  - - 28.5
+    - 40.0
+  parked_at: null
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 6.5
+    t_pass: 13.0
+    restriction: none
+    neighbor_before: null
+    stalls: 15
+    certainty: clear
+    note: whole left row empty from the row start to a silver convertible (numbered stalls); count approximate (13-17)
+  - side: right
+    kind: stall
+    t_visible: 6.0
+    t_pass: 10.5
+    restriction: none
+    neighbor_before: null
+    stalls: 8
+    certainty: clear
+    note: right row (nose-in to a landscaped curb) empty from its start after the barricade island to a parked blue convertible
+      coupe; count approximate (7-10)
+  - side: right
+    kind: stall
+    t_visible: 9.0
+    t_pass: 13.0
+    restriction: none
+    neighbor_before: blue coupe
+    stalls: 8
+    certainty: clear
+    note: run between the blue convertible coupe and a silver Dodge Neon; count approximate (6-9)
+  - side: right
+    kind: stall
+    t_visible: 15.0
+    t_pass: 16.0
+    restriction: none
+    neighbor_before: silver sedan
+    stalls: 1
+    certainty: clear
+    note: 'single gap between a silver Corolla and an orange Nissan Murano SUV; hidden behind the Corolla until 15.0 (row
+      before it: Neon, black Nissan Versa, Corolla, no gaps)'
+  - side: right
+    kind: stall
+    t_visible: 15.5
+    t_pass: 16.5
+    restriction: none
+    neighbor_before: orange SUV
+    stalls: 1
+    certainty: clear
+    note: last stall of the row after the Murano, next to the bike-rack island
+  look_alikes:
+  - side: right
+    t_start: 16.0
+    t_end: 18.0
+    what: bike-rack island at the end of the right row (not a stall)
+  - side: left
+    t_start: 7.0
+    t_end: 10.5
+    what: big white 'Daylight Foods' box truck standing just beyond the back line of the empty left row (not in the adjacent
+      row; the stalls in front of it are empty)
+  pulling_out: []
+  notes: 'Fort Mason SF, sunny. Turns left into a big, mostly empty pay lot at ~4.5 s, drives one long aisle at 13-18 mph
+    with numbered perpendicular stalls on both sides, exits past a STOP at ~18 s. 28.5-40 s: past a pay booth into the Fort
+    Mason Center lower area (internal road beside lot areas; no adjacent aisle rows, labeled as in-lot but no spots labeled
+    there). Left row 13.5-15 s: convertible, dark sedan, blue SUV parked back to back, then end-of-row curve; no gaps.'
+- id: 1bf7f3d2-83bc1189
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: 21.0
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 19.0
+    t_pass: null
+    restriction: none
+    neighbor_before: dark sedan
+    stalls: 1
+    certainty: ambiguous
+    note: the stall we park in (against the perimeter fence, between a dark Lincoln sedan and a light minivan with roof box);
+      only seen during the tight left turn into it, into low sun glare, so t_visible is uncertain
+  look_alikes:
+  - side: left
+    t_start: 6.5
+    t_end: 7.5
+    what: white hatched no-parking area at the end of a row
+  - side: left
+    t_start: 9.0
+    t_end: 10.5
+    what: curved hatched end-of-row area next to the aisle
+  pulling_out: []
+  notes: SFO-area employee/long-term lot (United hangar), low morning sun. 0-3 s turning with heavy sun glare (cars seen are
+    behind a fence in another lot); 3.5-7 s along the perimeter fence (right) past row ends; turns left at ~8 s and drives
+    along a full row on the right (9-11 s), turns left again (~11-13 s) into another aisle with full rows (person loading
+    a car on the right at 13-15 s), then a tight left turn at 15-20 s around parked cars into a stall at the fence. Every
+    adjacent stall passed before the final one is occupied. Sun glare at 0-2 s and 18-20 s.
+- id: 4025360f-4416d623
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 1.5
+    t_pass: 3.0
+    restriction: handicap
+    neighbor_before: silver GMC pickup
+    stalls: 1
+    certainty: clear
+    note: row-end handicap stall (painted symbol + sign) next to the pickup, seen while turning left
+  - side: right
+    kind: stall
+    t_visible: 3.5
+    t_pass: 11.5
+    restriction: handicap
+    neighbor_before: teal Saturn SUV
+    stalls: 4
+    certainty: clear
+    note: block of empty handicap stalls with blue-hatched access aisles; straight ahead while we creep/stop (3-10 s), then
+      on our right as we turn left past them (10-11.5 s); a black minivan is parked in the last one by the crosswalk
+  - side: right
+    kind: stall
+    t_visible: 12.5
+    t_pass: 15.0
+    restriction: handicap
+    neighbor_before: null
+    stalls: 2
+    certainty: clear
+    note: empty handicap stalls (blue hatching) at the start of the row just past the crosswalk, before a black Toyota Highlander;
+      count 2-3
+  - side: right
+    kind: stall
+    t_visible: 17.0
+    t_pass: 18.0
+    restriction: none
+    neighbor_before: teal minivan
+    stalls: 3
+    certainty: clear
+    note: gap between a teal minivan and a gray Ford Explorer; 3-4 stalls; car doing ~30 mph here
+  - side: right
+    kind: stall
+    t_visible: 18.5
+    t_pass: 19.5
+    restriction: none
+    neighbor_before: black sedan
+    stalls: 3
+    certainty: clear
+    note: gap between a black Infiniti sedan and a white Toyota Sienna; 3-4 stalls; ~29 mph
+  look_alikes:
+  - side: right
+    t_start: 3.5
+    t_end: 11.5
+    what: blue-hatched handicap access aisles between the handicap stalls (not stalls)
+  - side: right
+    t_start: 11.5
+    t_end: 12.5
+    what: white-hatched no-parking area at the row end beside the crosswalk
+  - side: right
+    t_start: 12.5
+    t_end: 15.0
+    what: blue-hatched access aisles between the handicap stalls
+  pulling_out: []
+  notes: 'JFK airport long-term lot, sunny. 0-3 s turning left around a row end; 3-10 s creeping toward and stopped in front
+    of a row of handicap stalls (black SUV crosses at 7.5-8 s); 10-12 s left turn and over a crosswalk; 12.5-20 s a long two-way
+    main aisle at up to 30 mph with full rows on both sides except the gaps labeled on the right. Left row 12.5-20 s checked:
+    no gaps. 20-40 s: internal lot road past a shuttle bus stop and a cone-lined construction area (no stalls next to the
+    path). Speed makes the 17-19.5 s gaps short (about 1 s each).'
+- id: 3d7e0151-aa101575
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 4.5
+    t_pass: 6.0
+    restriction: handicap
+    neighbor_before: null
+    stalls: 2
+    certainty: ambiguous
+    note: blue-lined handicap stalls at a row end seen low and oblique while turning left at ~15 mph; look empty but too small/oblique
+      to be sure
+  - side: right
+    kind: stall
+    t_visible: 21.0
+    t_pass: null
+    restriction: handicap
+    neighbor_before: null
+    stalls: 2
+    certainty: ambiguous
+    note: handicap stalls (painted symbols) just ahead-right where we stop at 22.5 s; look empty but strongly backlit by low
+      sun
+  look_alikes:
+  - side: left
+    t_start: 4.5
+    t_end: 6.5
+    what: lane separated by a line of bollards with white-hatched no-parking area (a car drives through it)
+  - side: right
+    t_start: 1.5
+    t_end: 2.5
+    what: first stall by the shuttle booth looks like a painted handicap spot but a gray Acura is parked in it
+  pulling_out: []
+  notes: 'JFK long-term lot, late afternoon. Dashcam mounted low: the dashboard fills the bottom ~40% of the frame, rows are
+    small. 0-4 s past the shuttle booth with a row on the right along the fence (full); 4-7 s left turn through a bollard-lined
+    area; 7-19 s a long two-way aisle at 20-27 mph with full rows on both sides (checked every 0.5 s: no gaps); 19.5-22 s
+    left turn at a row end with handicap signs; 22.5-40 s stopped (video static; the GPX shows a few mph until 33 s, which
+    is GPS noise) right next to a parked black Honda CR-V on the left, sign pole ahead, handicap stall symbols ahead-right.
+    It may have parked there, but I can''t tell whether we are inside a stall or stopped in the lane, so parked_at is null.
+    Strong backlight from 20 s.'
+- id: 412c958c-8b651606
+  scene: lot_other
+  light: dusk
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 3.0
+    t_pass: 6.5
+    restriction: unknown
+    neighbor_before: null
+    stalls: 3
+    certainty: ambiguous
+    note: open marked pavement on the right (white stall lines, yellow-painted ends) among bollards and cones; could be stalls
+      or a drive/staging area
+  - side: left
+    kind: stall
+    t_visible: 31.0
+    t_pass: null
+    restriction: unknown
+    neighbor_before: null
+    stalls: 3
+    certainty: ambiguous
+    note: angled stalls with blue wheel stops along the showroom curb, empty; the silver X5 we followed stops beyond them;
+      dusk, we creep and turn away
+  look_alikes:
+  - side: left
+    t_start: 32.0
+    t_end: 40.0
+    what: painted handicap stall blocked by an orange cone
+  - side: right
+    t_start: 0.0
+    t_end: 9.0
+    what: yellow bollards and cones marking a drive lane (not stalls)
+  pulling_out: []
+  notes: 'BMW dealership lot at dusk under lot lights (usable but dim). 0-12 s crawl (4-5 mph) behind a silver X5 across the
+    lot; the left side is dense dealer inventory rows (no visible gaps), the right is open pavement with bollards. 13-29 s
+    through the ''Service Department'' tent drive (not stalls). 30-40 s turning right past the showroom: empty angled stalls
+    on the left along the curb, cone-blocked handicap stall. Not a typical aisle drive; mostly negatives/ambiguous.'
+- id: 0096bcca-42d2702c
+  scene: lot_other
+  light: night
+  usable: false
+  reason: night; lot lights flare into the lens, parked rows are dark silhouettes across an island, no stall markings visible
+  in_lot:
+  - - 0.0
+    - 34.0
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: Night. 0-8 s standing at an exit/junction while SUVs cross in front; 8-13 s turning past a curbed island with a parked
+    row behind it (not next to the path); 14-34 s internal lot road with cones (no stalls next to the path), 34-40 s onto
+    a public road. in_lot end is approximate (cone-lined road could already be an airport access road).
+- id: 161d0d48-77cafa49
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 9.5
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: right
+    t_start: 1.5
+    t_end: 4.5
+    what: 'row end: landscaped island right after the last parked car (dark sedan)'
+  pulling_out: []
+  notes: 'Office-campus lot, sunny. 0-4.5 s crawling (0-2 mph) out along a short row (silver sedan, silver CR-V, red sedan,
+    dark sedan, then island), heavy dashboard reflection on the windshield; 5-9.5 s one-way brick driveway around an island
+    and out; 10-40 s public streets (stop sign, traffic light), no parking lot. Exiting-a-lot clip: good negative, no open
+    stalls.'
+- id: 18add974-13e8e106
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: right
+    t_start: 30.0
+    t_end: 32.5
+    what: store entrance walkway / cart area between the pillar and a parked black Honda HR-V
+  - side: right
+    t_start: 33.0
+    t_end: 40.0
+    what: blue-hatched handicap access aisles and a hatched crossing between occupied handicap stalls
+  pulling_out: []
+  notes: 'Supermarket lot (Queens-style, parking garage behind), overcast with light rain drops on the windshield. 0-12.5
+    s our car is parked nose to nose with a silver Infiniti; 13-24 s we back out of the stall (the stall we vacate shows in
+    front of us, not labeled as an open spot); 25-40 s drive at 3-9 mph along the storefront: the row on the right (nose-in
+    to the building, handicap stalls) is fully occupied, the far rows across the aisle are full. Good negative clip.'
+- id: 19590021-87bdfd77
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 4.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 1.5
+    t_pass: 3.0
+    restriction: none
+    neighbor_before: null
+    stalls: 3
+    certainty: ambiguous
+    note: empty stalls painted along a concrete barrier, seen ahead-right while turning toward the lot exit gate (rain drops
+      on the windshield); we are leaving, count rough
+  look_alikes:
+  - side: right
+    t_start: 2.0
+    t_end: 3.5
+    what: white-hatched no-parking area next to the exit gate
+  pulling_out: []
+  notes: Airport-area lot (bus and a few cars parked at the far side at 0 s), overcast with rain drops. 0-4 s turning out
+    of the lot through a gate; 4-36 s empty service roads along fences; 36-40 s stopped at an intersection facing a lot across
+    the street (not entered). Mostly a non-lot clip.
+- id: 1fcadd07-110bedc7
+  scene: street
+  light: night
+  usable: false
+  reason: night, very dark, street-light flare and grain; curb gaps between parallel-parked cars can't be judged
+  in_lot: []
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: 'Night drive on residential streets with parallel parking on both sides (yellow license plates: likely not the US
+    despite the ''US'' tag). 28-40 s slow through a narrow lane/driveway area along walls. Not a parking lot; nothing labeled.'
+- id: 21f0675f-61bbb708
+  scene: lot_aisles
+  light: night
+  usable: false
+  reason: night; only the rows lit by our headlights and the car ahead are visible, the left row is mostly dark, so a missed
+    open stall can't be ruled out
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: left
+    t_start: 18.0
+    t_end: 27.0
+    what: white diagonal-hatched no-parking area beside the aisle
+  pulling_out: []
+  notes: Big busy lot at night (event crowd, NY plates), many pedestrians walking in the aisle 0-17 s and a cyclist at 2 s.
+    One long straight aisle (GPS course constant), following a blue SUV at 4-14 mph, stopped 0-10 s. Rows on both sides look
+    packed wherever lit (right row clearly full 24-34 s). Useful as a night negative / pedestrian clip, not for open-spot
+    ground truth.
+- id: 21f695ce-930a648f
+  scene: garage
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: 33.0
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 2.0
+    t_pass: 4.5
+    restriction: unknown
+    neighbor_before: null
+    stalls: 1
+    certainty: ambiguous
+    note: space at the end of the wall row between the corner/low wall ('VIP PARKING' sign) and a white sedan; straight ahead,
+      then left as we turn right; can't tell if it is a stall or a walkway
+  - side: left
+    kind: stall
+    t_visible: 29.5
+    t_pass: null
+    restriction: none
+    neighbor_before: null
+    stalls: 1
+    certainty: clear
+    note: stall along the perimeter wall next to a gray Chevy Tahoe that we turn into and park in; probably the stall the
+      gold GMC Yukon XL backed out of
+  look_alikes:
+  - side: left
+    t_start: 7.0
+    t_end: 8.5
+    what: yellow-painted curb gap beside the blue stairwell/elevator columns at the end of the row
+  - side: left
+    t_start: 8.5
+    t_end: 10.5
+    what: open floor around a pillar with a red-painted curb
+  pulling_out:
+  - t: 14.0
+    side: left
+    note: gold GMC Yukon XL backs out of a left-row stall ahead (already half out when first seen at ~13.5 s), then drives
+      toward us and passes on our left at 22-24 s while we wait
+  notes: Multi-storey garage (level 2), daylight from the open sides, interior a bit dim but clear. 0-5 s across the floor
+    toward the wall row, 5-9 s along it (row on the left, full), 10-13 s right turn, 14-24 s waiting (0.5-2 mph) while the
+    Yukon backs out and passes, 25-29 s left turn into a stall at the perimeter wall, parked from ~33 s (GPS speed after 30
+    s is garage noise; the video is static). Rows passed are full apart from the labeled spots.
+- id: 27f5a0bf-40486bf4
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 29.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 13.0
+    t_pass: 15.5
+    restriction: none
+    neighbor_before: null
+    stalls: 4
+    certainty: clear
+    note: empty row of stalls (white lines on brick paving) beside a tree island, seen as we come out of a right turn; whole
+      row empty; count approximate (3-6)
+  look_alikes:
+  - side: left
+    t_start: 16.0
+    t_end: 18.5
+    what: red-and-white painted curb islands and bollard lines (no parking)
+  pulling_out: []
+  notes: A small black hatchback (Chevy Spark type) stands by a tree island straight ahead at 9-12 s and then drives across
+    in front of us, passing on our right at 15.5-16 s; it may have pulled out of a stall there at ~12 s, but I can't tell
+    whether it was parked or just waiting in the lane, so it is not labeled as pulling out. Shopping-centre lot, Israel (Hebrew
+    signs, yellow plates; not US despite the tag), early morning, low sun. 0-4 s we back out of a stall facing the storefront
+    (a white Hyundai pulls into the row in front of us at ~4 s); 5-12 s turning with heavy windshield glare streaks (unreliable,
+    nothing labeled there); 13-20 s across a mostly empty brick-paved lot with faint stall lines; 20-29 s lot road under a
+    shade canopy to the exit; public road from ~30 s. Many empty stalls further away (not adjacent) - only the adjacent row
+    is labeled.
+- id: 2a81f1f3-e53795a3
+  scene: garage
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: 27.5
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 23.0
+    t_pass: null
+    restriction: none
+    neighbor_before: null
+    stalls: 1
+    certainty: clear
+    note: the stall we turn left into and park in, beside a black Ford Explorer (which ends up on our right), facing a parked
+      red Chevy Cavalier
+  look_alikes:
+  - side: right
+    t_start: 4.5
+    t_end: 6.5
+    what: shopping-cart corral at a pillar
+  - side: left
+    t_start: 7.0
+    t_end: 10.5
+    what: cart corrals and the store-entrance walkway (no parking)
+  - side: left
+    t_start: 18.0
+    t_end: 21.0
+    what: wide empty cross aisle between pillars (driving lane, not stalls)
+  pulling_out: []
+  notes: Underground ShopRite customer garage (NY), artificial light, readable. 0-2 s down the entry ramp, 2-5 s toward packed
+    rows, right turn at 5-7 s past carts and the store entrance, 9-18 s a long left curve along full rows (both sides checked,
+    no gaps), 18-21 s across an open cross aisle, 21-25 s left turn into a stall, parked from ~27.5 s (GPS reads 0 from 27
+    s). Good 'we found a spot and parked' clip, otherwise all negatives.
+- id: 2b4f7db5-5817f17b
+  scene: lot_other
+  light: night
+  usable: false
+  reason: night; the lot is almost unlit, rows are dark shapes, stall lines only visible in our headlight beam
+  in_lot:
+  - - 0.0
+    - 17.0
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: Night, large dark lot (airport/office type). 0-11 s winding through the lot (STOP marking at 4 s; empty-looking stalls
+    in the headlight beam at 6-8 s but rows can't be judged); 12-17 s lot exit road past a gate/booth; 18-40 s stopped behind
+    a Toyota Camry at a red light at the exit onto a public road. Car rows next to the path at 12-14 s (right) are dark.
+- id: 2b923350-c22307af
+  scene: lot_other
+  light: dusk
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: right
+    t_start: 3.0
+    t_end: 40.0
+    what: snow-covered gap with cones in front of a UPS drop box between a silver sedan and a dark SUV (not a stall)
+  pulling_out: []
+  notes: BP gas station forecourt in snow (Brooklyn), dusk. 0-14 s creeping past the pumps, 15-40 s stopped beside a pump
+    (pump island just out of frame on the left) facing a fence row of snowed-in parked cars (white, dark, silver sedans, then
+    a dark SUV past the UPS box). Snow hides any stall markings; no open spot. Negative clip.
+- id: 3043475a-fc638169
+  scene: street
+  light: day
+  usable: true
+  in_lot: []
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: right
+    t_start: 14.5
+    t_end: 16.0
+    what: corner curb with a fire hydrant after the last angle-parked car (no parking)
+  - side: left
+    t_start: 13.5
+    t_end: 16.0
+    what: corner / crosswalk area at the end of the angle-parked row
+  pulling_out: []
+  notes: 'Lower Manhattan street, overcast. 0-10 s stopped behind a blue BMW 650i at a light, with angle-parked cars on both
+    sides (looks like official/permit parking by the courts); 10-17 s rolls forward past the rest of both rows (all occupied)
+    and across the intersection; 18-40 s narrow street along construction barriers, no parking on either side. No open spots:
+    street negative.'
+- id: 345cd125-0af63fdb
+  scene: lot_other
+  light: dusk
+  usable: true
+  in_lot:
+  - - 0.0
+    - 38.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: left
+    t_start: 14.0
+    t_end: 18.0
+    what: white-hatched buffer strip between the bus 'THRU LANE' and the parked row (not stalls)
+  - side: right
+    t_start: 6.0
+    t_end: 12.0
+    what: large hatched crosswalk/no-parking areas at the shuttle stops
+  pulling_out: []
+  notes: 'Airport (LGA) parking lot at dusk, readable. 0-4 s lot road past parked rows on the left (full) with an attendant
+    and cones; 4-13 s across open hatched areas and past a row end on the right (SUVs, full); 13-19 s along the bus ''LANE
+    THRU'' with a full row on the left (behind a hatched buffer) and shuttle shelters on the right; a black SUV with headlights
+    on moves at the end of the left row at 17.5-18.5 s (driving, not clearly pulling out); 22-38 s exit plaza with pay booths
+    and gate arms; airport road from ~38 s. No open spots seen in adjacent rows: negative clip.'
+- id: 3a201dcb-f5a50325
+  scene: other
+  light: night
+  usable: true
+  in_lot: []
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: 'Night, Manhattan: a lit covered service road under buildings (loading docks, garage doors), pedestrians crossing
+    at 8-10 s, ends facing the entrance of a public parking garage (stopped 22-29 s) and turns away without entering; 31-40
+    s city street (a few parallel-parked cars on the left at 32-34 s, not checkable for gaps at night) to a crosswalk full
+    of pedestrians. No parking lot driven; nothing to label. Well lit, so ''usable'' for what it shows, but it carries no
+    open-spot content.'
+- id: 3cf763c8-f15d8d66
+  scene: lot_aisles
+  light: night
+  usable: false
+  reason: night; unlit lot, rows are dark silhouettes, only the car ahead and a few stall lines in the headlights are visible
+  in_lot:
+  - - 0.0
+    - 35.0
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: Night, same dark lot and exit as 2b4f7db5 (Long Island office/train-station type lot). 0-17 s following a white Toyota
+    Avalon along aisles (STOP marking at 12 s); some stalls in the headlight beam at 14-16 s look empty but whether they are
+    in the adjacent row can't be judged; 18-35 s lot exit road past a pay booth to a red light. Not usable for open-spot ground
+    truth.
+- id: 4425a399-681412b3
+  scene: lot_aisles
+  light: night
+  usable: false
+  reason: 'night: the right-hand row is under carports and too dark to tell empty stalls from dark cars; left row only lit
+    by headlights at a distance'
+  in_lot:
+  - - 4.5
+    - 40.0
+  parked_at: 32.5
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 28.0
+    t_pass: null
+    restriction: reserved
+    neighbor_before: blue sedan
+    stalls: 1
+    certainty: ambiguous
+    note: the stall we park in, at the planter left of the blue sedan; sign FUTURE RESIDENT PARKING 9am-6pm (visible from
+      30 s); night
+  look_alikes: []
+  pulling_out: []
+  notes: Night, apartment-complex lot. Turn in off the street at ~4 s, crosswalk at 6.5 s, aisle 8-23 s with parked cars on
+    the left and carports on the right (both rows look full as far as the dark allows), turn left at ~24 s along numbered
+    stalls (X1/X2 painted), pull nose-in at 29-32 s and stay parked to the end.
+- id: 46021ee2-dea3dce9
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 1.0
+    t_pass: 1.5
+    restriction: unknown
+    neighbor_before: gray Toyota hatchback
+    stalls: 1
+    certainty: ambiguous
+    note: possible single empty stall between the gray Toyota and the black Nissan sedan; line spacing unclear at speed
+  - side: right
+    kind: stall
+    t_visible: 1.5
+    t_pass: 3.5
+    restriction: none
+    neighbor_before: black Dodge Challenger
+    stalls: 6
+    certainty: clear
+    note: long empty run along the hedge up to the silver Toyota Corolla; count ~5-6; we pass at ~10 m/s
+  - side: left
+    kind: stall
+    t_visible: 2.0
+    t_pass: 3.0
+    restriction: none
+    neighbor_before: black Nissan sedan
+    stalls: 4
+    certainty: clear
+    note: empty stalls from the black Nissan to the planter-island end before the cross aisle; count ~3-4
+  - side: right
+    kind: stall
+    t_visible: 5.5
+    t_pass: 11.0
+    restriction: none
+    neighbor_before: black Toyota 4Runner SUV
+    stalls: 4
+    certainty: clear
+    note: empty run between the 4Runner and the white Honda Accord coupe; count 4 (maybe 5)
+  - side: right
+    kind: stall
+    t_visible: 16.0
+    t_pass: 17.5
+    restriction: none
+    neighbor_before: white BMW coupe
+    stalls: 3
+    certainty: clear
+    note: between the white BMW and the black Honda Accord sedan
+  - side: right
+    kind: stall
+    t_visible: 17.5
+    t_pass: 18.5
+    restriction: none
+    neighbor_before: black Honda Accord sedan
+    stalls: 2
+    certainty: clear
+    note: between the Accord and the planter-island end before the cross aisle with speed bump; count 1-2
+  - side: right
+    kind: stall
+    t_visible: 19.0
+    t_pass: 20.5
+    restriction: unknown
+    neighbor_before: null
+    stalls: 1
+    certainty: ambiguous
+    note: after the cross aisle, between the red-curb island nose and the silver BMW X3; faint lines, may be a buffer next
+      to the island
+  look_alikes:
+  - side: left
+    t_start: 3.0
+    t_end: 4.5
+    what: cross aisle with speed bump between two rows (driving lane)
+  - side: right
+    t_start: 3.8
+    t_end: 4.5
+    what: planter island with red curb between the Corolla and the Prius
+  - side: left
+    t_start: 12.5
+    t_end: 14.0
+    what: painted crosswalk to a planter island at the row end
+  - side: right
+    t_start: 13.5
+    t_end: 14.5
+    what: planter island at the row end
+  - side: right
+    t_start: 18.0
+    t_end: 19.0
+    what: cross aisle with speed bump, then island nose
+  - side: left
+    t_start: 18.0
+    t_end: 21.0
+    what: planter island along the aisle with cars parked behind it (not reachable)
+  pulling_out: []
+  notes: 'Daytime office-park lot, fast (8-11 m/s) along one long aisle 0-21 s with perpendicular rows both sides; right row
+    has several runs of empty stalls. Group t_pass = when the last stall of the run leaves the frame. 21-39 s: left turn,
+    then lot drive lanes past islands with strong windshield glare and a dashboard reflection (sticker grid); no rows directly
+    beside the path there that can be judged reliably, not labeled. Pedestrian standing by a silver Subaru on the right at
+    26-27 s.'
+- id: 5022e6cc-4edb937f
+  scene: other
+  light: night
+  usable: false
+  reason: 'night, and no parking lot: a narrow city alley lined with bollards, a STOP at ~9 s, then a right turn onto a dark
+    street; no stalls or curb parking beside the path'
+  in_lot: []
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: 20 s clip. Crawls (1-3 m/s) down an alley between brick buildings (bollards both sides), stops at a STOP line ~9-10
+    s, turns right onto a street; one dark car parked on the far side of that street. The 'parking lot' tag does not fit.
+- id: 509bdcdf-5fd48369
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 2.0
+    t_pass: null
+    restriction: unknown
+    neighbor_before: white Nissan Maxima
+    stalls: 1
+    certainty: ambiguous
+    note: 'straight ahead / slightly left while we stand still 0-9 s: stall between the white Maxima and the black Chevy Malibu
+      in the row facing the store; depth of the Maxima unclear (may be in the far row); we turn right away from it'
+  - side: left
+    kind: stall
+    t_visible: 10.0
+    t_pass: 10.5
+    restriction: none
+    neighbor_before: black Subaru Forester
+    stalls: 2
+    certainty: clear
+    note: during our right turn out onto the aisle, between the Forester and an old black Toyota Corolla; count 1-2
+  - side: left
+    kind: stall
+    t_visible: 11.0
+    t_pass: 12.0
+    restriction: none
+    neighbor_before: old black Toyota Corolla
+    stalls: 2
+    certainty: clear
+    note: between the Corolla and a dark Nissan Maxima; count 2-3
+  - side: left
+    kind: stall
+    t_visible: 12.5
+    t_pass: 14.0
+    restriction: none
+    neighbor_before: white Chevy Equinox
+    stalls: 3
+    certainty: clear
+    note: between the white Equinox and a white Toyota Tundra pickup; count 3-4
+  - side: left
+    kind: stall
+    t_visible: 14.5
+    t_pass: 15.5
+    restriction: none
+    neighbor_before: green Mitsubishi Montero SUV
+    stalls: 2
+    certainty: clear
+    note: between the Montero and a red Dodge Neon (last car before the bollard island)
+  look_alikes:
+  - side: right
+    t_start: 11.0
+    t_end: 12.0
+    what: wide open asphalt on the right with no stall markings (not a stall row)
+  - side: right
+    t_start: 15.5
+    t_end: 16.5
+    what: end island with yellow bollard; car beyond it is in another row
+  - side: left
+    t_start: 16.0
+    t_end: 16.5
+    what: end island with yellow bollard after the red Neon
+  pulling_out: []
+  notes: 'Daytime, overcast, big strip-mall lot (99c Fashion Mall / Rite Aid). 0-9 s our car stands still facing the store
+    row (hand over the lens at 0 s; a red RAV4 drives across in front at ~5 s); 9.5-10.5 s we turn right onto an aisle; 10.5-16
+    s along the aisle: left row is sparse with several runs of empty stalls, right row is a cluster (white Tahoe, dark sedans,
+    white Ford Focus) with no clear gap. 17-24 s stopped at the lot''s perimeter drive while cars pass (it may be a public
+    street; no lane lines), 24-28 s right turn, then along drive lanes with medians and islands past a strip with MEDICAL
+    OFFICE; parked rows there are behind medians, not beside the path. Counts within runs are approximate (+-1).'
+- id: 556adc52-66c6efb8
+  scene: lot_other
+  light: night
+  usable: false
+  reason: 'night; the drive is a garage exit ramp, then the exit lanes of a surface lot to the toll plaza: no stall row runs
+    directly beside the path, and stalls across the lot are too dark and far to judge'
+  in_lot:
+  - - 0.0
+    - 34.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: right
+    t_start: 13.0
+    t_end: 15.0
+    what: orange barriers and cones in the lot exit lane
+  pulling_out: []
+  notes: Night, airport-style parking. 0-10 s down a multi-level garage ramp, 11-26 s across a surface lot following green
+    EXIT signs (cones, barriers, a STOP), 28-34 s toll/exit plaza, 35-40 s on a public airport road. The stall rows to the
+    left at 16-20 s are across open asphalt, not beside the path.
+- id: 592aaebe-705102f7
+  scene: street
+  light: day
+  usable: true
+  in_lot: []
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: right
+    t_start: 26.5
+    t_end: 27.5
+    what: yellow fire hydrant at the curb between parked cars
+  - side: right
+    t_start: 25.0
+    t_end: 26.5
+    what: snow pile on the curb beside the parked silver Nissan Armada
+  - side: left
+    t_start: 31.0
+    t_end: 35.0
+    what: open wet asphalt under the elevated highway near a snow pile, no marked stalls
+  pulling_out: []
+  notes: 'Daytime, rain/sleet, industrial street under an elevated highway (NYC). Left side: dense angled parking under the
+    viaduct; right side: cars parked along the curb (pickups, SUVs, vans). Stopped behind a box truck 4-20 s, then crawls
+    21-35 s. Both sides are full: a good negative. Caveats: rain drops and two wiper sweeps (0 s, 22 s, 28 s) and a black
+    camera mount occludes the top-right corner of the frame throughout (the curb-level area stays visible).'
+- id: 5ada8655-3f01a48d
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 5.5
+    - 40.0
+  parked_at: 24.5
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 12.5
+    t_pass: 14.0
+    restriction: unknown
+    neighbor_before: gray VW Passat
+    stalls: 1
+    certainty: ambiguous
+    note: pull-through empty stall between the Passat (left) and a gray Ford Taurus (right) that we drive straight through;
+      it is our path, not beside it
+  - side: left
+    kind: stall
+    t_visible: 22.0
+    t_pass: null
+    restriction: none
+    neighbor_before: null
+    stalls: 1
+    certainty: clear
+    note: the stall we turn left into and park in at ~24.5 s, head-to-head with a silver Toyota RAV4 (black GMC Yukon and
+      a yellow light-pole block to its right); hidden until we turn
+  look_alikes:
+  - side: right
+    t_start: 11.5
+    t_end: 13.5
+    what: shopping cart standing in an otherwise empty stall
+  - side: left
+    t_start: 8.0
+    t_end: 11.0
+    what: wide empty section of the lot with worn stall lines and tire tracks, crossed at an angle (not a row beside the path)
+  - side: left
+    t_start: 19.0
+    t_end: 22.0
+    what: yellow concrete light-pole base between parked cars
+  pulling_out: []
+  notes: Daytime, sunny, Queens strip mall (Uncle Bill's Diner, Dunkin). 0-5 s on the service road, enter past yellow guard
+    rails at ~5.5 s, cross a mostly empty part of the lot diagonally (8-12 s), drive through an empty stall between two parked
+    cars (13-14 s; a man stands at the Taurus), approach the store row at walking pace (15-22 s), turn left into a stall and
+    park at ~24.5 s; parked to the end (a pedestrian walks past at 36-40 s). No clean drive along an aisle, so the side rows
+    are rarely 'beside the path'.
+- id: 6360329d-bf5842a8
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 20.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: left
+    t_start: 4.5
+    t_end: 6.0
+    what: ad kiosk and cart corral at the row end
+  - side: right
+    t_start: 3.5
+    t_end: 5.5
+    what: planter island at the row end before the white van
+  - side: right
+    t_start: 15.0
+    t_end: 16.5
+    what: blue-striped handicap access aisle between a red Impala and a green Honda CR-V
+  - side: right
+    t_start: 17.0
+    t_end: 19.5
+    what: red-curb fire lane along the Safeway storefront after the turn
+  pulling_out: []
+  notes: '20 s clip, overcast day, Safeway lot. Camera is low: the dashboard fills the bottom ~40% of the frame but the rows
+    are visible. 0-16 s straight down a long aisle; both rows are full (white vans, black Tahoe, red Mini, silver sedans,
+    BMW X5, Highlander): a good negative. Woman loading a shopping cart into an open hatchback on the left at 11-12.5 s (not
+    leaving within the clip). STOP marking and handicap stalls at the aisle end, right turn at ~16.5 s along the store front.'
+- id: 657bfe8f-44111d2c
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 2.0
+    t_pass: 7.5
+    restriction: handicap
+    neighbor_before: silver Honda Odyssey minivan
+    stalls: 1
+    certainty: clear
+    note: blue wheelchair stall in the storefront row between the Odyssey and a white Nissan Leaf, next to a striped NO PARKING
+      access aisle; ahead of us as we approach the row, on our right as we turn left along it
+  look_alikes:
+  - side: right
+    t_start: 3.0
+    t_end: 7.0
+    what: striped handicap access aisles (NO PARKING) on both sides of the Odyssey's stall
+  - side: left
+    t_start: 25.0
+    t_end: 28.0
+    what: blue striped handicap access aisle between a gold Toyota Camry and a black Acura RDX
+  - side: left
+    t_start: 28.0
+    t_end: 31.0
+    what: cart corral on the planter island at the row end
+  pulling_out: []
+  notes: 'Sunny day, strip mall (Sweet Tomatoes, Edward''s Salon). 0-5 s approach the storefront row head-on (man walking
+    with a cart at 0-0.5 s), left turn 5-8 s, 8-21 s slow (~3 m/s) down a long aisle: both rows completely full (good negative
+    for the aisle part), 21-31 s crawl to a STOP line at the store-front fire lane, 32-40 s turn right along the red curb
+    (FIRE LANE - NO PARKING) in front of the shops.'
+- id: 664ab48c-4fe2a960
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 11.5
+  - - 17.0
+    - 35.0
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: 'Not US: Israel (Hebrew signs, Israeli plates). Sunny day. 0-11 s creeping in a queue behind a white Citroen Berlingo
+    through a lot exit area (taxi, dumpster, tyre pile, a ''P'' parking sign; the parked cars are behind a curb, not beside
+    the path; barrier arm at ~10-11 s), 12-16 s short stretch of road, 17-34 s through a Paz gas station forecourt (pumps,
+    cars queueing), 35-40 s out onto a street. No stall row beside the path at any point: a negative. in_lot boundaries are
+    approximate (the first segment may be a lot exit road, the second is a gas station, not a parking lot).'
+- id: 78993bb8-6fbe22cb
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 3.0
+    t_pass: 7.0
+    restriction: unknown
+    neighbor_before: null
+    stalls: 2
+    certainty: ambiguous
+    note: unpaved spaces along the wooden fence marked only by concrete wheel stops (no lines), next to the space we back
+      out of; signs on the fence (tow-away / not responsible); unclear whether these are real stalls
+  - side: right
+    kind: stall
+    t_visible: 8.5
+    t_pass: 15.0
+    restriction: none
+    neighbor_before: red Lexus RX 350
+    stalls: 3
+    certainty: clear
+    note: marked stalls nosed to the hedge/agave planter, right of the parked red Lexus RX; we face them head-on at 9-11.5
+      s (rather than pass beside them), then back off and turn left so they leave the frame on the right; count >= 3
+  - side: right
+    kind: stall
+    t_visible: 19.5
+    t_pass: 20.5
+    restriction: handicap
+    neighbor_before: white Toyota Tacoma pickup
+    stalls: 1
+    certainty: clear
+    note: blue wheelchair stall beside the restaurant fence, just past a striped access aisle
+  look_alikes:
+  - side: right
+    t_start: 18.0
+    t_end: 20.0
+    what: white-striped handicap access aisle after the Tacoma
+  - side: right
+    t_start: 20.5
+    t_end: 22.5
+    what: more striped/hatched no-parking markings by the building corner
+  - side: right
+    t_start: 22.5
+    t_end: 24.0
+    what: painted NO PARKING lane marking at the lot exit
+  pulling_out: []
+  notes: Sunny day, small lot behind a Mexican restaurant (residential fence on one side). Our car starts parked nose-to-fence
+    (0-1.5 s), backs out and turns (2-7 s), approaches the hedge row and faces the empty stalls next to a parked red Lexus
+    RX (9-11.5 s), backs/turns away (12-15 s), drives along the restaurant past parked SUVs and a handicap stall (16-21 s),
+    and stops at the lot exit onto a street from ~27 s to the end. Strong sun flare from 15 s on. Our own unparking is not
+    listed under pulling_out (that is for other cars). Motion directions at 12-15 s inferred from how the parked Lexus moves
+    in frame.
+- id: 881e9d31-aa13863b
+  scene: lot_other
+  light: night
+  usable: false
+  reason: 'night, and a gas-station forecourt (Speedway) rather than a parking lot: no stall rows beside the path'
+  in_lot:
+  - - 0.0
+    - 14.5
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 10.0
+    t_pass: 14.5
+    restriction: handicap
+    neighbor_before: null
+    stalls: 1
+    certainty: ambiguous
+    note: blue wheelchair stall on the lit forecourt next to the store, directly in front of our hood while we maneuver; empty;
+      unclear whether we are partly in it
+  look_alikes:
+  - side: right
+    t_start: 8.0
+    t_end: 13.5
+    what: yellow-hatched no-parking area in front of the store / propane cage
+  pulling_out: []
+  notes: Night. 0-8 s our car stands/creeps facing a fenced propane cage at a Speedway gas station, 8-14 s maneuvers past
+    a handicap stall by the store, ~14.5 s exits onto a city street, then stopped at a red light from ~22 s to the end (cross
+    traffic).
+- id: 9997fe0b-5c119347
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 38.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: left
+    t_start: 12.5
+    t_end: 14.0
+    what: open unmarked asphalt in the yard lot (driving area, no stalls)
+  - side: left
+    t_start: 30.0
+    t_end: 37.0
+    what: gaps in front of loading-bay garage doors with orange bollards between parked trucks
+  - side: right
+    t_start: 31.0
+    t_end: 36.0
+    what: gaps in front of loading-bay doors between parked sanitation trucks
+  pulling_out: []
+  notes: 'Sunny day, NYC industrial yard (sanitation / K-Line depot). 0-9.5 s standing still facing a row of cars parked on
+    unmarked asphalt by a brick wall; 10-17 s swing right through the yard past densely parked cars (no stall lines anywhere);
+    16-22 s heavy sun glare and dashboard reflection; 22-38 s along a private service road between depot buildings with cars,
+    then garbage/dump trucks parked tightly on both sides; ~38-40 s exits toward a public street. No marked stalls and no
+    usable gaps: a negative.'
+- id: a0b98409-4ce1fdbb
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: 18.5
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 0.5
+    t_pass: 11.5
+    restriction: none
+    neighbor_before: black sedan under the covered deck
+    stalls: 7
+    certainty: clear
+    note: numbered stalls 152-158 along the parapet wall, all empty; we pass them at walking pace (~1 m/s) then turn left;
+      the run continues ~3 more stalls to a black Jeep Wrangler in the corner, which we never reach
+  - side: left
+    kind: stall
+    t_visible: 0.5
+    t_pass: null
+    restriction: none
+    neighbor_before: null
+    stalls: 4
+    certainty: clear
+    note: numbered stalls (~135 down to ~132) between the covered deck and a navy Honda Accord; count 3-4; we turn left into
+      the last one (next to the Accord) at ~12 s and park there
+  - side: left
+    kind: stall
+    t_visible: 8.0
+    t_pass: null
+    restriction: none
+    neighbor_before: gray Toyota Yaris
+    stalls: 3
+    certainty: clear
+    note: empty stalls after the Yaris toward the far wall (count 3-4), 4-6 stalls ahead; we turn into our stall before reaching
+      them
+  look_alikes:
+  - side: left
+    t_start: 13.5
+    t_end: 40.0
+    what: man with a blue suitcase standing in the otherwise empty stall straight ahead of us (head-to-head row), left of
+      a white BMW 1-series
+  - side: right
+    t_start: 0.0
+    t_end: 3.0
+    what: concrete pillars of the covered deck between stalls
+  pulling_out: []
+  notes: 'Overcast day, open-air top deck of a parking structure next to an apartment block (0-3 s still under the covered
+    level). Slow (~1 m/s) along an aisle with numbered stalls on both sides, mostly empty: right row empty for ~10 stalls
+    to a black Jeep; left row: empty stalls, then navy Accord, gray VW Beetle, gray Yaris, then empty again. At ~11-13 s we
+    turn left into the stall just before the Accord and stop nose-in at ~18.5 s; stays parked to the end, man with a suitcase
+    in front. Scene could also be called garage (rooftop of a structure); it looks like a surface lot. Great positive clip.'
+- id: a0eace64-6e0bc480
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 20.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 1.0
+    t_pass: 2.0
+    restriction: none
+    neighbor_before: silver Chevy Trailblazer
+    stalls: 3
+    certainty: clear
+    note: carport stalls between the Trailblazer (by the trash enclosure) and a silver Toyota Venza
+  - side: left
+    kind: stall
+    t_visible: 1.0
+    t_pass: 3.5
+    restriction: none
+    neighbor_before: white sedan
+    stalls: 5
+    certainty: clear
+    note: carport stalls on the left between a white sedan and a black sedan/white van at the row end; count 4-6
+  - side: right
+    kind: stall
+    t_visible: 9.0
+    t_pass: 11.0
+    restriction: none
+    neighbor_before: null
+    stalls: 3
+    certainty: clear
+    note: first stalls of the next carport row, seen across the concrete apron, before a gray Chrysler 200; count 3-4
+  - side: right
+    kind: stall
+    t_visible: 13.0
+    t_pass: 13.5
+    restriction: none
+    neighbor_before: gold sedan next to a silver pickup
+    stalls: 1
+    certainty: clear
+    note: one carport stall between the gold sedan and a silver Pontiac Grand Am; passed at ~8 m/s
+  - side: right
+    kind: stall
+    t_visible: 14.5
+    t_pass: 15.0
+    restriction: none
+    neighbor_before: silver Pontiac Grand Am
+    stalls: 1
+    certainty: clear
+    note: one carport stall between the Grand Am and a black Mercedes CLK convertible; brief
+  - side: right
+    kind: stall
+    t_visible: 16.0
+    t_pass: 16.5
+    restriction: none
+    neighbor_before: black Mercedes CLK convertible
+    stalls: 2
+    certainty: clear
+    note: two carport stalls between the CLK and a black Mercedes sedan; brief
+  look_alikes:
+  - side: right
+    t_start: 0.0
+    t_end: 0.8
+    what: trash/recycling enclosure with a hydrant and red-hatched no-parking area at the row start
+  - side: right
+    t_start: 7.0
+    t_end: 8.5
+    what: fire hydrant and red curb at the row end
+  - side: right
+    t_start: 6.0
+    t_end: 10.5
+    what: wide concrete apron / cross drive between rows (driving area, no stalls)
+  - side: right
+    t_start: 18.0
+    t_end: 19.0
+    what: red curb and planter at the row end before the STOP
+  pulling_out: []
+  notes: 'Bright overcast day, apartment complex with long carport rows. Fast for a lot (7-8 m/s per GPS) so the single-stall
+    gaps at 13-16.5 s are visible for only ~0.5 s each. 0-7 s first aisle (right row carports, left row carports with a run
+    of empties), 7-11 s across a concrete apron, 11-18.5 s second aisle (left row full: navy Subaru, green Camry, silver cars;
+    right row with three gaps), STOP at ~19 s, 20-40 s on the complex''s internal roads (stop signs, curbs, speed bumps, no
+    parking rows beside the path). Stall counts read from the painted stall lines (+-1).'
+- id: a4c6b745-8d412dd3
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 20.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: right
+    t_start: 5.0
+    t_end: 8.0
+    what: the stall our own car just backed out of, between a silver Ford Escape and a gray Honda Civic (seen head-on, not
+      beside the path)
+  - side: left
+    t_start: 5.5
+    t_end: 8.5
+    what: planter island with a young tree at the row end
+  - side: right
+    t_start: 15.0
+    t_end: 16.5
+    what: planter island with a shopping cart beside it after the Kia Sorento
+  - side: left
+    t_start: 16.5
+    t_end: 20.0
+    what: hatched NO PARKING loading zone and blue handicap markings at the store entrance, with a sedan stopped at the curb
+  pulling_out: []
+  notes: '20 s clip, low evening sun (first second washed out by glare), Safeway / Rite Aid strip mall. 0-9 s our car backs
+    out of a stall next to a silver Ford Escape (GPS < 1 m/s), 9-11 s turns, 11.5-16 s drives forward along the row nearest
+    the store: right row fully occupied (gray Civic, red Dodge Challenger, black SUV, black BMW 5, Jeep, maroon Kia Sorento),
+    left side mostly open asphalt in shadow with no clearly marked stalls beside the path; 16-20 s approaches the store front
+    (pedestrian walking). A negative clip for open spots.'
+- id: a8db5ab8-1e8bc132
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 23.5
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: left
+    t_start: 13.5
+    t_end: 19.5
+    what: yellow bollard median and painted ONLY lane markings on the lot's main drive
+  - side: right
+    t_start: 11.5
+    t_end: 20.0
+    what: ends of aisles between densely parked rows (driving lanes, not stalls)
+  pulling_out: []
+  notes: 'Overcast day, big shopping-center lot (Babies R Us / Best Buy, NY/NJ plates). 0-11 s stopped at an aisle end next
+    to a parked blue Lexus GS, waiting to turn onto the lot''s main two-way drive (yellow center lines, bollards); 12-20 s
+    follows a black Nissan Altima along that drive at 3-5 m/s with row ends on the right (all full) and the median on the
+    left; 21-23 s past a hedge strip to the exit; 24-40 s on public streets (Five Guys, Wendy''s), stopped in traffic at the
+    end. No rows run directly beside the path: a negative.'
+- id: bd9881c7-682619d1
+  scene: lot_aisles
+  light: night
+  usable: false
+  reason: 'night in a dark, sparsely lit lot: stalls are visible only inside the headlight beam, so empty vs dark-car cannot
+    be judged along the rows'
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: 25.0
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 22.5
+    t_pass: null
+    restriction: unknown
+    neighbor_before: null
+    stalls: 1
+    certainty: ambiguous
+    note: the stall along the chain-link fence that we turn left into and park in (nose to the fence) at ~25 s; only lit by
+      our headlights
+  look_alikes: []
+  pulling_out:
+  - t: 4.0
+    side: right
+    note: a silver sedan crosses in front from the right, probably just left a stall (dark, unsure)
+  notes: Night (05:08 UTC). Large dark lot with portable toilets at the edge (event or park-and-ride lot). 0-20 s driving
+    along aisles at 3-7 m/s with mostly dark parked cars (pedestrian walking at 12 s, white Toyota with a roof sign parked
+    at 13-14 s), 21-23 s left turn toward the fence, parked nose to the fence at ~25 s; headlights off at ~28 s, then near-black
+    frames to the end (GPS shows a small creep at 31-34 s that is not visible).
+- id: c30f959a-bd87aa16
+  scene: lot_other
+  light: day
+  usable: false
+  reason: 'rain/sleet: water drops all over the windshield with no wipers; from ~17 s on the camera focuses on the drops and
+    the parked rows are a blur'
+  in_lot:
+  - - 0.0
+    - 40.0
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: Overcast with rain and old snow piles (airport-area lot, 'Cell Phone' style blue P sign). 0-6 s creeping along a
+    perimeter fence beside a public road, 7-16 s slow turn past parked SUVs and a snow pile, 17-40 s crawling (<1 m/s) along
+    a row of parked cars that cannot be judged through the drops. Car stays inside the lot throughout.
+- id: ca56898d-f6400cb3
+  scene: lot_other
+  light: day
+  usable: false
+  reason: camera is tilted up and looks through the windshield's black dot-frit band; heavy low-sun glare 17-25 s; parked
+    rows are never in view
+  in_lot:
+  - - 0.0
+    - 25.0
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: Sunny winter day with snow piles, by an elevated train station (Long Island). 0-15 s crawling around the ground floor/exit
+    of a parking deck (CLEARANCE sign, bollards, concrete planters), 16 s out across an open lot surface, 17-25 s blinded
+    by sun glare, ~25-40 s on public roads (bike lane, crosswalk, red car crossing at 38 s). in_lot end time is approximate
+    (glare hides the exit).
