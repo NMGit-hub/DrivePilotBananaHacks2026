@@ -88,7 +88,9 @@ class FileVideoConfig(_Strict):
     gpx_offset_s: float = Field(0.0, description="GPX time at video t=0 minus the first GPX point time.")
     realtime: bool = Field(True, description="Play at real-time speed, dropping frames if processing lags.")
     start_s: float = Field(0.0, ge=0.0, description="Start playback this many seconds into the clip.")
-    loop: bool = False
+    loop: bool = Field(
+        False, description="Play the clip again and again; the clock runs on across passes (a long GPX plays on)."
+    )
     hfov_deg: float | None = Field(
         None,
         gt=0.0,

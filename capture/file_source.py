@@ -8,6 +8,12 @@ frame timestamps, so benchmarks and evals are deterministic.
 Pause / skip work in both modes; every seek or loop restart starts a new `segment` so trackers reset. With
 `hold_at_end` the source doesn't finish at the end of the file: the clock stops on the last frame (so GPS replay
 and timers stop too) and a seek back plays on from there.
+
+With `loop` the clip plays again and again like a camera that never stops, and the clock keeps running across
+passes: frame times and the clock go on from the end of one pass into the next (pass k starts at k x the clip's
+length) instead of restarting at 0. So a GPS track longer than the clip (a simulated drive, HANDOFF.md 5B) plays
+on to its end, and run logs never repeat a time. Each pass is still a new segment (the picture jumps), and seeks
+are in that running time (a skip back from the start of a pass lands in the previous one).
 """
 
 from __future__ import annotations
@@ -58,7 +64,9 @@ class FileSource(VideoSource):
         self._ctrl_lock = threading.Lock()
         self._wake = threading.Event()
         self._paused = False
-        self._pending_seek: float | None = None
+        self._pending_seek: float | None = None  # media time (with `loop`: the running time across passes)
+        self._pass_start = 0.0  # loop: media time of this pass's first frame (capture thread only)
+        self._pass_length = 0.0  # loop: one pass, from the container; corrected at the first wrap if longer
 
     # ---------------------------------------------------------------------------------- properties
 
@@ -110,12 +118,23 @@ class FileSource(VideoSource):
         self.seek_to(self._media_clock.now() + delta_s)
 
     def seek_to(self, t: float) -> None:
-        """Jump to media time `t` seconds (clamped to the clip)."""
-        upper = max(0.0, self.duration - 1.0 / max(self._fps, 1.0))
-        target = min(max(0.0, t), upper)
+        """Jump to media time `t` seconds (clamped to the clip; with `loop`, any time from 0 on)."""
+        if self.loop and self.duration > 0:
+            target = max(0.0, t)
+        else:
+            upper = max(0.0, self.duration - 1.0 / max(self._fps, 1.0))
+            target = min(max(0.0, t), upper)
         with self._ctrl_lock:
             self._pending_seek = target
         self._wake.set()
+
+    def _locate(self, t: float) -> tuple[float, float]:
+        """Media time `t` → (start of its pass, position in the clip). Without `loop` the pass starts at 0."""
+        if not self.loop or self._pass_length <= 0:
+            return 0.0, t
+        passes = math.floor(t / self._pass_length)
+        start = passes * self._pass_length
+        return start, min(t - start, self._pass_length)
 
     # --------------------------------------------------------------------------------- capture loop
 
@@ -128,6 +147,7 @@ class FileSource(VideoSource):
         self._cap = cap
         self._fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
         self._frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self._pass_length = self.duration
         width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         log.info(
             "video opened",
@@ -152,6 +172,7 @@ class FileSource(VideoSource):
         period = 1.0 / self._fps
         segment = 0
         last_t = -math.inf
+        pass_end = 0.0  # loop: end of the latest frame seen in this pass (its time + one frame), clip time
         resync_clock = True  # anchor the clock to the first frame of every segment
         late_frames = 0
         grab_ms = 0.0  # running average of the decode cost per frame
@@ -162,9 +183,11 @@ class FileSource(VideoSource):
                 seek, self._pending_seek = self._pending_seek, None
                 paused = self._paused
             if seek is not None:
-                cap.set(cv2.CAP_PROP_POS_MSEC, seek * 1000.0)
+                self._pass_start, position = self._locate(seek)
+                cap.set(cv2.CAP_PROP_POS_MSEC, position * 1000.0)
                 segment += 1
                 last_t = -math.inf
+                pass_end = 0.0
                 resync_clock = True
                 self._media_clock.seek(seek)
                 preview = paused
@@ -172,7 +195,7 @@ class FileSource(VideoSource):
             if paused:
                 if preview:
                     preview = False
-                    frame = self._decode_one(cap, segment)
+                    frame = self._decode_one(cap, segment, self._pass_start)
                     if frame is not None:
                         last_t = frame.t
                         with self._ctrl_lock:
@@ -188,10 +211,16 @@ class FileSource(VideoSource):
             grab_ms = 0.9 * grab_ms + 0.1 * (time.perf_counter() - grab_start) * 1000.0
             if not grabbed:
                 if self.loop and self._frame_count > 0:
+                    # The next pass starts where this one ended: the clock runs on (a container that
+                    # under-reports its frame count would otherwise make time step back at the wrap).
+                    self._pass_length = max(self._pass_length, pass_end)
+                    self._pass_start += self._pass_length
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     segment += 1
                     last_t = -math.inf
+                    pass_end = 0.0
                     resync_clock = True
+                    log.info("loop: next pass", starts_at=round(self._pass_start, 2), segment=segment)
                     continue
                 if self.hold_at_end:
                     with self._ctrl_lock:
@@ -207,8 +236,10 @@ class FileSource(VideoSource):
 
             index = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
             pts = max(cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0, 0.0)
+            pass_end = max(pass_end, pts + period)
+            t = self._pass_start + pts  # media time (the clip's own time, plus earlier passes when looping)
             if math.isfinite(last_t):
-                step = pts - last_t
+                step = t - last_t
                 if abs(step) > _DISCONTINUITY_S:
                     # Joined recordings or a timestamp reset: a new segment on a re-anchored clock (instead of
                     # dropping everything until the timestamps catch up, or sleeping through a forward gap).
@@ -223,7 +254,6 @@ class FileSource(VideoSource):
                     # downstream (optical flow, stop timers), so such a frame is skipped.
                     self._count_skipped()
                     continue
-            t = pts
             last_t = t
 
             if self.realtime and not resync_clock:
@@ -274,15 +304,15 @@ class FileSource(VideoSource):
             self._wake.clear()
 
     @staticmethod
-    def _decode_one(cap: cv2.VideoCapture, segment: int) -> Frame | None:
-        """The next frame, decoded (or None at the end)."""
+    def _decode_one(cap: cv2.VideoCapture, segment: int, pass_start: float = 0.0) -> Frame | None:
+        """The next frame, decoded (or None at the end); its time counts from `pass_start` (looping)."""
         if not cap.grab():
             return None
         ok, image = cap.retrieve()
         if not ok or image is None:
             return None
         index = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
-        t = max(cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0, 0.0)
+        t = pass_start + max(cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0, 0.0)
         return Frame(image=image, t=t, index=index, captured_at=time.perf_counter(), segment=segment)
 
     def _wait_until(self, t: float) -> bool:

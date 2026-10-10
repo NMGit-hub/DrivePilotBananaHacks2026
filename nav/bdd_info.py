@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from nav.gps import VIDEO_START
+from nav.gps import write_gpx
 
 INFO_PREFIX = "bdd100k/info/100k/"
 SPLITS = ("val", "train")
@@ -150,20 +150,10 @@ def parse_info(info: Mapping[str, Any], clip_id: str, max_accuracy_m: float = 10
 
 def to_gpx(track: InfoTrack) -> str:
     """GPX 1.0 text: one track, a segment per stretch without gaps, and the `video_start` waypoint."""
-    import gpxpy.gpx
-
-    gpx = gpxpy.gpx.GPX()
-    gpx.name = f"BDD100K {track.clip_id}"
-    gpx.description = "Converted from the BDD100K info file by scripts/bdd_info_to_gpx.py"
-    first = track.segments[0][0]
-    gpx.waypoints.append(gpxpy.gpx.GPXWaypoint(first.lat, first.lon, time=track.video_start, name=VIDEO_START))
-    gpx_track = gpxpy.gpx.GPXTrack(name=track.clip_id)
-    gpx.tracks.append(gpx_track)
-    for fixes in track.segments:
-        segment = gpxpy.gpx.GPXTrackSegment()
-        for fix in fixes:
-            point = gpxpy.gpx.GPXTrackPoint(fix.lat, fix.lon, time=fix.time, speed=fix.speed_mps)
-            point.course = fix.course_deg  # type: ignore[assignment]  # (gpxpy annotates it None; GPX 1.0 writes it)
-            segment.points.append(point)
-        gpx_track.segments.append(segment)
-    return str(gpx.to_xml(version="1.0"))
+    return write_gpx(
+        track.segments,
+        track.video_start,
+        name=f"BDD100K {track.clip_id}",
+        description="Converted from the BDD100K info file by scripts/bdd_info_to_gpx.py",
+        track_name=track.clip_id,
+    )

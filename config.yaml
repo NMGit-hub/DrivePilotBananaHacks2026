@@ -10,7 +10,8 @@ video:
     gpx_offset_s: 0.0       # GPX time at video t=0 minus the first GPX point time
     realtime: true          # play at real-time speed; drop frames if processing falls behind
     start_s: 0.0
-    loop: false
+    loop: false             # play the clip again and again; the clock runs on across passes, so a GPX longer
+                            #   than the clip (a simulated drive, scripts/route_to_gpx.py) plays to its end
   camera:
     scrcpy_dir: null        # folder with adb.exe + scrcpy-server; null = auto-detect the winget install
     camera_id: 3            # OnePlus 12: 3 = the physical ultrawide (same view as logical camera 0 at zoom 0.6,
