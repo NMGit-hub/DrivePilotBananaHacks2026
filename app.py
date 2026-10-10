@@ -202,7 +202,7 @@ class DrivePilotApp:
         self._fps_mark: tuple[float, int] = (time.perf_counter(), 0)
         self._started_at: float | None = None
 
-        self.world = WorldState(cfg, on_event=self._on_world_event)
+        self.world = WorldState(cfg, on_event=self._on_world_event, speed_source=self._gps_speed_at)
         self._world_thread = AsyncListener(self._world_update, name="world", max_pending=2)
         self.screen = ScreenSpeaker(speaker, self.latency, hub, recorder)
         self.nav: NavHandler | None = None
@@ -262,6 +262,11 @@ class DrivePilotApp:
     def gps_fix(self) -> GpsFix | None:
         """The current GPS fix (GPX replay at video time, or the phone's latest)."""
         return self.gps.fix_at(self.media_time()) if self.gps is not None else None
+
+    def _gps_speed_at(self, t: float) -> float | None:
+        """Our GPS speed (m/s) at media time t, None without a fresh fix (the world state's parking tracker)."""
+        fix = self.gps.fix_at(t) if self.gps is not None else None
+        return None if fix is None else fix.speed_mps
 
     def _camera_lost(self) -> bool:
         worker = self.worker

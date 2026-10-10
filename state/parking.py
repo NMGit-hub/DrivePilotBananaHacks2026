@@ -6,14 +6,18 @@ point follows from the image row: distance Z = f·h / (y − y_horizon), lateral
 For cars parked side by side along an aisle, the bottom edge of each box is the depth of the car's near side, and
 consecutive cars' near sides are one stall apart (the "pitch"); the box's inner edge is the far corner of the car's
 aisle-side face, which gives the row's aisle-side edge. Every length (car sizes, tolerances, how deep we must see)
-is scaled by the measured pitch over its prior, so a wrong focal length (field of view) scales everything alike
-and changes no decision. The horizon row is estimated from the cars (a car of height H whose box is h px tall
-stands with its bottom h·camera_height/H px below the horizon), median over many boxes.
+is scaled by the measured pitch over its prior, so a moderately wrong focal length (field of view) scales
+everything alike and changes no decision; the scale is kept within `scale_min`..`scale_max` (the field of view is
+known roughly), and only spacings near the prior pitch measure it (in a sparse row most spacings are gaps). The
+horizon row is estimated from the cars (a car of height H whose box is h px tall stands with its bottom
+h·camera_height/H px below the horizon), median over many boxes.
 
 Parked cars. `state/vehicle_motion.py` can't tell them while we drive: it cancels our motion only for the
-background, not for the cars right beside us. Here they are their own reference: in a lot most cars are parked,
-so our speed is their common approach rate (median of −dZ/dt over the cars beside the aisle), and a car moving
-against that is moving. Comparisons pause while we turn (positions sweep sideways).
+background, not for the cars right beside us. Here a car is parked when it comes closer exactly as fast as we
+drive: our speed is the GPS speed when there is a fix, else the cars' common approach rate (in a lot most cars are
+parked: the median of −dZ/dt over the near cars beside the aisle). Comparisons pause while we turn (positions sweep
+sideways). A box cut off by the frame's bottom edge (our own hood, a car right beside us) gives no position, nor
+one cut off at the side once its nearest corner has left the frame: its ground contact is out of view.
 
 Spaces. Between two parked neighbours a spacing of ≥ `gap_ratio` pitches leaves a space. It is a candidate while
 its aisle-side face (where a car parked there would show its front) is in view, not hidden by other vehicles, and
@@ -144,6 +148,9 @@ class _Car:
     moving_since: float | None = None
     was_parked_s: float = 0.0  # how long it had been parked when it last started to move
     reported_pull_out: bool = False
+    parked_x: float | None = None  # lateral position while last parked...
+    parked_yaw: float = 0.0  # ...and our accumulated heading then (degrees)
+    in_row: bool = False  # was seen parked in a row beside the aisle
     last_seen: float = 0.0
 
 
@@ -199,6 +206,7 @@ class ParkingTracker:
         self._spacings: dict[str, deque[tuple[float, float]]] = {side: deque() for side in SIDES}
         self._row_ids: deque[tuple[float, int]] = deque()  # (t, track id) of cars seen parked in a row
         self._lot_like = False
+        self._lot_last_match: float | None = None
         self._scale = 1.0  # measured pitch / prior pitch: the camera's metric scale (1.0 if the FOV is right)
         self._along = 0.0  # how far we have driven (m, camera scale), from our estimated speed
         self._yaw: deque[tuple[float, float]] = deque()  # (t, accumulated yaw in degrees)
@@ -251,8 +259,9 @@ class ParkingTracker:
         tracks: Sequence[Track],
         ego_stopped: bool,
         homography: np.ndarray | None,
+        gps_speed: float | None = None,
     ) -> list[ParkingEvent]:
-        """Fold one frame in; returns this frame's events."""
+        """Fold one frame in (`gps_speed`: our GPS speed in m/s if there's a fresh fix); returns its events."""
         cfg = self.cfg
         cam = Camera.from_fov(width, self.hfov_deg, cfg.camera_height_m)
         dt = 0.0 if self._last_t is None else max(0.0, t - self._last_t)
@@ -260,12 +269,12 @@ class ParkingTracker:
         events: list[ParkingEvent] = []
 
         vehicles = [tr for tr in tracks if tr.cls in VEHICLE_CLASSES]
-        horizon = self._horizon(vehicles, height)
+        horizon = self._horizon([tr for tr in vehicles if not self._cut_off(tr.box, width, height)], height)
         yaw_rate = self._update_yaw(t, dt, homography, cam, horizon)
         turning = yaw_rate is not None and abs(yaw_rate) > cfg.max_yaw_rate_dps
-        self._positions(t, vehicles, cam, horizon, turning)
+        self._positions(t, vehicles, cam, horizon, turning, width, height)
 
-        speed = self._our_speed(t, ego_stopped, turning)
+        speed = self._our_speed(t, ego_stopped, turning, gps_speed)
         if speed is not None:
             self._along += speed * dt
         self._update_parked_states(t, speed, cam, events)
@@ -279,6 +288,7 @@ class ParkingTracker:
                 self._spacings[side].popleft()
             for car in row:
                 self._row_ids.append((t, car.track_id))
+                self._cars[car.track_id].in_row = True
         while self._row_ids and t - self._row_ids[0][0] > cfg.lot_window_s:
             self._row_ids.popleft()
         self._update_scale(t)
@@ -305,6 +315,29 @@ class ParkingTracker:
         return self._snapshot
 
     # ----------------------------------------------------------------------------------- pieces
+
+    def _cut_off(self, box: Box, width: int, height: int) -> bool:
+        """The box touches the frame's bottom or side edge."""
+        margin = self.cfg.edge_margin_px
+        x1, _, x2, y2 = box
+        return y2 >= height - margin or x1 <= margin or x2 >= width - margin
+
+    def _ground_visible(self, box: Box, width: int, height: int, cam: Camera, horizon: float) -> bool:
+        """The box's bottom edge is the car's ground contact: not cut off by the frame's bottom, and, if cut off
+        at the side, its nearest corner (in line with its inner edge, one car "across" nearer) is still in view."""
+        margin = self.cfg.edge_margin_px
+        x1, _, x2, y2 = box
+        if y2 >= height - margin:
+            return False
+        left, right = x1 <= margin, x2 >= width - margin
+        if not left and not right:
+            return True
+        point = cam.ground(x2 if left else x1, y2, horizon)
+        if point is None or (left and right):
+            return False
+        z = point[1]
+        corner = cam.cx + ((x2 if left else x1) - cam.cx) * (z + self._across) / z
+        return margin < corner < width - margin
 
     def _horizon(self, vehicles: Sequence[Track], height: int) -> float:
         cfg = self.cfg
@@ -333,18 +366,30 @@ class ParkingTracker:
             self._yaw.popleft()
         return rate
 
-    def _positions(self, t: float, vehicles: Sequence[Track], cam: Camera, horizon: float, turning: bool) -> None:
-        """Ground position of every vehicle: the bottom edge is its near side (Z); for a car beside our path the
-        inner edge is the far corner of its aisle-side face (one car "across" deeper), which gives the row's edge."""
+    def _positions(
+        self,
+        t: float,
+        vehicles: Sequence[Track],
+        cam: Camera,
+        horizon: float,
+        turning: bool,
+        width: int,
+        height: int,
+    ) -> None:
+        """Ground position of every vehicle whose ground contact is in view: the bottom edge is its near side (Z);
+        for a car beside our path the inner edge is the far corner of its aisle-side face (one car "across" deeper),
+        which gives the row's edge."""
         lane = self._m(self.cfg.lane_half_width_m)
         for tr in vehicles:
+            car = self._cars.setdefault(tr.track_id, _Car(tr.cls))
+            car.cls, car.box, car.last_seen = tr.cls, tr.box, t
+            if not self._ground_visible(tr.box, width, height, cam, horizon):
+                continue  # cut off: no position this frame (its history ages out)
             x1, _, x2, y2 = tr.box
             inner = x1 if (x1 + x2) / 2 > cam.cx else x2
             point = cam.ground(inner, y2, horizon)
             if point is not None and abs(point[0]) >= lane:
                 point = (point[0] * (point[1] + self._across) / point[1], point[1])
-            car = self._cars.setdefault(tr.track_id, _Car(tr.cls))
-            car.cls, car.box, car.last_seen = tr.cls, tr.box, t
             if point is None or turning:
                 car.samples.clear()  # positions from before a turn or above the horizon can't be compared
                 continue
@@ -366,21 +411,28 @@ class ParkingTracker:
         span = float(arr[-1, 0] - arr[0, 0])
         return _fit_slope(arr[:, 0], arr[:, 1]), _fit_slope(arr[:, 0], arr[:, 2]), len(recent), span
 
-    def _our_speed(self, t: float, ego_stopped: bool, turning: bool) -> float | None:
-        """Our speed: the median rate at which the cars beside our path come closer (most of them are parked)."""
+    def _our_speed(self, t: float, ego_stopped: bool, turning: bool, gps_speed: float | None) -> float | None:
+        """Our speed (camera-scale m/s): from GPS if there's a fix, else the median rate at which the near cars
+        beside our path come closer (most of them are parked)."""
         if turning:
             return None
-        lane = self._m(self.cfg.lane_half_width_m)
+        if ego_stopped:
+            return 0.0
+        if gps_speed is not None:
+            return max(0.0, gps_speed) * self._scale
+        lane, near = self._m(self.cfg.lane_half_width_m), self._m(self.cfg.speed_max_z_m)
         rates = []
         for car in self._cars.values():
-            if car.last_seen != t or not car.samples or abs(car.samples[-1][1]) < lane:
+            if car.last_seen != t or not car.samples or car.samples[-1][0] != t:
+                continue
+            if abs(car.samples[-1][1]) < lane or car.samples[-1][2] > near:
                 continue
             v = self._velocity(car, t)
             if v is not None:
                 rates.append(-v[1])
         if len(rates) >= 3:
             return max(0.0, float(np.median(rates)))
-        return 0.0 if ego_stopped else None
+        return None
 
     def _update_parked_states(self, t: float, speed: float | None, cam: Camera, events: list[ParkingEvent]) -> None:
         cfg = self.cfg
@@ -404,6 +456,7 @@ class ParkingTracker:
             noise_x = 3.0 * k * z / cam.f * cfg.box_jitter_px
             if abs(vz + speed) < base + noise_z and abs(vx) < base_x + noise_x:
                 car.moving_since = None
+                car.parked_x, car.parked_yaw = x, self._yaw_total
                 if car.parked_since is None:
                     car.parked_since = t
                 continue
@@ -413,13 +466,22 @@ class ParkingTracker:
             if t - car.moving_since < cfg.move_confirm_s:
                 continue  # a blip (our speed estimate lags when we brake): still parked
             car.parked_since = None
+            # Pulling out of a stall (or away from the curb) is a move from the row toward our path; a car moving
+            # off ahead of us in the aisle, or depths drifting together far away, is not. Our own slow turn since
+            # then shifts every car sideways (by z·tan(yaw)): taken out.
+            x_own = x - z * math.tan(math.radians(self._yaw_total - car.parked_yaw))
+            toward = 0.0 if car.parked_x is None else abs(car.parked_x) - abs(x_own)
             if (
                 not car.reported_pull_out
+                and car.in_row
                 and car.was_parked_s >= cfg.pull_out_parked_s
                 and t - car.moving_since >= cfg.pull_out_moving_s
+                and car.parked_x is not None
+                and car.parked_x * x_own > 0
+                and toward >= self._m(cfg.pull_out_min_m)
+                and z <= self._m(cfg.pull_out_max_z_m)
             ):
                 car.reported_pull_out = True
-                _, x, z = car.samples[-1]
                 side = "right" if x > 0 else "left"
                 events.append(ParkingEvent("pulling_out", t, car=ParkedCar(track_id, car.cls, side, x, z, car.box, t)))
 
@@ -449,17 +511,25 @@ class ParkingTracker:
         nearest = min(sign * c.x for c in parked)
         return sorted((c for c in parked if sign * c.x <= nearest + self._m(cfg.row_depth_m)), key=lambda c: c.z)
 
+    def _measured_pitch(self, side: str) -> float | None:
+        """The median of recent neighbour spacings near the prior pitch (gaps and missed cars are larger, split
+        boxes smaller), or None with too few of them."""
+        cfg = self.cfg
+        prior = self._prior_pitch
+        lo, hi = cfg.pitch_ratio_min * prior * cfg.scale_min, cfg.pitch_ratio_max * prior * cfg.scale_max
+        spacings = [s for _, s in self._spacings[side] if lo <= s <= hi]
+        return float(np.median(spacings)) if len(spacings) >= cfg.pitch_min_samples else None
+
     def _pitch(self, side: str) -> float:
-        """The row's pitch: the lower quartile of recent neighbour spacings (gaps are the larger ones)."""
-        spacings = [s for _, s in self._spacings[side] if s > 0.1]
-        if len(spacings) < 3:
-            return self._m(self._prior_pitch)
-        return float(np.percentile(spacings, 25))
+        """The row's pitch (camera-scale m): measured on that side, else the prior at the current scale."""
+        measured = self._measured_pitch(side)
+        return self._m(self._prior_pitch) if measured is None else measured
 
     def _update_scale(self, t: float) -> None:
-        measured = [self._pitch(side) for side in SIDES if len(self._spacings[side]) >= 3]
+        measured = [p for p in (self._measured_pitch(side) for side in SIDES) if p is not None]
         if measured:
-            self._scale = float(np.clip(np.mean(measured) / self._prior_pitch, 0.4, 2.5))
+            ratio = float(np.mean(measured)) / self._prior_pitch
+            self._scale = float(np.clip(ratio, self.cfg.scale_min, self.cfg.scale_max))
 
     def _spaces(
         self,
@@ -611,9 +681,12 @@ class ParkingTracker:
         return "open"
 
     def _lot(self, t: float, speed: float | None, events: list[ParkingEvent]) -> None:
+        """Crawling past enough parked cars in rows: a lot (held for `lot_hold_s` after it stops matching)."""
         cfg = self.cfg
         slow = speed is not None and speed <= self._m(cfg.lot_max_speed_mps)
-        lot_like = slow and len({track_id for _, track_id in self._row_ids}) >= cfg.lot_min_parked
+        if slow and len({track_id for _, track_id in self._row_ids}) >= cfg.lot_min_parked:
+            self._lot_last_match = t
+        lot_like = self._lot_last_match is not None and t - self._lot_last_match <= cfg.lot_hold_s
         if lot_like and not self._lot_like:
             events.append(ParkingEvent("lot", t))
         self._lot_like = lot_like

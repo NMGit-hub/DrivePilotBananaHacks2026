@@ -13,6 +13,7 @@ waits until we pull up and stop again.
 
 from __future__ import annotations
 
+import math
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -97,9 +98,16 @@ def _empty_queue(t: float) -> QueueSnapshot:
 class WorldState:
     """Thread-safe world model fed by perception."""
 
-    def __init__(self, cfg: AppConfig, on_event: Callable[[WorldEvent], None] | None = None) -> None:
+    def __init__(
+        self,
+        cfg: AppConfig,
+        on_event: Callable[[WorldEvent], None] | None = None,
+        speed_source: Callable[[float], float | None] | None = None,
+    ) -> None:
+        """`speed_source(t)`: our GPS speed (m/s) at media time t, None without a fresh fix (parking uses it)."""
         self.cfg = cfg
         self.on_event = on_event
+        self.speed_source = speed_source
         self._lock = threading.Lock()
         self.vehicle_motion = VehicleMotionTracker(cfg.vehicle_motion)
         self.queue = StopQueue(cfg.stop_queue)
@@ -210,7 +218,10 @@ class WorldState:
         mode, self._parking_mode = self._parking_mode, None
         if mode is not None:
             self.parking.set_mode(mode)
-        for pe in self.parking.update(t, frame.width, frame.height, result.tracks, ego.stopped, ego.homography):
+        gps_speed = self._gps_speed(t)
+        for pe in self.parking.update(
+            t, frame.width, frame.height, result.tracks, ego.stopped, ego.homography, gps_speed
+        ):
             events.append(WorldEvent(f"parking_{pe.kind}", t, _parking_detail(pe), payload=(pe, frame)))
 
         people_ahead = sum(
@@ -328,6 +339,16 @@ class WorldState:
     def light_is(snapshot: WorldSnapshot, color: LightColor) -> bool:
         """True if the smoothed light state facing us is `color` with confidence."""
         return snapshot.light.color is color and snapshot.light.confident
+
+    def _gps_speed(self, t: float) -> float | None:
+        if self.speed_source is None:
+            return None
+        try:
+            speed = self.speed_source(t)
+        except Exception:
+            log.exception("speed source failed")
+            return None
+        return None if speed is None or not math.isfinite(speed) else float(speed)
 
     def set_parking_mode(self, mode: str) -> None:
         """ "lot" or "street" (the parking watch decides; any thread): applied on the next frame."""

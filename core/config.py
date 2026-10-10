@@ -372,6 +372,22 @@ class ParkingConfig(_Strict):
     lot_pitch_m: float = Field(2.7, gt=0.0, description="Stall spacing in lots (prior until measured).")
     curb_pitch_m: float = Field(6.0, gt=0.0, description="Parallel-parked car spacing (car length + ~1 m).")
     pitch_window_s: float = Field(6.0, gt=0.0, description="Spacings measured over this long give the pitch.")
+    pitch_ratio_min: float = Field(0.6, gt=0.0, description="Only neighbour spacings from this many prior pitches...")
+    pitch_ratio_max: float = Field(1.5, gt=0.0, description="...to this many measure the pitch (gaps are larger).")
+    pitch_min_samples: int = Field(6, ge=1, description="Spacings needed before the measured pitch is used.")
+    scale_min: float = Field(
+        0.75,
+        gt=0.0,
+        description="The camera's metric scale (measured pitch / prior) is kept from this... (the field of view is "
+        "known to within this range; a sparse row's gaps must not pass for the pitch)",
+    )
+    scale_max: float = Field(1.35, gt=0.0, description="...to this.")
+    edge_margin_px: float = Field(
+        4.0, ge=0.0, description="A box this close to the frame's bottom or side edge is cut off: no position."
+    )
+    speed_max_z_m: float = Field(
+        20.0, gt=0.0, description="Without GPS, our speed comes from parked cars nearer than this (depth is noisy far)."
+    )
     lane_half_width_m: float = Field(1.4, gt=0.0, description="Cars nearer our path than this are in the aisle.")
     row_max_x_m: float = Field(9.0, gt=0.0, description="Parked cars further to the side are in another row.")
     row_depth_m: float = Field(2.5, gt=0.0, description="Cars within this of the nearest one sideways = its row.")
@@ -411,9 +427,14 @@ class ParkingConfig(_Strict):
     move_confirm_s: float = Field(0.4, ge=0.0, description="...and stops counting as parked after moving this long.")
     max_yaw_rate_dps: float = Field(12.0, gt=0.0, description="Turning faster than this: positions aren't compared.")
     pull_out_parked_s: float = Field(3.0, gt=0.0, description="A car parked at least this long...")
-    pull_out_moving_s: float = Field(0.7, gt=0.0, description="...that moves this long is pulling out.")
+    pull_out_moving_s: float = Field(0.7, gt=0.0, description="...that moves this long is pulling out...")
+    pull_out_min_m: float = Field(
+        0.8, ge=0.0, description="...if it was in a row beside the aisle and has moved this far toward our path..."
+    )
+    pull_out_max_z_m: float = Field(40.0, gt=0.0, description="...within this distance ahead (depth is noisy far).")
     lot_min_parked: int = Field(6, ge=1, description="Parked cars in rows (recently) for 'this looks like a lot'.")
     lot_window_s: float = Field(5.0, gt=0.0)
+    lot_hold_s: float = Field(5.0, ge=0.0, description="'Looks like a lot' holds this long after it stops matching.")
     lot_max_speed_mps: float = Field(4.5, gt=0.0, description="~10 mph: faster isn't looking for a spot.")
     parked_after_s: float = Field(10.0, gt=0.0, description="We have parked: stopped this long after a turn...")
     parked_turn_deg: float = Field(50.0, gt=0.0, description="...of at least this much (into a stall)...")
