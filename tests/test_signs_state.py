@@ -1,0 +1,164 @@
+"""V2-M6 integration: sign sightings, the current speed limit and once-only alerts (state/signs.py), and the sign
+detector's thread (perception/sign_worker.py), with fake detections (no GPU)."""
+
+from __future__ import annotations
+
+import threading
+import time
+from dataclasses import dataclass
+
+import numpy as np
+
+from core.config import SignAlertsConfig
+from core.types import Frame
+from perception.sign_worker import SignWorker
+from state.signs import SCHOOL_ZONE_TEXT, SignTracker, alert_texts, limit_text
+
+Box = tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
+class Det:
+    kind: str
+    value: int | None
+    conf: float
+    box: Box
+
+
+def approach(kind: str, values: list[int | None], start: float = 10.0, fps: float = 4.0) -> list[tuple[float, Det]]:
+    """A sign growing and sliding right as we approach it, one detection per sign-thread frame."""
+    out = []
+    for k, value in enumerate(values):
+        size = 14.0 + 6.0 * k
+        x = 900.0 + 25.0 * k
+        out.append((start + k / fps, Det(kind, value, 0.8, (x, 300.0 - 3 * k, x + size, 300.0 - 3 * k + size))))
+    return out
+
+
+def run(tracker: SignTracker, frames: list[tuple[float, Det]]) -> list[str]:
+    said = []
+    for t, det in frames:
+        said += [e.text for e in tracker.update(t, [det])]
+    return said
+
+
+def test_a_limit_is_announced_once_after_two_agreeing_frames() -> None:
+    tracker = SignTracker(SignAlertsConfig())
+    said = run(tracker, approach("speed_limit", [None, 35, None, 35, 35, 35]))
+    assert said == ["Speed limit is now 35."]
+    snap = tracker.snapshot()
+    assert snap.limit == 35 and snap.limit_t == 10.75  # (said when the second reading agreed)
+    (view,) = tracker.last_frame  # this frame's sign, for the memory close-up
+    assert view.kind == "speed_limit" and view.value == 35 and view.id == snap.recent[0].id
+
+
+def test_one_frame_or_disagreeing_frames_are_never_announced() -> None:
+    tracker = SignTracker(SignAlertsConfig())
+    assert run(tracker, approach("speed_limit", [None, 35, None, None])) == []  # one reading: could be a look-alike
+    tracker = SignTracker(SignAlertsConfig())
+    assert run(tracker, approach("speed_limit", [35, 30, 35, 30])) == []  # the readings disagree: never say either
+    assert tracker.snapshot().limit is None
+
+
+def test_the_same_limit_again_is_quiet_and_a_new_one_is_said() -> None:
+    tracker = SignTracker(SignAlertsConfig())
+    said = run(tracker, approach("speed_limit", [35, 35]))
+    said += run(tracker, approach("speed_limit", [35, 35], start=40.0))  # the next 35 sign: no repeat
+    said += run(tracker, approach("speed_limit", [25, 25], start=70.0))
+    assert said == ["Speed limit is now 35.", "Speed limit is now 25."]
+
+
+def test_two_signs_in_one_frame_are_two_sightings() -> None:
+    tracker = SignTracker(SignAlertsConfig())
+    events = []
+    for k in range(3):
+        t = 10.0 + k * 0.25
+        events += tracker.update(
+            t,
+            [
+                Det("speed_limit", 45, 0.9, (100.0 + k, 300.0, 130.0 + k, 340.0)),
+                Det("speed_limit", 45, 0.85, (1100.0 + k, 300.0, 1130.0 + k, 340.0)),
+            ],
+        )
+    assert [e.text for e in events] == ["Speed limit is now 45."]  # two signs, same limit: said once
+    assert len(tracker.snapshot().recent) == 2
+
+
+def test_school_zone_and_school_limits() -> None:
+    tracker = SignTracker(SignAlertsConfig())
+    said = run(tracker, approach("school_zone", [None, None, None]))
+    said += run(tracker, approach("school_speed_limit", [20, 20], start=12.0))
+    assert said == [SCHOOL_ZONE_TEXT, "School speed limit 20."]
+    assert tracker.snapshot().limit is None and tracker.snapshot().school_limit == 20
+    assert run(SignTracker(SignAlertsConfig()), approach("school_zone", [None])) == []  # one frame: not yet
+
+
+def test_weak_detections_are_ignored_and_a_seek_forgets() -> None:
+    tracker = SignTracker(SignAlertsConfig())
+    for k in range(4):
+        tracker.update(10.0 + k * 0.25, [Det("speed_limit", 35, 0.3, (900.0, 300.0, 920.0, 320.0))])
+    assert tracker.snapshot().limit is None
+    run(tracker, approach("speed_limit", [55, 55], start=20.0))
+    assert tracker.snapshot().limit == 55
+    tracker.update(5.0, [])  # time went backwards
+    assert tracker.snapshot().limit is None
+
+
+def test_context_lines_for_the_vision_model() -> None:
+    tracker = SignTracker(SignAlertsConfig())
+    run(tracker, approach("speed_limit", [30, 30]))
+    run(tracker, approach("no_turn_on_red", [None, None], start=14.0))
+    lines = tracker.context(now=20.0)
+    assert lines[0] == "The sign detector read a speed limit of 30 mph 10 s ago."
+    assert any("no turn on red" in line for line in lines)
+
+
+def test_every_alert_text_is_prerenderable() -> None:
+    texts = alert_texts(list(range(5, 90, 5)))
+    assert "Speed limit is now 85." in texts and "School speed limit 15." in texts and SCHOOL_ZONE_TEXT in texts
+    assert len(texts) == len(set(texts)) and limit_text("speed_limit", 35) in texts
+
+
+# ------------------------------------------------------------------------------------------- worker
+
+
+def frame(t: float) -> Frame:
+    return Frame(image=np.zeros((72, 128, 3), np.uint8), t=t, index=round(t * 30), captured_at=time.perf_counter())
+
+
+class SlowDetector:
+    def __init__(self) -> None:
+        self.thread: str | None = None
+        self.seen: list[float] = []
+
+    def detect(self, f: Frame) -> list[Det]:
+        self.thread = threading.current_thread().name
+        self.seen.append(f.t)
+        time.sleep(0.02)
+        return [Det("stop", None, 0.9, (1.0, 1.0, 5.0, 5.0))]
+
+
+def test_the_worker_builds_the_detector_on_its_thread_and_keeps_only_the_newest_frame() -> None:
+    detector = SlowDetector()
+    results: list[tuple[float, int]] = []
+    worker = SignWorker(lambda: detector, lambda f, dets: results.append((f.t, len(dets))), fps=10.0).start()
+    assert worker.ready.wait(2.0) and worker.error is None
+    for k in range(60):  # 30 fps for 2 s
+        worker.offer(frame(k / 30))
+        time.sleep(1 / 30)
+    time.sleep(0.3)
+    worker.stop()
+    assert detector.thread == "signs"
+    assert 12 <= len(results) <= 24  # ~10 per second, not 30
+    assert results[-1][0] >= 1.8  # it kept up with the newest frames
+    assert all(n == 1 for _, n in results)
+
+
+def test_a_detector_that_cannot_start_reports_why() -> None:
+    def broken() -> SlowDetector:
+        raise RuntimeError("CUDA is not available")
+
+    worker = SignWorker(broken, lambda f, d: None, fps=4.0).start()
+    assert worker.ready.wait(2.0)
+    time.sleep(0.05)
+    assert worker.error == "RuntimeError: CUDA is not available" and not worker.running

@@ -446,6 +446,20 @@ class ParkingConfig(_Strict):
     max_checks_per_min: int = Field(20, ge=1, description="Vision-model checks of candidate spots, at most.")
 
 
+class SignAlertsConfig(_Strict):
+    """What the sign detector's readings turn into (state/signs.py, V2-M6): the detector itself is `signs:`."""
+
+    enabled: bool = Field(True, description="Run the sign detector (if its models are installed) and announce.")
+    fps: float = Field(4.0, gt=0.0, le=30.0, description="Sign detection runs this often on the latest frame.")
+    min_conf: float = Field(0.5, ge=0.0, le=1.0, description="Weaker detections are ignored here.")
+    link_s: float = Field(1.0, gt=0.0, description="A sign seen again within this long is the same sign.")
+    keep_s: float = Field(60.0, gt=0.0, description="Sightings are remembered this long.")
+    agree_frames: int = Field(2, ge=1, description="Frames that must agree on a limit before it is announced.")
+    agree_window_s: float = Field(2.0, gt=0.0, description="...within this long (one frame can be a look-alike).")
+    repeat_s: float = Field(300.0, gt=0.0, description="The same school limit again within this long: quiet.")
+    recent: int = Field(6, ge=1, description="Recent sightings kept for the page and answers.")
+
+
 class MemoryConfig(_Strict):
     """Scene memory for "what was that sign?" (state/memory.py, V2-M4)."""
 
@@ -663,6 +677,7 @@ class AppConfig(_Strict):
     alerts: AlertsConfig = AlertsConfig()
     parking: ParkingConfig = ParkingConfig()
     memory: MemoryConfig = MemoryConfig()
+    sign_alerts: SignAlertsConfig = SignAlertsConfig()
 
     @property
     def effective_hfov_deg(self) -> float:
