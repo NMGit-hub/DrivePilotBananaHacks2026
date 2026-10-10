@@ -4,6 +4,28 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### M9 (in progress, 2026-10-10): hardware bring-up with the team
+- **GPU throttling fixed** (the team plugged in the charger and set Best performance): fp16 matmul 22.4 TFLOPS
+  (was 2.1). Re-measured the full pipeline (`scripts/bench_app.py --silent`,
+  `runs/20261010-100132_bench_app`): **every latency target met**: local answers 0.83 s median / 0.94 s
+  p90 (target 1.0), model answers 1.71 / 1.83 s (2.5), "Light's green" 41 ms from the detection frame to sound
+  (0.3 s), perception 26.8 fps while Whisper shares the GPU (25.2), 6/6 spoken questions heard, routed and
+  played.
+- **Live phone camera through the app** (`python -m app --camera`, OnePlus 12 over USB): ultrawide camera 3,
+  1920x1080, hardware (D3D11VA) decoding, 30 fps processed, page live, microphone + speaker + Claude ready, no
+  errors. Not yet tried by the team: questions by voice live, the phone GPS page.
+- **First real-voice session** (`scripts/wakeword/check_real.py`, one speaker, 20 takes, 6 with a fumbled
+  wake phrase): at threshold 0.25, 12/20 woke and only 8 of those were heard right. Found and fixed: the chunk
+  the wake word fired in was missing from the question's audio (an 80 ms hole that garbled the first word),
+  and the 0.4 s pre-roll cut the wake phrase in half. Now (threshold 0.15, 1.5 s pre-roll): 14/20 wake (the
+  misses are the 5 fumbled takes and 1 clear one) and **14/14 are heard and routed right**. End of question
+  after 0.5 s of silence (was 0.6): none of the takes was cut off. A pause after the wake phrase no longer
+  ends the question (speech in the first 0.4 s after the wake may be just "...pilot"; then 1.2 s of
+  silence is needed), and "Hey DrivePilot, stop" is still heard. Final on the real takes: 14/20 wake,
+  **14/14 heard and routed right**. Synthetic voices (`scripts/voice_eval.py --limit 40`): all 5 clear
+  voices wake 100%, 0 false wakes in 10 min of speech + car noise; misses are the known-unintelligible
+  Reza voice.
+
 ### M8: test sheet, scoring (2026-10-10)
 - `eval/test_sheet.csv`: 29 questions at verified moments of the 9 dev clips (each expected answer checked on
   full-resolution frames; three of my first expectations were wrong and were corrected): right of way 2,
@@ -255,6 +277,15 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
+- **Before calling V1 done (needs the team):** check the CPU throttling (below) and re-run
+  `scripts/bench_app.py --silent` (all targets were met at 10:01; at 10:20 the CPU was stuck at ~0.75 GHz);
+  ask a few questions live by voice with the phone camera (`python -m app --camera`) and try the phone GPS page;
+  record more voices with `scripts/wakeword/check_real.py`, ideally in the car; recorded drives with GPX
+  (4-way stops with other cars, a roundabout, the 405/520 interchange, parking signs) so the test sheet gets
+  navigation / 4-way / roundabout rows; then the live drive (PLAN.md's V1 definition).
+- Open question from the last synthetic voice run (made while the CPU was throttled): 4 synthetic takes woke
+  but no question was heard (`runs/*_voice`, "W ... None"). Not seen on the real takes or in the run before the
+  wake-pause change; re-run `scripts/voice_eval.py --limit 40` on a full-speed machine and check.
 - M9 (needs the team): fix the GPU throttling and re-measure latency; live phone camera + GPS page;
   real-voice wake-word check (`scripts/wakeword/check_real.py`); recorded drives with GPX to add
   navigation, 4-way-stop and roundabout rows to the test sheet; then the live drive.
@@ -269,23 +300,23 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   tested with synthetic GPX files in tests until real drives are recorded.
 
 ## Known issues / compromises
+- **CPU throttling seen at 10:20 on 2026-10-10** (after a fast run at 10:01): on the charger, the CPU ran at ~31%
+  of its rated speed under load (~0.75 GHz), so perception fell to 7-8 fps and answers to 3-5 s. Likely heat or
+  the power source (a lower-wattage charger, e.g. in a car); check before measuring or driving.
 - **Sign reading by the vision model (Claude Haiku)** is the weakest category on the sheet (2/6): small or
   distant text is misread (DO NOT ENTER as "STOP") or not read; the model doesn't know the city's rules (no
   location context in V1). It now says when it can't read a sign instead of inventing text.
 - `vision.temperature: 0` works with Claude Haiku 4.5 (sent in the request body); Claude models newer than the
   4.6 line reject it: set it to null when switching (the startup check shows the failure on the page).
-- **The GPU is throttled to ~1/10 of its speed** (2026-10-10, Surface Laptop Studio 2): it stays at 210 MHz
-  (P8) under load, throttle reasons "SW power cap" + "SW thermal slowdown" at 48 °C, charger connected, Windows
-  power mode Balanced. fp16 matmul ~2.1 TFLOPS (21 on 2026-10-09), YOLO 28 ms/frame (2.7), Whisper 1.7 s per
-  question. Every latency number measured while throttled is pessimistic; re-measure once fixed (likely the
-  120 W Surface Connect charger instead of USB-C, Best performance mode, and the Surface app's performance
-  setting).
+- **The laptop must be plugged into its charger and in Best performance mode**: otherwise the GPU throttles
+  to ~1/10 of its speed (seen 2026-10-10: 210 MHz, "SW power cap" + "SW thermal slowdown"), and Whisper takes
+  1.7 s per question instead of ~0.25 s: answers then take 2-3 s.
 - **Navigation edge cases left:** a 15 m overshoot of a turn is still "on the route" when asked (GPS noise is
   ~5-10 m; at 30 m it reroutes); arrival by turning into a lot within 150 m of the end is assumed (a missed
   final turn that close is called "arrived"); `fork` steps count as exits for "which exit?".
-- **Wake word trained on synthetic speech only** (Piper voices): real voices through the laptop mics may trigger
-  less often. Record 20-50 real "Hey DrivePilot" utterances in the car before the demo (threshold 0.10 is a safe
-  fallback: also 0 false accepts). Held-out car noise is one car; no in-car conversation/radio in the false-
+- **Wake word trained on synthetic speech only** (Piper voices). One real speaker so far (20 takes at a desk):
+  14/20 woke at threshold 0.15, the misses being mostly fumbled takes; more voices, recorded in the car, are
+  still needed before the demo (threshold 0.10 is a safe fallback: also 0 false accepts on 21 h). Held-out car noise is one car; no in-car conversation/radio in the false-
   accept tests. The training data uses non-commercial licenses (fine for the hackathon, not for a product).
   `data/wakeword/` (34 GB) and `.venv-wakeword/` (5.7 GB) can be deleted; only the 205 KB model is needed.
 - **Lane counting by the vision model is unreliable** (said 2 lanes instead of 3 on one of two runs). M6 lane
