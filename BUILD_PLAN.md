@@ -56,8 +56,8 @@ vars, masked secrets); `python -m app --print-config` prints the resolved config
 - Ego motion: optical flow on a downscaled frame with vehicle boxes masked out; "we're stopped" after 0.5 s.
 - Headless runner logs FPS, GPU memory (torch + NVML) and per-stage latency (decode, detect+track, motion).
 
-**Done when:** a headless real-time run of a dev clip processes ≥ 25 of 30 fps with p95 perception latency
-< 40 ms, and the weights are verified on `cuda` in fp16; ego-stopped intervals match hand-labeled intervals on
+**Done when:** a headless real-time run of a dev clip processes ≥ 25 of 30 fps with p95 perception processing
+time < 40 ms and p95 decode-to-result latency < 70 ms, and the model is verified on `cuda` in fp16; ego-stopped intervals match hand-labeled intervals on
 3 dev clips (±0.5 s); FileSource pacing/seek tests pass.
 
 ## M2: World state + 4-way stop queue

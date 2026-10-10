@@ -190,24 +190,25 @@ def test_close_drains_everything_and_later_records_are_ignored(tmp_path: Path) -
 
 def test_concurrent_writers_and_close(tmp_path: Path) -> None:
     rec = RunRecorder(tmp_path, "threads")
-    stop = threading.Event()
 
-    def spam(k: int) -> None:
-        i = 0
-        while not stop.is_set():
+    def write(k: int) -> None:
+        for i in range(2000):
             rec.event("e", k=k, i=i)
-            i += 1
 
-    threads = [threading.Thread(target=spam, args=(k,)) for k in range(4)]
+    threads = [threading.Thread(target=write, args=(k,)) for k in range(4)]
     for t in threads:
         t.start()
-    time.sleep(0.2)
-    rec.close()  # must not hang or raise while other threads keep writing
-    stop.set()
+    time.sleep(0.01)
+    start = time.monotonic()
+    rec.close()  # concurrently with the writers: must not hang or raise
+    assert time.monotonic() - start < 10.0
     for t in threads:
-        t.join(2)
+        t.join(10)
     lines = (rec.dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
-    assert lines and all(json.loads(line)["kind"] == "e" for line in lines)
+    assert lines and all(json.loads(line)["kind"] == "e" for line in lines)  # every written line is complete
+    for k in range(4):  # each writer's records that made it in are in order (no interleaving corruption)
+        idx = [json.loads(line)["i"] for line in lines if json.loads(line)["k"] == k]
+        assert idx == sorted(idx)
 
 
 def test_unique_dirs_and_ascii_labels(tmp_path: Path) -> None:

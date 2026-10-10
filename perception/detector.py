@@ -2,7 +2,12 @@
 
 The detector runs `YOLO.predict` on CUDA (FP16) and feeds the boxes to ultralytics' `BYTETracker`, which we
 drive directly (instead of `YOLO.track`) so the tracker can be reset on seeks and timed separately.
-On startup it verifies that the network weights really live on the GPU; it refuses to fall back to the CPU.
+
+Engine: by default the weights are compiled once into a TensorRT engine (models/<name>_<h>x<w>_fp16.engine).
+On Windows, eager PyTorch is bound by kernel-launch overhead (YOLO26s: ~22 ms per frame at 36 % GPU
+utilization); TensorRT runs the same network in ~3 ms. Engines are GPU- and TensorRT-version specific, so they
+are built locally on first use and never committed. On startup the detector verifies it really runs on the GPU
+in the configured precision; it refuses to fall back to the CPU.
 """
 
 from __future__ import annotations
@@ -118,10 +123,11 @@ class Detector:
         if not torch.cuda.is_available():
             raise GpuRequiredError("CUDA is not available; DrivePilot runs perception on the NVIDIA GPU only")
         self.cfg = cfg
+        self._fallback = False  # True when the TensorRT engine is missing and PyTorch weights are used instead
         weights = cfg.weights if cfg.weights.is_absolute() else root / cfg.weights
         weights.parent.mkdir(parents=True, exist_ok=True)
-        # ultralytics downloads official weights by bare name into the CWD; resolve inside models/ instead.
-        self.model = YOLO(str(weights) if weights.exists() else str(weights.parent / weights.name))
+        self.model_path = self._resolve_model(weights)
+        self.model = YOLO(str(self.model_path), task="detect")
         names: dict[int, str] = dict(self.model.names)
         by_name = {v: k for k, v in names.items()}
         self.names = names
@@ -129,7 +135,7 @@ class Detector:
         self.device = f"cuda:{cfg.device}"
         self._predict_args: dict[str, Any] = {
             "device": cfg.device,
-            "imgsz": cfg.imgsz,
+            "imgsz": list(cfg.imgsz),
             "conf": min(cfg.conf, cfg.tracker.track_low_thresh),
             "iou": cfg.iou,
             "classes": self.class_ids,
@@ -144,6 +150,23 @@ class Detector:
         self._max_id = 0
         self.tracker = self._new_tracker()
         self.warmup()
+
+    def _resolve_model(self, weights: Path) -> Path:
+        """The file to load: the TensorRT engine (built by scripts/build_engine.py), or the .pt weights."""
+        if self.cfg.engine == "pytorch":
+            return weights
+        h, w = self.cfg.imgsz
+        engine = weights.with_name(f"{weights.stem}_{h}x{w}_{'fp16' if self.cfg.half else 'fp32'}.engine")
+        if engine.exists():
+            return engine
+        # Building needs a separate environment (see scripts/build_engine.py), so it is never done implicitly.
+        log.warning(
+            "TensorRT engine missing: falling back to PyTorch (~3x slower here). "
+            "Build it once with: .venv/Scripts/python scripts/build_engine.py",
+            engine=str(engine),
+        )
+        self._fallback = True
+        return weights
 
     def _new_tracker(self) -> BYTETracker:
         t = self.cfg.tracker
@@ -169,20 +192,39 @@ class Detector:
             self.model.predict(dummy, **self._predict_args)
         predictor = self.model.predictor
         assert predictor is not None
-        param = next(predictor.model.model.parameters())  # AutoBackend wraps the real network as .model
-        expected_dtype = torch.float16 if self.cfg.half else torch.float32
-        if param.device.type != "cuda" or param.dtype != expected_dtype:
-            raise GpuRequiredError(f"model weights on {param.device} ({param.dtype}), expected cuda {expected_dtype}")
+        device, precision = self._verify_gpu(predictor.model)
         log.info(
             "detector ready",
-            weights=self.cfg.weights.name,
-            device=str(param.device),
-            dtype=str(param.dtype),
-            imgsz=self.cfg.imgsz,
+            model=self.model_path.name,
+            engine="pytorch (fallback)" if self._fallback else self.cfg.engine,
+            device=device,
+            precision=precision,
+            imgsz=list(self.cfg.imgsz),
             classes=list(self.cfg.classes),
             gpu_mem_mb=round(torch.cuda.memory_allocated(self.cfg.device) / 1e6),
         )
         self.reset()
+
+    def _verify_gpu(self, backend: Any) -> tuple[str, str]:
+        """Check the loaded network really runs on CUDA in the configured precision. Returns (device, precision)."""
+        want_fp16 = self.cfg.half
+        if self.cfg.engine == "pytorch" or self._fallback:
+            param = next(backend.model.parameters())  # AutoBackend wraps the real network as .model
+            ok = param.device.type == "cuda" and param.dtype == (torch.float16 if want_fp16 else torch.float32)
+            device, precision = str(param.device), str(param.dtype)
+        else:
+            impl = backend.backend
+            quantize = ((getattr(impl, "metadata", None) or {}).get("args") or {}).get("quantize")
+            device = str(backend.device)
+            precision = "fp16" if quantize == 16 else "fp32"
+            ok = (
+                type(impl).__name__ == "TensorRTBackend"
+                and backend.device.type == "cuda"
+                and (quantize == 16) == want_fp16
+            )
+        if not ok:
+            raise GpuRequiredError(f"detector is not on the GPU as configured: device={device}, precision={precision}")
+        return device, precision
 
     def reset(self) -> None:
         """Forget all tracks (call on a new video segment: seek, loop, source restart). Ids stay unique."""

@@ -10,7 +10,7 @@ to runs/<stamp>_bench/bench.json, and the exit status is 1 if a target is missed
 
 Targets (BUILD_PLAN.md M1), checked in real-time mode:
 - processed fps >= 25/30 of the source frame rate;
-- p95 processing time (detect + track + ego motion) < 40 ms;
+- p95 processing time (detect + track, with ego motion in parallel) < 40 ms;
 - p95 latency from frame decode to result (processing + waiting for the worker to be free) < 70 ms.
 The detector refuses to start unless its weights are on CUDA in the configured precision.
 """
@@ -73,7 +73,7 @@ def run_mode(
     media_times: list[float] = []
 
     def collect(result: PerceptionResult) -> None:
-        processing_ms.append(result.timings_ms["detect_track_total"] + result.timings_ms["ego_motion"])
+        processing_ms.append(result.timings_ms["processing"])
         media_times.append(result.frame.t)
 
     worker.add_listener(collect)
@@ -123,7 +123,7 @@ def build_checks(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "ok": r["processed_fps"] >= fps_target,
             },
             {
-                "name": "p95 processing ms (detect + track + ego)",
+                "name": "p95 processing ms (detect + track || ego)",
                 "value": round(processing, 1),
                 "target": f"< {TARGET_P95_PROCESSING_MS}",
                 "ok": processing < TARGET_P95_PROCESSING_MS,

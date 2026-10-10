@@ -10,6 +10,7 @@ torchvision==0.29.1+cu126
 # Detection + tracking (YOLO26s + ByteTrack)
 ultralytics==8.4.175
 lap==0.5.13
+tensorrt-cu12==11.4.0.106    # loads the detector's TensorRT engine (built by scripts/build_engine.py)
 opencv-python==5.0.0.93
 av==18.1.0                 # PyAV: H.264 decoding of the scrcpy camera stream (D3D11VA/CUDA hardware decode)
 numpy==2.4.6

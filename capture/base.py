@@ -85,14 +85,14 @@ class VideoSource(ABC):
 
         Returns None on timeout or when the stream has finished. Raises the capture thread's error if it failed.
         """
-        deadline = None if timeout is None else time.monotonic() + timeout
+        deadline = None if timeout is None else time.perf_counter() + timeout
         with self._cond:
             while self._latest is None:
                 if self._error is not None:
                     raise RuntimeError(f"{self.name} capture failed") from self._error
                 if self._finished or self._stop.is_set():
                     return None
-                remaining = None if deadline is None else deadline - time.monotonic()
+                remaining = None if deadline is None else deadline - time.perf_counter()
                 if remaining is not None and remaining <= 0:
                     return None
                 self._cond.wait(remaining)

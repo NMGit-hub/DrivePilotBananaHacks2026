@@ -228,9 +228,9 @@ class ScrcpyCameraSource(VideoSource):
     def _connect(self) -> socket.socket:
         """Connect to the forwarded port; the dummy byte proves the server (not just adb) is listening."""
         assert self._port is not None
-        deadline = time.monotonic() + CONNECT_TIMEOUT_S
+        deadline = time.perf_counter() + CONNECT_TIMEOUT_S
         last_error = "timeout"
-        while time.monotonic() < deadline:
+        while time.perf_counter() < deadline:
             if self._server is not None and self._server.poll() is not None:
                 time.sleep(0.2)  # let the drain thread collect the last lines
                 raise CameraError(f"scrcpy-server exited: {' | '.join(self._server_log)[-500:]}")
@@ -262,20 +262,20 @@ class ScrcpyCameraSource(VideoSource):
         buf = bytearray(n)
         view = memoryview(buf)
         got = 0
-        last_data = time.monotonic()
+        last_data = time.perf_counter()
         while got < n:
             if self._stop.is_set():
                 raise ConnectionAbortedError("stopping")
             try:
                 k = sock.recv_into(view[got:], n - got)
             except TimeoutError:
-                if time.monotonic() - last_data > self.cfg.stall_timeout_s:
+                if time.perf_counter() - last_data > self.cfg.stall_timeout_s:
                     raise ConnectionError(f"no video from the phone for {self.cfg.stall_timeout_s:.0f} s") from None
                 continue
             if k == 0:
                 raise ConnectionError("scrcpy stream closed")
             got += k
-            last_data = time.monotonic()
+            last_data = time.perf_counter()
         return bytes(buf)
 
     def stop(self) -> None:
@@ -326,7 +326,7 @@ class ScrcpyCameraSource(VideoSource):
                             image=image,
                             t=self.clock.now(),
                             index=index,
-                            captured_at=time.monotonic(),
+                            captured_at=time.perf_counter(),
                             segment=max(segment, 0),
                         )
                     )

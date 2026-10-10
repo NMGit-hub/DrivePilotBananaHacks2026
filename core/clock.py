@@ -1,6 +1,9 @@
 """Clocks shared by the vision and voice paths.
 
-All timing logic (how long a car has been stopped, when a question ended, alert latency) runs on one clock:
+All timing logic (how long a car has been stopped, when a question ended, alert latency) runs on one clock.
+Both clocks use time.perf_counter: on Windows time.monotonic only ticks every 15.6 ms, which would quantize
+frame timestamps and the per-second rates computed from them.
+
 - camera mode: `WallClock`: seconds since start on the monotonic clock;
 - file mode: `MediaClock`: the video's own timeline, which advances in real time while playing and can be
   paused and seeked. Logic driven by media time is deterministic and survives pause/seek.
@@ -25,7 +28,7 @@ class Clock(Protocol):
 class WallClock:
     """Monotonic seconds since construction (camera mode)."""
 
-    def __init__(self, monotonic: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, monotonic: Callable[[], float] = time.perf_counter) -> None:
         self._monotonic = monotonic
         self._t0 = monotonic()
 
@@ -40,7 +43,9 @@ class MediaClock:
     Thread-safe: the capture thread drives pause/seek while other threads read `now()`.
     """
 
-    def __init__(self, start: float = 0.0, rate: float = 1.0, monotonic: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self, start: float = 0.0, rate: float = 1.0, monotonic: Callable[[], float] = time.perf_counter
+    ) -> None:
         if rate <= 0:
             raise ValueError("rate must be positive")
         self._monotonic = monotonic

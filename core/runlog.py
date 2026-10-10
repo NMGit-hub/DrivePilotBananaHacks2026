@@ -70,7 +70,7 @@ class RunRecorder:
         self._text_queue: queue.SimpleQueue[Any] = queue.SimpleQueue()
         self._frame_queue: queue.Queue[Any] = queue.Queue(maxsize=max_pending_frames)
         self._files = {
-            name: open(self.dir / f"{name}.jsonl", "a", encoding="utf-8", buffering=1)  # noqa: SIM115
+            name: open(self.dir / f"{name}.jsonl", "a", encoding="utf-8")  # noqa: SIM115 - closed in close()
             for name in ("events", "detections", "perf")
         }
         self._text_thread = threading.Thread(target=self._text_writer, name="run-text-writer", daemon=True)
@@ -132,10 +132,14 @@ class RunRecorder:
                 return False
 
     def _put_text(self, stream: str, record: dict[str, Any]) -> None:
+        if self._closed:
+            return  # cheap early exit: after close() producers must not keep burning the GIL on serialization
         line = dumps_json_line(record)  # serialize now: the caller may mutate its objects afterwards
-        with self._lock:
-            if not self._closed:
-                self._text_queue.put((stream, line))
+        # No lock on this hot path (a busy producer could starve close() of an unfair lock): a record that races
+        # with close() and lands after the stop marker is still written, because the writer drains the queue
+        # after the marker before exiting.
+        if not self._closed:
+            self._text_queue.put((stream, line))
 
     # ------------------------------------------------------------------------------------- writers
 
@@ -143,16 +147,36 @@ class RunRecorder:
         while True:
             item = self._text_queue.get()
             if item is _STOP:
-                return
-            stream, line = item
-            if stream == "__flush__":
-                line.set()  # a threading.Event placed by flush(): everything before it is written
-                continue
+                while True:  # drain records that raced with close() and landed after the marker
+                    try:
+                        late = self._text_queue.get_nowait()
+                    except queue.Empty:
+                        return
+                    if late is not _STOP:
+                        self._write_text(late)
+            self._write_text(item)
+            if self._text_queue.empty():
+                self._flush_files()  # write in bulk under load, but never leave lines sitting in a buffer when idle
+
+    def _flush_files(self) -> None:
+        for handle in self._files.values():
             try:
-                self._files[stream].write(line + "\n")
+                handle.flush()
             except Exception:
                 self.failed_writes += 1
-                log.exception("run recorder text write failed", stream=stream)
+                log.exception("run recorder flush failed")
+
+    def _write_text(self, item: tuple[str, Any]) -> None:
+        stream, line = item
+        if stream == "__flush__":
+            self._flush_files()
+            line.set()  # a threading.Event placed by flush(): everything before it is on disk
+            return
+        try:
+            self._files[stream].write(line + "\n")
+        except Exception:
+            self.failed_writes += 1
+            log.exception("run recorder text write failed", stream=stream)
 
     def _frame_writer(self) -> None:
         while True:
@@ -173,21 +197,20 @@ class RunRecorder:
 
     def flush(self, timeout: float = 30.0) -> None:
         """Block until everything queued so far is written (or `timeout` passes)."""
+        if self._closed:
+            return
         marker = threading.Event()
-        with self._lock:
-            if self._closed:
-                return
-            self._text_queue.put(("__flush__", marker))
+        self._text_queue.put(("__flush__", marker))
         self._frame_queue.join()
         marker.wait(timeout)
 
     def close(self) -> None:
         """Drain both queues, stop the writers and close the files. Idempotent; later records are ignored."""
-        with self._lock:
+        with self._lock:  # only makes close() idempotent; producers never take this lock for text
             if self._closed:
                 return
             self._closed = True
-            self._text_queue.put(_STOP)
+        self._text_queue.put(_STOP)
         self._frame_queue.put(_STOP)  # blocks only until the frame writer frees a slot
         self._text_thread.join()
         self._frame_thread.join()

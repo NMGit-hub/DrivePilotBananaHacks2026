@@ -27,9 +27,11 @@ gps:
 
 perception:
   weights: models/yolo26s.pt  # downloaded on first run
+  engine: tensorrt          # tensorrt (~10x faster on Windows; built once, ~7 min) | pytorch
+  engine_workspace_gb: 4.0
   device: 0                 # CUDA device; the pipeline refuses to run on the CPU
   half: true
-  imgsz: 640                # inference size (multiple of 32)
+  imgsz: [384, 640]         # inference height, width (multiples of 32); 16:9 frames letterbox to this
   conf: 0.25
   iou: 0.7
   classes: [car, truck, bus, motorcycle, stop sign, traffic light, person, bicycle]

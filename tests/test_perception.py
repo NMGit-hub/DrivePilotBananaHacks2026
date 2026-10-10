@@ -257,8 +257,8 @@ def test_detector_runs_on_gpu_and_tracks_cars() -> None:
     cfg = load_config()
     detector = Detector(cfg.perception, cfg.root)
     assert detector.model.predictor is not None
-    param = next(detector.model.predictor.model.model.parameters())
-    assert param.device.type == "cuda" and param.dtype == torch.float16
+    device, precision = detector._verify_gpu(detector.model.predictor.model)  # raises if not on the GPU
+    assert device.startswith("cuda") and precision in ("fp16", "torch.float16")
 
     source = FileSource(DEV_CLIP, realtime=False, start_s=6.0)  # the pickup crossing after the stop line
     source.start()

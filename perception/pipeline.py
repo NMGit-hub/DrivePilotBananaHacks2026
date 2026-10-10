@@ -1,5 +1,9 @@
 """The perception worker: video source → YOLO26s + ByteTrack → ego motion → listeners, on its own thread.
 
+Detection (GPU, TensorRT) and ego motion (CPU, OpenCV) are independent and both release the GIL, so they run
+concurrently: ego motion on a helper thread, masking moving objects with the previous frame's detections (they
+move a few pixels in one frame period; the mask has a margin). Processing time is max(detect, ego), not the sum.
+
 Listeners (world state, UI, recorder hooks) are called synchronously on the perception thread with each
 `PerceptionResult`; they must be fast and must not block. Exceptions in a listener are logged and do not stop
 perception. Performance (fps, per-stage latency percentiles, GPU memory) is logged and recorded periodically.
@@ -9,6 +13,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -104,7 +109,7 @@ class PerceptionWorker:
         self.finished_at: float | None = None
         self.error: BaseException | None = None
         self.frame_errors = 0  # frames that failed (detector/ego exceptions) and were skipped
-        self.last_result_at: float | None = None  # time.monotonic() of the last delivered result
+        self.last_result_at: float | None = None  # time.perf_counter() of the last delivered result
 
     def add_listener(self, listener: Listener) -> None:
         """Register a callback for every result (call before start)."""
@@ -136,7 +141,7 @@ class PerceptionWorker:
         While stale, the world state is out of date: answers and alerts must say so instead of using it.
         """
         last = self.last_result_at
-        return last is None or time.monotonic() - last > max_age_s
+        return last is None or time.perf_counter() - last > max_age_s
 
     # ------------------------------------------------------------------------------------- the loop
 
@@ -151,15 +156,20 @@ class PerceptionWorker:
             self.error = exc
             log.exception("perception thread crashed")
         finally:
-            self.finished_at = time.monotonic()
+            self.finished_at = time.perf_counter()
 
     def _loop(self) -> None:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="ego-motion") as ego_pool:
+            self._loop_with(ego_pool)
+
+    def _loop_with(self, ego_pool: ThreadPoolExecutor) -> None:
         last_segment: int | None = None
         consecutive_errors = 0
+        prev_boxes: list[tuple[float, float, float, float]] = []
         window = StageStats()
-        window_start = time.monotonic()
+        window_start = time.perf_counter()
         window_frames = 0
-        self.started_at = time.monotonic()
+        self.started_at = time.perf_counter()
         while not self._stop.is_set():
             wait_start = time.perf_counter()
             frame = self.source.read(timeout=0.5)  # raises if the capture thread failed (camera unplugged...)
@@ -174,11 +184,16 @@ class PerceptionWorker:
             if new_segment:  # also on the first frame: the detector/estimator may carry state from a previous run
                 self.detector.reset()
                 self.ego.reset()
+                prev_boxes = []
             last_segment = frame.segment
 
             try:
+                started = time.perf_counter()
+                ego_future = ego_pool.submit(self.ego.update, frame, prev_boxes)
                 detection = self.detector(frame)
-                ego = self.ego.update(frame, detection.raw_boxes or [t.box for t in detection.tracks])
+                ego = ego_future.result()
+                processing_ms = (time.perf_counter() - started) * 1000
+                prev_boxes = detection.raw_boxes or [t.box for t in detection.tracks]
             except Exception:
                 self.frame_errors += 1
                 consecutive_errors += 1
@@ -192,13 +207,14 @@ class PerceptionWorker:
             consecutive_errors = 0
             timings = dict(detection.timings_ms)
             timings["ego_motion"] = ego.elapsed_ms
+            timings["processing"] = processing_ms  # wall time of detect + ego running in parallel
             timings["wait_for_frame"] = wait_ms
-            timings["latency"] = (time.monotonic() - frame.captured_at) * 1000
+            timings["latency"] = (time.perf_counter() - frame.captured_at) * 1000
             result = PerceptionResult(
                 frame=frame, tracks=detection.tracks, ego=ego, timings_ms=timings, new_segment=new_segment
             )
 
-            self.last_result_at = time.monotonic()
+            self.last_result_at = time.perf_counter()
             for listener in self._listeners:
                 try:
                     listener(result)
@@ -213,10 +229,10 @@ class PerceptionWorker:
             window_frames += 1
             self.run_stats.add(timings)
             window.add(timings)
-            elapsed = time.monotonic() - window_start
+            elapsed = time.perf_counter() - window_start
             if elapsed >= self.perf_interval_s:
                 self._report(window, window_frames / elapsed)
-                window, window_start, window_frames = StageStats(), time.monotonic(), 0
+                window, window_start, window_frames = StageStats(), time.perf_counter(), 0
 
     def _report(self, window: StageStats, fps: float) -> None:
         summary = window.summary()

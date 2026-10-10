@@ -231,7 +231,7 @@ class FileSource(VideoSource):
                 resync_clock = False
             elif not self.realtime:
                 self._media_clock.seek(t)  # lock-step: the (paused) clock follows the frames
-            self._publish(Frame(image=image, t=t, index=index, captured_at=time.monotonic(), segment=segment))
+            self._publish(Frame(image=image, t=t, index=index, captured_at=time.perf_counter(), segment=segment))
 
     def _wait_until(self, t: float) -> bool:
         """Sleep until media time `t`. Returns False if interrupted by a control change or stop."""

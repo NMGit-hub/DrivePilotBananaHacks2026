@@ -38,7 +38,10 @@ uv pip install --python .venv\Scripts\python.exe -r requirements.txt --index-str
 # 3. Check that the GPU is actually used (PyTorch, YOLO26s and CTranslate2)
 .venv\Scripts\python scripts\check_gpu.py
 
-# 4. API keys
+# 4. Build the TensorRT engine for the detector (one-time per machine, ~10 min; uses its own build venv)
+.venv\Scripts\python scriptsuild_engine.py
+
+# 5. API keys
 copy .env.example .env
 #    then edit .env and fill in ANTHROPIC_API_KEY and MAPBOX_ACCESS_TOKEN
 ```
@@ -62,7 +65,16 @@ Everything lives in [config.yaml](config.yaml). The most important settings:
 
 ## Running
 
-Run instructions are added here as each milestone lands (see PROGRESS.md).
+The full app is wired in milestone M7 (see PROGRESS.md). Available now:
+
+```powershell
+.venv\Scripts\python scriptsetch_dev_clips.py        # download the public dev clips (BDD100K)
+.venv\Scripts\python scriptsench_pipeline.py         # perception FPS / latency / GPU memory vs targets
+.venv\Scripts\python scripts\eval_ego_motion.py        # "are we stopped?" vs hand labels
+.venv\Scripts\python scripts\eval_traffic_lights.py    # traffic-light reading vs hand labels
+```
+
+For drives: plug the laptop in and set Windows to **Best performance** power mode.
 
 ## Tests
 

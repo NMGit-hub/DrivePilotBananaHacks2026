@@ -146,9 +146,15 @@ class PerceptionConfig(_Strict):
     """YOLO26s detector on the GPU plus ByteTrack."""
 
     weights: ConfigPath = Path("models/yolo26s.pt")
+    engine: Literal["tensorrt", "pytorch"] = Field(
+        "tensorrt", description="tensorrt: ~10x faster on Windows (built once from the weights); pytorch: eager."
+    )
+    engine_workspace_gb: float = Field(4.0, gt=0.0, description="TensorRT builder workspace.")
     device: int = Field(0, ge=0, description="CUDA device index. The pipeline refuses to run on the CPU.")
     half: bool = Field(True, description="FP16 inference.")
-    imgsz: int = Field(640, ge=320, le=1920, description="Inference size (long side, multiple of 32).")
+    imgsz: Annotated[tuple[int, int], Strict(False)] = Field(
+        (384, 640), description="Inference size (height, width), multiples of 32; 384x640 fits 16:9 frames."
+    )
     conf: float = Field(0.25, gt=0.0, lt=1.0)
     iou: float = Field(0.7, gt=0.0, lt=1.0)
     classes: Annotated[tuple[str, ...], Strict(False)] = DETECTION_CLASSES  # YAML gives a list
@@ -159,9 +165,9 @@ class PerceptionConfig(_Strict):
 
     @field_validator("imgsz")
     @classmethod
-    def _multiple_of_32(cls, value: int) -> int:
-        if value % 32:
-            raise ValueError("must be a multiple of 32")
+    def _multiple_of_32(cls, value: tuple[int, int]) -> tuple[int, int]:
+        if any(v % 32 or not 128 <= v <= 1920 for v in value):
+            raise ValueError("height and width must be multiples of 32 between 128 and 1920")
         return value
 
     @field_validator("classes")
@@ -261,8 +267,11 @@ class TrafficLightConfig(_Strict):
     s_min_halo: int = Field(70, ge=0, le=255)
     v_halo_min: int = Field(90, ge=0, le=255)
     min_confidence: float = Field(0.5, ge=0.0, le=1.0)
-    stable_s: float = Field(0.5, gt=0.0)
-    green_confirm_s: float = Field(0.3, ge=0.0)
+    stable_s: float = Field(0.5, gt=0.0, description="Reported state = majority over this window.")
+    green_confirm_frames: int = Field(5, ge=1, description="Consecutive green frames that confirm the change.")
+    red_memory_s: float = Field(5.0, gt=0.0, description="A green counts as a change if red was seen this recently.")
+    anchor_pad: float = Field(0.15, ge=0.0, le=1.0, description="Pad light boxes so the whole housing is read.")
+    anchor_weight: float = Field(0.2, gt=0.0, le=1.0, description="Vote weight of a remembered (undetected) light.")
 
 
 # ------------------------------------------------------------------------------------------- vision
