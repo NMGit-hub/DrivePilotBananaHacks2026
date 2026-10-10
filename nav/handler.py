@@ -61,6 +61,7 @@ REROUTED_RECENTLY_S = 60.0  # "did I miss my turn?" → "Yes, so I've rerouted."
 QUICK_REROUTE_S = 90.0  # another reroute this soon doubles the wait before the next one
 MAX_REROUTE_WAIT_S = 120.0
 LEFT_ROUTE_SHARE = 0.5  # asked "did I miss my turn?": this share of the off-route distance already counts
+ROUNDABOUT_ANNOUNCE_M = 150.0  # "At the roundabout, take the 2nd exit..." when the roundabout is this close
 LaneReader = Callable[[], tuple[int, int] | None]  # -> (lanes counted in our direction, our lane from the left)
 _MATCH_STOPWORDS = {
     "which", "what", "lane", "lanes", "for", "the", "to", "i", "should", "be", "in", "am", "get", "take", "is",
@@ -411,7 +412,10 @@ class NavHandler:
         out = []
         step = progress.next_step
         near_roundabout = (
-            step is not None and step.is_roundabout and progress.to_next_m is not None and progress.to_next_m <= 150
+            step is not None
+            and step.is_roundabout
+            and progress.to_next_m is not None
+            and progress.to_next_m <= ROUNDABOUT_ANNOUNCE_M
         )
         if near_roundabout and step is not None and self._once("roundabout", step.index):
             out.append(("nav_roundabout", f"{_cap(maneuver_phrase(step))}."))
