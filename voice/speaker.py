@@ -9,6 +9,8 @@ interrupt anything and an interrupted answer resumes after. Here:
   0.3 s target); the interrupted sentence is said again afterwards, unless the alert made it stale
   (`Utterance.drops_answers`: "You're up", "Light's green", route changes), in which case queued answers are
   dropped too.
+- A SAFETY alert (a pedestrian in our path) also goes ahead of queued alerts that aren't, and cuts off one that is
+  playing (a navigation sentence takes seconds); that alert is said again right after it.
 - `stop()` silences everything ("stop"); `stop_answers()` stops only answers (the wake word, "repeat that"), so
   a false wake can't lose an alert; `listening()` is `stop_answers()` plus a short blip.
 - A stop or alert that lands just before a sound would start still prevents it: the start is checked under the
@@ -122,8 +124,15 @@ class AudioSpeaker:
                     state.answer_epoch += 1
                     dropped += state.answers
                     state.answers.clear()
-                state.alerts.append(item)
-                if state.playing is not None and state.playing.utterance.kind != "alert":
+                playing = state.playing.utterance if state.playing is not None else None
+                if utterance.priority >= Priority.SAFETY:
+                    state.alerts.insert(self._after_safety(), item)  # ahead of alerts that aren't safety
+                    if playing is not None and playing.kind == "alert" and playing.priority < Priority.SAFETY:
+                        state.interrupted = True  # (said again after this one: see _play_loop)
+                        self.output.stop()
+                else:
+                    state.alerts.append(item)
+                if playing is not None and playing.kind != "alert":
                     state.interrupted = True
                     self.output.stop()
             else:
@@ -223,6 +232,12 @@ class AudioSpeaker:
 
     # ---------------------------------------------------------------------------------- playback
 
+    def _after_safety(self) -> int:
+        """Where a safety alert (or an alert it cut off) goes in the alert queue: after the safety alerts and cues
+        already at its front (caller holds the lock)."""
+        alerts = self._state.alerts
+        return next((i for i, it in enumerate(alerts) if it.utterance.priority < Priority.SAFETY), len(alerts))
+
     def _next_ready(self) -> _Item | None:
         """The next item to play, if it is rendered (caller holds the lock): alerts before answers."""
         state = self._state
@@ -253,13 +268,21 @@ class AudioSpeaker:
                     return self._state.generation == generation and not self._state.interrupted
 
                 sound_at = self.output.play(audio, self.tts.rate, should_start=may_start)
+            ended_at = time.perf_counter()
             with self._cond:
                 stopped = self._state.generation != generation
                 interrupted = stopped or self._state.interrupted
                 fresh = item.epoch == self._state.answer_epoch
-                if interrupted and not stopped and item.utterance.kind == "answer" and fresh:
+                u = item.utterance
+                if interrupted and not stopped and u.kind == "answer" and fresh:
                     resumed = _Item(item.utterance, item.queued_at, item.audio, item.epoch)
                     self._state.answers.appendleft(resumed)
+                elif interrupted and not stopped and u.kind == "alert" and u.priority < Priority.SAFETY:
+                    # Cut off by a safety alert: said again right after it (unless it had just ended by itself).
+                    duration = 0.0 if audio is None else len(audio) / self.tts.rate
+                    if sound_at is None or ended_at - sound_at < duration - 0.05:
+                        resumed = _Item(item.utterance, item.queued_at, item.audio, item.epoch)
+                        self._state.alerts.insert(self._after_safety(), resumed)
                 record = self._finish(item, sound_at, interrupted)
             self._report(record)
 

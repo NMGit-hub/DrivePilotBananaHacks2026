@@ -88,15 +88,24 @@ def frame_packet(
             item.update(color=GRAY if v.track_id in parked else WHITE)
         items.append(item)
 
+    people = {p.track_id: p for p in snap.pedestrians.people}
     for tr in tracks:
         if tr.cls in PEOPLE:
+            person = people.get(tr.track_id)
+            danger = (
+                person is not None
+                and snap.pedestrians.moving
+                and person.ignored is None
+                and (person.in_path or person.entering)
+            )
+            parked_bike = person is not None and person.kind == "bicycle"
             items.append(
                 {
                     "kind": "person",
                     "id": tr.track_id,
                     "box": _norm(tr.box, width, height),
-                    "color": AMBER,
-                    "label": PEOPLE[tr.cls],
+                    "color": RED if danger else GRAY if parked_bike else AMBER,  # red: in (or entering) our path
+                    "label": "parked bicycle" if parked_bike else PEOPLE[tr.cls],
                 }
             )
         elif tr.cls in SIGNS:

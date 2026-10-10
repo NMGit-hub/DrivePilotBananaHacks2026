@@ -30,6 +30,8 @@ from state.approach import LEAD, classify_approach, front_of_approach, is_clippe
 from state.colors import color_name, frame_gains
 from state.parking import EMPTY as EMPTY_PARKING
 from state.parking import ParkingEvent, ParkingSnapshot, ParkingTracker
+from state.pedestrians import EMPTY as EMPTY_PEDESTRIANS
+from state.pedestrians import PedestrianEvent, PedestrianSnapshot, PedestrianTracker
 from state.stop_queue import Approach, EgoStop, QueueSnapshot, StopQueue, WaitingVehicle
 from state.traffic_light import LightColor, LightReading, TrafficLightTracker
 from state.vehicle_motion import VehicleMotionTracker, VehicleState
@@ -61,7 +63,7 @@ class VehicleView:
 class WorldEvent:
     """Something the alert engine may announce."""
 
-    kind: str  # "your_turn", "light_green", "arrived_at_stop", "left_intersection", "drove_off", "parking_spot", ...
+    kind: str  # "your_turn", "light_green", "arrived_at_stop", "drove_off", "parking_spot", "pedestrian_in_path", ...
     t: float
     detail: dict[str, object] = field(default_factory=dict)  # logged
     payload: object = field(default=None, compare=False, repr=False)  # not logged (parking: (event, frame))
@@ -87,6 +89,7 @@ class WorldSnapshot:
     people_ahead: int = 0  # pedestrians in front of us (answers add "watch for the pedestrian")
     behind_lead: bool = False  # stopped, and a car was in front of us during this stop (not at the line yet)
     parking: ParkingSnapshot = EMPTY_PARKING  # parked cars, open spaces, "looks like a lot" (V2)
+    pedestrians: PedestrianSnapshot = EMPTY_PEDESTRIANS  # people and cyclists vs. our path zone (V2)
 
 
 def _empty_queue(t: float) -> QueueSnapshot:
@@ -113,6 +116,7 @@ class WorldState:
         self.queue = StopQueue(cfg.stop_queue)
         self.lights = TrafficLightTracker(cfg.traffic_light)
         self.parking = ParkingTracker(cfg.parking, cfg.effective_hfov_deg)
+        self.pedestrians = PedestrianTracker(cfg.pedestrians, cfg.effective_hfov_deg, cfg.parking.camera_height_m)
         self._parking_mode: str | None = None  # a mode change asked by the parking watch (applied on the next frame)
         self._colors: dict[int, tuple[float, str]] = {}  # track id -> (when named, color)
         self._frames: deque[Frame] = deque()  # guarded by _lock
@@ -131,6 +135,7 @@ class WorldState:
         self.queue.reset()
         self.lights.reset()
         self.parking.reset()
+        self.pedestrians.reset()
         self._colors.clear()
         with self._lock:
             self._frames.clear()
@@ -224,6 +229,25 @@ class WorldState:
         ):
             events.append(WorldEvent(f"parking_{pe.kind}", t, _parking_detail(pe), payload=(pe, frame)))
 
+        # Pedestrians and cyclists in our path (the horizon row comes from the parking tracker's car boxes). Safety
+        # warnings go out before this frame's other events (after a segment reset, which clears the alert engine).
+        warnings = [
+            WorldEvent("pedestrian_in_path", t, _pedestrian_detail(pe), payload=pe)
+            for pe in self.pedestrians.update(
+                t,
+                frame.width,
+                frame.height,
+                result.tracks,
+                self.parking.snapshot().horizon,
+                ego.stopped,
+                ego.homography,
+                gps_speed,
+                ego.confident,
+            )
+        ]
+        first = 1 if events and events[0].kind == "segment_reset" else 0
+        events[first:first] = warnings
+
         people_ahead = sum(
             1
             for tr in result.tracks
@@ -257,6 +281,7 @@ class WorldState:
             people_ahead=people_ahead,
             behind_lead=ego.stopped and self._lead_this_stop,
             parking=self.parking.snapshot(),
+            pedestrians=self.pedestrians.snapshot(),
         )
         with self._lock:
             self._buffer_frame(frame)
@@ -374,6 +399,20 @@ def _parking_detail(event: ParkingEvent) -> dict[str, object]:
     if event.car is not None:
         detail.update(side=event.car.side, track=event.car.track_id, z=round(event.car.z, 1))
     return detail
+
+
+def _pedestrian_detail(event: PedestrianEvent) -> dict[str, object]:
+    """What a pedestrian warning logs (and the alert engine phrases it from)."""
+    p = event.person
+    return {
+        "track": p.track_id,
+        "cls": p.kind,
+        "how": event.how,
+        "side": event.side,
+        "x": round(p.x, 1),
+        "z": round(p.z, 1),
+        "vx": None if p.vx is None else round(p.vx, 2),
+    }
 
 
 def empty_snapshot(t: float = 0.0) -> WorldSnapshot:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -207,3 +208,20 @@ def test_other_sites_cannot_watch_the_video_socket() -> None:
 def test_the_plain_v1_page_is_served_when_overlays_are_off() -> None:
     with TestClient(create_server(UiHub(), Actions(), overlays=False), base_url="http://localhost") as client:
         assert "/video.mjpg" in client.get("/").text and "/ws/video" in client.get("/v2").text
+
+
+def test_someone_in_our_path_is_red_while_we_move() -> None:
+    from state.pedestrians import PedestrianSnapshot, PersonView
+
+    def person(track_id: int, in_path: bool, kind: str = "pedestrian") -> PersonView:
+        return PersonView(track_id, kind, (500, 300, 540, 420), 0.2, 9.0, 0.2, None, 3.0, in_path, False, 3, False)
+
+    tracks = [Track(20, "person", 0.9, (500, 300, 540, 420)), Track(21, "person", 0.9, (900, 300, 940, 420))]
+    tracks.append(Track(22, "bicycle", 0.8, (700, 320, 760, 420)))
+    for moving, expected in ((True, RED), (False, AMBER)):
+        peds = PedestrianSnapshot(10.0, None, moving, None if moving else "stopped", False,
+                                  (person(20, True), person(21, False), person(22, False, "bicycle")))  # fmt: skip
+        snap = replace(snapshot(), pedestrians=peds)
+        colors = {i["id"]: (i["color"], i["label"]) for i in items(frame_packet(snap, tracks, W, H), "person")}
+        assert colors[20] == (expected, "pedestrian") and colors[21] == (AMBER, "pedestrian")
+        assert colors[22] == (GRAY, "parked bicycle")
