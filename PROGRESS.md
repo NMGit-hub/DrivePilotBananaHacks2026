@@ -4,10 +4,30 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
-### M3: router, local answers, alert engine (2026-10-10; independent review pending)
+### M5 (part 1): vision-model answers (2026-10-10; independent review next)
+- `answers/vision.py`: one `VisionModel` interface (streaming text + JSON) with Claude Haiku (default),
+  Gemini, Ollama and Mock providers, picked by `vision_model`; failures become `VisionError`.
+- `answers/scene.py`: frames (latest full-size, earlier smaller), a traffic-light close-up for light questions,
+  day/time, our motion, tracker state; first-token/total deadlines with spoken fallbacks; bare-"go" net.
+  `answers/sentences.py`: speech starts on the first sentence. Assistant streams and lets "stop" cut it off.
+- Tools: `scripts/ask_model.py` + `eval/model_questions.yaml` (live questions on dev clips).
+
+### Wake word "Hey DrivePilot" (2026-10-10, trained in the background since step 2)
+- `models/wakeword/hey_drivepilot.onnx` (openWakeWord, 205 KB, tracked) + `scripts/wakeword/` (data, training,
+  evaluation; README with exact commands). Recommended: threshold 0.25, debounce 2 s, no `patience`.
+
+### M3: router, local answers, alert engine (2026-10-10)
+- **Independent review found safety bugs; all fixed with tests** (`tests/test_answers_safety.py` + a second
+  router table of the reviewer's 149 adversarial phrasings): 47/53 split-second phrasings had reached the
+  vision model while moving (now matched by shape: question frame + maneuver); "is it safe to pull out?" got
+  "Yes…" (no answer starts with "yes" any more); "should I wait?" got the "can I go?" answer (own intent);
+  "can I go?" at a yellow while moving got a judgment (refused); watch phrasings over-matched ("tell me where
+  to go" armed a light alert); a requested "you're up" could be eaten by the cooldown, survive "never mind",
+  be contradicted by a race, or fire at an unrelated light minutes later. All confirmed fixed by re-running
+  the reviewer's scenarios.
 - `voice/router.py`: ordered keyword/regex router: voice controls, "I'm going to <place>", "tell me when it's
   green" / "when I can go" watches, split-second questions (refused while moving), right of way (local),
-  navigation, lanes, everything else → vision model. 123-phrasing table test incl. the tricky cases ("can I go
+  navigation, lanes, everything else → vision model. 273-case tables incl. the tricky cases ("can I go
   right on red?" is a sign question; "did I miss my turn?" is navigation). ~50 µs per question.
 - `answers/local.py`: PLAN.md phrasing ("The white car on your left, then the gray truck across from you. You're
   third."), ties ("You and the car on your right stopped together. The car on the right goes first."), 4-way
@@ -80,11 +100,19 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - `requirements.txt` (pinned top-level) + `requirements-lock.txt` (full freeze; `.venv` matches it exactly).
 
 ## Verified (and how)
-- **Answers on real replays** (`scripts/ask_replay.py`): SF stop-sign clip: "can I go?" while moving → "We're
-  moving..."; at the stop → "Yes, nobody else is waiting. Check the intersection before you go." plus "Watch
-  for the pedestrian ahead" (a pedestrian with a dog crosses); "can I merge now?" while moving → refused. SF
+- **Answers on real replays** (`scripts/ask_replay.py`), re-run after the M3 fixes. SF stop-sign clip: "can I
+  go?" while still rolling → "I can't judge that safely while we're moving."; at the stop → "Nobody else is
+  waiting at the stop, so it's your turn. Check the intersection before you go."; "is it safe to pull out?" →
+  "By arrival order it's your turn, but I can't judge moving traffic. Check both ways before you go. Watch for
+  the pedestrian ahead." (a pedestrian with a dog crosses); "can I merge now?" while moving → refused. SF
   red-light clip: "can I go?" → "Not yet, the light's red. I'll tell you when it turns green."; "tell me when
   it's green" → alert at 36.56 s (hand label 36.4 s). Local answers take < 1 ms.
+- **Vision model on dev clips** (`scripts/ask_model.py --suite eval/model_questions.yaml`, Claude Haiku, live):
+  9/10 right (truck-route sign read exactly, overhead board honestly "too far to read", TD Bank, construction,
+  pedestrian crossing, red light, school-zone signs "can't read the text"); first sentence median 0.97 s,
+  max 1.6 s (target < 2.5 s to first audio). Miss: lane count (2 instead of 3) on one of two runs.
+- **Wake word** (`scripts/wakeword/evaluate.py`, held-out synthetic voices, `models/wakeword/metrics.json`):
+  recall 97.1% clean / 97.5% in unseen car noise (10 dB); 0 false accepts in 10.7 h of LibriSpeech.
 - **World timelines on real clips** (`scripts/world_timeline.py`): SF stop: arrival 21.54 s (ego label soft stop
   21.6 s), nobody waiting (checked on frames: the minivan on the left was crossing), left at 24.9 s. Suburban
   clip: rolls through its stop sign (no queue), later stops behind a car at a red light (no stop-sign queue).
@@ -116,9 +144,8 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
-- M3 independent review; M5 (vision model: Claude Haiku default, Gemini/Ollama/mock) in progress; then M4
-  (voice audio), M6 (navigation), M7 (app + screen), M8 (test sheet).
-- Background: "Hey DrivePilot" wake-word training (separate agent, `.venv-wakeword`).
+- M5 independent review; M4 (voice audio: wake word ready, then Silero VAD, faster-whisper, Piper TTS, synthetic
+  spoken-question tests); M6 (navigation), M7 (app + screen), M8 (test sheet).
 
 ## Test data
 - Source: BDD100K `videos/100k/val` clips (720p, 30 fps, ~40 s, US cities), pulled by HTTP range requests
@@ -130,6 +157,13 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   tested with synthetic GPX files in tests until real drives are recorded.
 
 ## Known issues / compromises
+- **Wake word trained on synthetic speech only** (Piper voices): real voices through the laptop mics may trigger
+  less often. Record 20-50 real "Hey DrivePilot" utterances in the car before the demo (threshold 0.10 is a safe
+  fallback: also 0 false accepts). Held-out car noise is one car; no in-car conversation/radio in the false-
+  accept tests. The training data uses non-commercial licenses (fine for the hackathon, not for a product).
+  `data/wakeword/` (34 GB) and `.venv-wakeword/` (5.7 GB) can be deleted; only the 205 KB model is needed.
+- **Lane counting by the vision model is unreliable** (said 2 lanes instead of 3 on one of two runs). M6 lane
+  guidance will ask for a structured count with a confidence and fall back to the route's lane data alone.
 - **No real multi-car 4-way stop on video yet.** BUILD_PLAN M2's "queue log matches my hand-labeled timeline
   on the dev 4-way-stop clip" can't be checked until we record one: the queue is verified with synthetic and
   pinhole-camera scenarios (with jitter) and on real single-car stops. Record 4-way stops with 1-3 other cars.
