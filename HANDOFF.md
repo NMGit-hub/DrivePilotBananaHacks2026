@@ -95,19 +95,31 @@ home, best first:
 BDD100K (Berkeley DeepDrive) has 100,000 40-second US dashcam clips, each with a GPS/IMU "info" file (1 fps
 location, speed and heading). The dev clips already in `data/videos/dev/` come from it, but from a mirror without the
 info files.
-1. Go to https://bdd-data.berkeley.edu/, create a free account and accept the license (the user must do this:
-   it's an account + a license agreement).
-2. Download **"BDD100K Info"** (the GPS/IMU json files, a few GB; `bdd100k_info.zip`). Optionally also the video
-   parts you want (they're large: the "100K Videos" set is split into 10 GB zips).
-3. Unzip into `data/bdd100k/info/`. Each clip has `<clip id>.json`, e.g. `b97b9ee8-612c36ef.json` for
-   `data/videos/dev/red_light_turns_green_sf__b97b9ee8-612c36ef.mov`.
-4. Next Claude session: write `scripts/bdd_info_to_gpx.py` (convert the json's location list - latitude,
-   longitude, speed, course, timestamp - into a GPX track whose first point is the video's start; check the
-   exact field names on a real file first), then run e.g.
+**Step by step for the user (about 20 minutes plus the download):**
+1. Make sure there's ~25 GB free on C: (the GPS download is a single ~11 GB zip; leave room to work).
+2. In Chrome, open **https://bdd-data.berkeley.edu/** and click **Download** (or **Register / Sign up**). Create a
+   free account with your email, confirm the email, and log in. You'll be asked to accept the BDD100K license
+   (research / non-commercial use): accept it.
+3. On the download page, find the **Info** item: "Info" / "GPS/IMU" / `bdd100k_info.zip`, about **11 GB**. Download
+   only that one. You do **not** need the big video zips: Claude can fetch just the clips it needs.
+   - If the official site doesn't load or the download fails, the same files are mirrored by HyperAI:
+     https://hyper.ai/en/datasets/11926 (look for `bdd100k_info.zip`; it may also need a free account).
+4. In File Explorer, create the folder `C:\ClaudeProjects\DrivePilot_BananaHacks2026\data\bdd100k\` and move the
+   downloaded `bdd100k_info.zip` into it. **Don't unzip it** (it holds ~100,000 small files; Claude will pull out
+   only the clips it needs).
+5. Tell Claude: "bdd100k_info.zip is in data/bdd100k/". That's all; the rest is Claude's job (below).
+
+**Then the next Claude session does:**
+6. Open the zip with Python's `zipfile` (no full extraction) and look at one real JSON first, e.g. the entry for
+   clip `b97b9ee8-612c36ef` (`data/videos/dev/red_light_turns_green_sf__b97b9ee8-612c36ef.mov`), to learn the
+   actual field names (expected: a list of locations with latitude, longitude, speed, course and a timestamp in
+   ms; verify, don't assume) and the split folders (train/val). Our dev clips are from the `val` split.
+7. Write `scripts/bdd_info_to_gpx.py` (zip + clip id -> GPX whose first point is the video's start, 1 fix/s; tests
+   with a small fixture), convert the dev clips, and run e.g.
    `.venv/Scripts/python -m app --video data/videos/dev/red_light_turns_green_sf__b97b9ee8-612c36ef.mov --gpx data/gps/b97b9ee8-612c36ef.gpx`.
-5. To get specific scenes (4-way stops with other cars, roundabouts, busy parking lots), search BDD100K's
-   labels/attributes or scan clips with `scripts/world_timeline.py`; pull single clips by HTTP range requests the
-   way `scripts/fetch_dev_clips.py` does.
+8. For new scenes (busy parking lots for the parking feature, 4-way stops with other cars, roundabouts), pick clip
+   ids from the info/label files or by scanning, and download single videos by HTTP range requests from the mirror
+   `scripts/fetch_dev_clips.py` already uses (`linxxx3/bdd100k_videos` on Hugging Face), then convert their GPS.
 Limits: 40 s per clip (navigation questions over a whole route need option B), US cities (mostly the Bay Area and
 New York), 720p, non-commercial license (fine for the hackathon, not for the submission video, which should use
 the team's own footage).

@@ -24,6 +24,7 @@ data/audio/
 data/wakeword/
 data/cache/
 data/routes/
+data/bdd100k/
 *.mp4
 *.mov
 *.mkv
