@@ -1,4 +1,4 @@
-# Handoff: DrivePilot, V2 in progress (2026-10-10, ~15:00 PDT)
+# Handoff: DrivePilot, V2 in progress (2026-10-10, ~16:15 PDT)
 
 For the next Claude Code session. Read this first, then CLAUDE.md (standing rules), V2_BUILD_PLAN.md (the V2
 milestones + the user's decisions), PROGRESS.md (detailed status, measurements, known issues), PLAN.md (product
@@ -59,22 +59,28 @@ if time runs short (V2_BUILD_PLAN.md "Order and cut line").
   "Speed limit is now 35." after two agreeing frames, school zone, context lines; app wiring waits for the merge.
 - `config.yaml` has `parking:`, `memory:`, `sign_alerts` defaults, `ui:` overlay keys, `vision.mark_objects`.
 
-## 3. In flight / next steps (in order)
-1. **Independent review** of 9da882c..75447f2 (parking fixes, M2, M4): a subagent is running; fix its findings with
-   regression tests, then push.
-2. **V2-M3 pedestrians**: a subagent builds it in worktree `.claude/worktrees/agent-a646a9a46d39b56d8` (branch
-   `worktree-agent-a646a9a46d39b56d8`): review its report and diff, merge into main (conflicts expected in
-   `app.py`, `core/config.py`, `state/world.py`, `answers/alerts.py`), run everything, push.
-3. **V2-M5 YOLOPv2 lanes/drift**: needs the user's OK to download `yolopv2.pt` (156 MB, official GitHub release
-   CAIC-AD/YOLOPv2 V0.0.1, MIT): asked on 2026-10-10 ~15:00.
-4. **V2-M6 sign detector**: merge `v2-signs` when `scripts/signs/STATUS.md` (in `C:\ClaudeProjects\DrivePilot_signs`)
-   says ready (due Sunday 11:00); then wire `SignWorker` + `SignTracker` into the app (world thread offers frames;
-   alerts through `assistant.say`; pre-render `state.signs.alert_texts`; HUD speed-limit badge; `memory.add_sign`
-   with the reading; `tracker.context()` into the vision prompt's extra context).
-5. M2 leftovers: screenshots of each overlay for the README; frame-to-screen and perception fps measured without the
-   sign training on the GPU. Known small bug: two quick back-to-back seeks don't add up (the second starts from
-   the old position).
-6. V2-M8 integration (`scripts/bench_app.py` with everything on), README, PROGRESS.
+## 3. In flight / next steps (in order) (updated 2026-10-10 ~16:15 PDT)
+Done since: the independent review of M1/M2/M4 (11 bugs fixed with tests, pushed: `06d7325`); **V2-M3 pedestrians
+merged** (`e3b9976`, pushed; its worktree `.claude/worktrees/agent-a646a9a46d39b56d8` is merged and can be removed
+with `git worktree remove -f -f ...` once its agent process is gone); the sign thread wired into the app (`b9c1ea9`,
+switches on once `v2-signs` brings `signs:` + models); `video.file.hfov_deg: 60` for BDD100K replays (set it to
+null for our own phone drives); 32 crawling lot clips fetched to `data/videos/parking_crawl` (+ GPX, perception
+cached) at the user's request ("find videos of driving through a parking lot").
+1. **Crawl-clip parking labels**: two labeling subagents write `eval/parking_labels_crawl_a.yaml` (done: 7/16
+   usable, only 2 clear spots, both the stall we park in) and `..._b.yaml`; then score with
+   `scripts/eval_parking.py --labels <file>` (it reads caches by clip id) and record the result in PROGRESS.md.
+2. **V2-M5 YOLOPv2 lanes/drift**: the user OK'd the download; `models/lanes/yolopv2.pt` is in place (156,380,200
+   bytes). A subagent builds `perception/lanes.py` (LaneWorker), `state/lanes.py` (LaneTracker: lane count/index,
+   drift events, overlay polylines), `scripts/eval_lanes.py`, tests, in a worktree; it fetches 10 BDD highway clips.
+   Then integrate: the app (world thread offers frames; drift alert = SAFETY? PLAN says safety alerts interrupt),
+   overlay (our lane, the drift line red), lane index into `answers/lanes.py` / nav lane guidance instead of the
+   model's count when confident, pedestrians' PathZone from the drivable area.
+3. **V2-M6 sign detector**: merge `v2-signs` when `scripts/signs/STATUS.md` (in `C:\ClaudeProjects\DrivePilot_signs`)
+   says ready (due Sunday 11:00). The app side is ready (`state/signs.py`, `perception/sign_worker.py`, app wiring):
+   after the merge, check the `getattr(cfg, "signs")` bridge in `app._start_signs` becomes a direct access, run the
+   sheet's sign rows, and measure fps with it on.
+4. V2-M8 integration: `scripts/bench_app.py` with everything on (when the GPU is free of training), the full sheet
+   again (last: 22/3/4 of 29 before the pedestrian merge), screenshots for the README, PROGRESS, push.
 
 ## 4. Working notes
 - Run everything with `.venv/Scripts/python`; tests `.venv/Scripts/python -m pytest` (~3 min); `ruff check .`,
