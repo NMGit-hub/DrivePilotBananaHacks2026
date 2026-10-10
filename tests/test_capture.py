@@ -28,6 +28,7 @@ from capture.scrcpy_protocol import (
 )
 from core.clock import WallClock
 from core.config import CameraVideoConfig
+from core.types import Frame
 
 FPS = 30
 N_FRAMES = 90  # 3 s
@@ -193,14 +194,89 @@ def test_start_offset(clip: Path) -> None:
     assert len(frames) == pytest.approx(N_FRAMES - FPS, abs=2)
 
 
-def test_loop_restarts_with_a_new_segment(clip: Path) -> None:
+def test_loop_restarts_with_a_new_segment_and_the_clock_runs_on(clip: Path) -> None:
+    # HANDOFF.md 5B: a short clip on loop is the "camera" for a long simulated GPS drive, so media time (which the
+    # GPX replay follows) keeps running across passes. It used to restart at 0, replaying the drive's first 3 s.
     source = FileSource(clip, realtime=False, loop=True)
     source.start()
-    frames = [source.read(timeout=2.0) for _ in range(N_FRAMES + 10)]
+    frames = [source.read(timeout=2.0) for _ in range(2 * N_FRAMES + 10)]
+    now = source.clock.now()
     source.stop()
     assert all(f is not None for f in frames)
-    assert frames[N_FRAMES - 1].segment == 0 and frames[N_FRAMES].segment == 1  # type: ignore[union-attr]
-    assert frames[N_FRAMES].t == pytest.approx(0.0, abs=0.05)  # type: ignore[union-attr]
+    got = [f for f in frames if f is not None]
+    assert got[N_FRAMES - 1].segment == 0 and got[N_FRAMES].segment == 1 and got[2 * N_FRAMES].segment == 2
+    assert decoded_index(got[N_FRAMES].image) == 0  # the picture starts over...
+    assert got[N_FRAMES].t == pytest.approx(N_FRAMES / FPS, abs=0.01)  # ...the time goes on (3.0 s)
+    assert got[2 * N_FRAMES].t == pytest.approx(2 * N_FRAMES / FPS, abs=0.01)
+    times = np.array([f.t for f in got])
+    assert np.allclose(np.diff(times), 1 / FPS, atol=2e-3)  # no step back or gap at either wrap
+    assert now == pytest.approx(times[-1])  # the lock-step clock follows
+
+
+def first_after_seek(source: FileSource, segment: int) -> Frame:
+    for _ in range(10):  # a frame grabbed before the seek may still be in flight
+        frame = source.read(timeout=2.0)
+        assert frame is not None
+        if frame.segment > segment:
+            return frame
+    raise AssertionError("no frame from the new segment")
+
+
+def test_seeks_while_looping_are_in_running_time(clip: Path) -> None:
+    source = FileSource(clip, realtime=False, loop=True)
+    source.start()
+    for _ in range(N_FRAMES + 15):  # into the second pass (t = 3.5 s)
+        assert source.read(timeout=2.0) is not None
+    source.seek_to(7.5)  # the third pass, 1.5 s into the clip
+    third = first_after_seek(source, 1)
+    source.seek_relative(-6.0)  # back into the first pass
+    first = first_after_seek(source, third.segment)
+    source.stop()
+    assert third.t == pytest.approx(7.5, abs=0.05) and decoded_index(third.image) in (44, 45, 46)
+    assert first.t == pytest.approx(1.5, abs=0.1) and decoded_index(first.image) in (44, 45, 46, 47)
+
+
+@pytest.fixture(scope="module")
+def short_clip(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("video") / "short.mp4"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (64, 48))
+    for i in range(15):  # 0.5 s
+        writer.write(barcode_image(i))
+    writer.release()
+    return path
+
+
+def test_realtime_loop_keeps_pace_across_passes(short_clip: Path) -> None:
+    source = FileSource(short_clip, realtime=True, loop=True)
+    source.start()
+    start = time.monotonic()
+    frames = []
+    while time.monotonic() - start < 1.4:  # about three passes of 0.5 s
+        frame = source.read(timeout=1.0)
+        assert frame is not None
+        frames.append(frame)
+        assert frame.t <= source.clock.now() + 1e-3 and source.clock.now() - frame.t < 0.1
+    elapsed = time.monotonic() - start
+    now = source.clock.now()
+    source.stop()
+    assert {f.segment for f in frames} >= {0, 1, 2}
+    assert np.all(np.diff([f.t for f in frames]) > 0)  # never back to 0 at a wrap
+    assert now == pytest.approx(elapsed, abs=0.15)  # the clock runs on in real time
+
+
+def test_gps_replay_follows_a_looping_clip_past_its_end(clip: Path) -> None:
+    from nav.geo import destination, haversine_m
+    from nav.gps import GpxReplay
+
+    start = (47.61, -122.2)
+    replay = GpxReplay.from_points([0.0, 10.0], [start, destination(start, 90.0, 100.0)])  # 10 s at 10 m/s
+    source = FileSource(clip, realtime=False, loop=True)
+    source.start()
+    for _ in range(2 * N_FRAMES + 30):  # third pass: video t = 7 s
+        assert source.read(timeout=2.0) is not None
+    fix = replay.fix_at(source.clock.now())  # what DrivePilotApp.gps_fix() asks for
+    source.stop()
+    assert fix is not None and haversine_m(start, fix.latlon) == pytest.approx(70.0, abs=0.5)
 
 
 def test_missing_file_fails_at_start(tmp_path: Path) -> None:
