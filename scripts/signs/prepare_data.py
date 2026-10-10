@@ -52,6 +52,7 @@ LABELS = DATA / "bdd_labels"
 DET_OUT = DATA / "det"
 CLS_OUT = DATA / "cls"
 TILE = 640
+HARDNEG_DET = DATA / "hardneg_det.txt"  # scripts/signs/mine_det_negatives.py
 WIDTH = 1280  # frames are resized to this width (the app's detector input), never upscaled
 MASK_KINDS = frozenset({"unclear"})
 SIGN_CLASS = 9
@@ -402,6 +403,15 @@ def _synth_job(args: tuple[Sample, str, int]) -> Counter:
         box = composite(img, bgr, alpha, x, y, rng, pole=rng.random() < 0.8)
         if box is not None and not any(_iou(box, b.xyxy) > 0.0 for b in boxes):
             boxes.append(Box(box, kind, value))
+    # Unlabeled look-alikes (route shields, advisory plates): background the detector must not call a sign.
+    for _ in range(int(rng.integers(0, 3))):
+        bgr, alpha = warp_sign(renderer.distractor(rng), float(np.exp(rng.uniform(np.log(14), np.log(100)))), rng)
+        x = int(rng.uniform(0.03, 0.97) * w - bgr.shape[1] / 2)
+        y = int(rng.uniform(0.06, 0.5) * h)
+        hh, ww = alpha.shape
+        if any(_iou((x, y, x + ww, y + hh), b.xyxy) > 0.0 for b in boxes):
+            continue
+        composite(img, bgr, alpha, x, y, rng, pole=rng.random() < 0.7)
     img = degrade(img, rng, strength=0.6)
     out = Sample(sample.image, boxes, "synth")
     return write_tiles(out, img, DET_OUT, split, random.Random(seed), keep_empty=0.0)
@@ -431,12 +441,22 @@ def build_det(args: argparse.Namespace) -> None:
     for s in pos:
         split = "val" if stable_frac(s.image.stem) < args.val_frac else "train"
         jobs.append((s, split, rng.randrange(2**31), 0.15))
+    # Hard negatives (scripts/signs/mine_det_negatives.py): frames with none of our signs where a trained detector
+    # still fired; all their tiles are kept. The other negatives are a random sample.
+    hard_paths = set()
+    if HARDNEG_DET.exists():
+        hard_paths = {line.split("\t")[0] for line in HARDNEG_DET.read_text(encoding="utf-8").splitlines() if line}
+    hard = [s for s in neg if s.image.relative_to(REPO_ROOT).as_posix() in hard_paths]
+    neg = [s for s in neg if s.image.relative_to(REPO_ROOT).as_posix() not in hard_paths]
     rng.shuffle(neg)
     n_neg = min(len(neg), int(args.neg_ratio * len(pos)))
     synth_bg, neg = neg[n_neg : n_neg + args.synth], neg[:n_neg]
     for s in neg:
         split = "val" if stable_frac(s.image.stem) < args.val_frac else "train"
         jobs.append((s, split, rng.randrange(2**31), 0.5))
+    for s in hard:
+        split = "val" if stable_frac(s.image.stem) < args.val_frac else "train"
+        jobs.append((s, split, rng.randrange(2**31), 1.0))
     for s in ctacke_samples("train"):
         jobs.append((s, "train", rng.randrange(2**31), 0.0))
     for s in lisa_samples("train"):
@@ -444,7 +464,10 @@ def build_det(args: argparse.Namespace) -> None:
     for s in lisa_samples("valid"):
         jobs.append((s, "val", rng.randrange(2**31), 0.1))
     synth_jobs = [(s, "train", rng.randrange(2**31)) for s in synth_bg]
-    print(f"BDD positives {len(pos)}, negatives {len(neg)}, synthetic {len(synth_jobs)}, total jobs {len(jobs)}")
+    print(
+        f"BDD positives {len(pos)}, negatives {len(neg)}, hard negatives {len(hard)}, synthetic {len(synth_jobs)}, "
+        f"total jobs {len(jobs)}"
+    )
     totals: Counter = Counter()
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         for c in pool.map(_det_job, jobs, chunksize=16):
@@ -541,6 +564,25 @@ def _bdd_other_crops(split: str, limit: int, seed: int) -> Iterator[tuple[str, n
             yield "none", crop
 
 
+HARDNEG = DATA / "hardneg_cls_curated.jsonl"  # scripts/signs/mine_hard_negatives.py, checked by eye
+
+
+def _hard_negative_crops(copies: int, seed: int) -> Iterator[tuple[str, np.ndarray]]:
+    """Reject-class crops of real BDD train signs that read like a speed value but aren't one (checked by eye)."""
+    if not HARDNEG.exists():
+        return
+    rng = np.random.default_rng(seed)
+    for line in HARDNEG.read_text(encoding="utf-8").splitlines():
+        r = json.loads(line)
+        img = cv2.imread(str(BDD_IMAGES / r["image"]))
+        if img is None:
+            continue
+        for _ in range(copies):
+            crop = jitter_crop(img, tuple(r["box"]), rng)
+            if crop is not None:
+                yield "none", crop
+
+
 def _synth_cls_job(args: tuple[int, int, list[str], int]) -> list[tuple[str, np.ndarray]]:
     """Synthetic classifier crops for one value (or the reject class when value == 0)."""
     from scripts.signs.synth import SignRenderer, composite, degrade, warp_sign
@@ -559,8 +601,8 @@ def _synth_cls_job(args: tuple[int, int, list[str], int]) -> list[tuple[str, np.
             school = value in (15, 20, 25) and rng.random() < 0.25
             sign = renderer.speed(value, school, rng)
             label = value_class(value)
-        else:
-            sign = renderer.kind(str(rng.choice(others)), rng)
+        else:  # reject class: half other kinds of our signs, half number-bearing look-alikes
+            sign = renderer.kind(str(rng.choice(others)), rng) if rng.random() < 0.5 else renderer.distractor(rng)
             label = "none"
         bgr, alpha = warp_sign(sign, size, rng)
         sh, sw = alpha.shape
@@ -603,6 +645,7 @@ def build_cls(args: argparse.Namespace) -> None:
     save("val", _real_crops(ctacke_samples("val"), 1, 4, 12), "ctacke")
     save("train", _real_crops(lisa_samples("train"), 3, 5, 12), "lisa")
     save("train", _bdd_other_crops("train", args.none_real, 6), "bddother")
+    save("train", _hard_negative_crops(4, 8), "hardneg")
     # Synthetic: every value, plus other kinds for the reject class, on BDD backgrounds without our signs.
     _pos, neg = bdd_samples("train")
     bgs = [str(s.image) for s in neg[:400]]

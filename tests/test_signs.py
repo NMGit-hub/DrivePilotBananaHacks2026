@@ -328,10 +328,10 @@ def _frame(w: int = 1280, h: int = 720) -> Frame:
 
 def test_detector_reads_a_confident_speed_value(fake_detector: Any) -> None:
     _FakeYOLO.det_rows = [(600, 200, 630, 240, 0.9, KIND_INDEX["speed_limit"]), (100, 100, 140, 140, 0.8, 2)]
-    _FakeYOLO.probs = [0.01, 0.02, 0.97]
+    _FakeYOLO.probs = [0.005, 0.005, 0.99]
     dets = fake_detector().detect(_frame())
     assert [d.kind for d in dets] == ["speed_limit", "stop"]
-    assert dets[0].value == 35 and dets[0].value_conf == pytest.approx(0.97)
+    assert dets[0].value == 35 and dets[0].value_conf == pytest.approx(0.99)
     assert dets[1].value is None and dets[1].value_conf is None
     assert dets[0].box == (600.0, 200.0, 630.0, 240.0)
     assert isinstance(dets[0], SignDetection) and dets[0].to_record()["value"] == 35
@@ -468,3 +468,73 @@ def test_real_engines_run_on_cuda_fp16_and_find_a_sign() -> None:
         det.detect(_frame())
         times.append(det.last_timings_ms["total"])
     assert float(np.median(times)) < 30.0  # generous: the measured number is in scripts/signs/STATUS.md
+
+
+# ---------------------------------------------------------------------------------- evaluation logic
+
+from scripts.signs import evaluate as ev  # noqa: E402
+
+
+def _cfg(**kw: Any) -> SignsConfig:
+    return SignsConfig(**{"conf": 0.4, "value_conf": 0.9, "value_min_px": 16.0, **kw})
+
+
+def _res(gts: list[ev.Gt], dets: list[ev.Det], ignore: list[tuple[float, float, float, float]] | None = None) -> Any:
+    r = ev.ImageResult("img", gts, ignore or [])
+    r.dets = dets
+    return r
+
+
+def test_eval_counts_right_wrong_and_withheld_values() -> None:
+    sl = ev.Gt((100, 100, 130, 140), "speed_limit", 35, True)
+    stop = ev.Gt((300, 100, 340, 140), "stop", None, None)
+    dets = [
+        ev.Det((101, 101, 131, 141), "speed_limit", 0.9, 35, 0.95),  # right value
+        ev.Det((299, 99, 341, 141), "speed_limit", 0.8, 45, 0.99),  # speed limit on a stop sign: FP + wrong value
+        ev.Det((600, 100, 630, 140), "speed_limit", 0.7, 25, 0.5),  # FP, value withheld (p < 0.9): not wrong
+    ]
+    s = ev.summarize([_res([sl, stop], dets)], _cfg())
+    assert s["speed_values"] == {"speed_limit:right": 1}
+    assert [w["said"] for w in s["wrong_values"]] == [45]
+    assert s["per_kind"]["speed_limit"]["tp"] == 1 and s["per_kind"]["speed_limit"]["fp"] == 2
+    assert s["per_kind"]["stop"]["fn"] == 1
+
+
+def test_eval_ignore_regions_count_neither_way_but_values_are_listed() -> None:
+    dets = [ev.Det((100, 100, 130, 140), "speed_limit", 0.9, 25, 0.99)]
+    s = ev.summarize([_res([], dets, ignore=[(98, 98, 132, 142)])], _cfg())
+    assert s["per_kind"] == {} and s["wrong_values"] == []
+    assert [u["said"] for u in s["unverifiable_values"]] == [25]
+
+
+def test_eval_small_or_unsure_values_are_not_reported() -> None:
+    sl = ev.Gt((100, 100, 112, 112), "speed_limit", 35, True)  # 12 px tall
+    dets = [ev.Det((100, 100, 112, 112), "speed_limit", 0.9, 30, 0.99)]
+    s = ev.summarize([_res([sl], dets)], _cfg())
+    assert s["speed_values"] == {"speed_limit:no_value": 1} and not s["wrong_values"]
+    # at 1080p the same rule is measured at 1280 px width: 24 px tall at 1920 = 16 px -> value reported
+    sl2 = ev.Gt((100, 100, 118, 124), "speed_limit", 35, True)
+    r = _res([sl2], [ev.Det((100, 100, 118, 124), "speed_limit", 0.9, 35, 0.99)])
+    r.scale = 1.5
+    assert ev.summarize([r], _cfg())["speed_values"] == {"speed_limit:right": 1}
+
+
+def test_eval_matching_is_by_kind_and_iou() -> None:
+    g = ev.Gt((100, 100, 140, 140), "stop", None, None)
+    wrong_kind = ev.Det((100, 100, 140, 140), "yield", 0.9, None, None)
+    far = ev.Det((150, 150, 190, 190), "stop", 0.9, None, None)
+    s = ev.summarize([_res([g], [wrong_kind, far])], _cfg())
+    assert s["per_kind"]["stop"] == {**s["per_kind"]["stop"], "tp": 0, "fp": 1, "fn": 1}
+    assert s["per_kind"]["yield"]["fp"] == 1
+
+
+def test_eval_average_precision() -> None:
+    gts = [ev.Gt((0, 0, 10, 10), "stop", None, None), ev.Gt((50, 0, 60, 10), "stop", None, None)]
+    dets = [
+        ev.Det((0, 0, 10, 10), "stop", 0.9, None, None),  # TP
+        ev.Det((100, 0, 110, 10), "stop", 0.8, None, None),  # FP
+        ev.Det((50, 0, 60, 10), "stop", 0.7, None, None),  # TP
+    ]
+    ap, n = ev.average_precision([_res(gts, dets)], "stop")
+    assert n == 2 and ap == pytest.approx(0.5 + 0.5 * (2 / 3))
+    assert np.isnan(ev.average_precision([_res(gts, dets)], "yield")[0])

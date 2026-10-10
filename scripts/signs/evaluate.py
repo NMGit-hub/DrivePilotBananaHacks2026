@@ -255,13 +255,17 @@ def run_detector(items: list[tuple[str, Path, list[Gt], list[Any]]], cfg: Any) -
     return results, timing
 
 
-def bdd_items() -> list[tuple[str, Path, list[Gt], list[Any]]]:
-    """The hand-checked BDD100K held-out frames."""
+def bdd_items(audit: bool = True) -> list[tuple[str, Path, list[Gt], list[Any]]]:
+    """The hand-checked BDD100K held-out frames (with the label audit of make_heldout.py unless audit=False)."""
     data = json.loads(HELDOUT.read_text(encoding="utf-8"))
     items: list[tuple[str, Path, list[Gt], list[Any]]] = []
     for im in data["images"]:
-        gts = [Gt(tuple(s["box"]), s["kind"], s["value"], s["readable"]) for s in im["signs"]]
-        items.append((im["image"], BDD_IMAGES / im["image"], gts, im["ignore"]))
+        signs, ignore = list(im["signs"]), list(im["ignore"])
+        if audit and im.get("audit"):
+            signs += im["audit"]["signs"]
+            ignore += im["audit"]["ignore"]
+        gts = [Gt(tuple(s["box"]), s["kind"], s["value"], s["readable"]) for s in signs]
+        items.append((im["image"], BDD_IMAGES / im["image"], gts, ignore))
     return items
 
 
@@ -287,10 +291,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("which", choices=["bdd", "public", "all"])
     p.add_argument("--write-metrics", action="store_true", help=f"save to {METRICS.relative_to(REPO_ROOT)}")
     p.add_argument("--set", action="append", default=[], help="config override, e.g. signs.engine=pytorch")
+    p.add_argument("--no-audit", action="store_true", help="BDD held-out labels without the detection-triggered audit")
     args = p.parse_args(argv)
     cfg = load_config(overrides=args.set).signs
     out: dict[str, Any] = {"config": cfg.model_dump(mode="json")}
-    sets = {"bdd": bdd_items, "public": public_items}
+    sets = {"bdd": lambda: bdd_items(audit=not args.no_audit), "public": public_items}
     for name in ["bdd", "public"] if args.which == "all" else [args.which]:
         results, timing = run_detector(sets[name](), cfg)
         s = summarize(results, cfg)

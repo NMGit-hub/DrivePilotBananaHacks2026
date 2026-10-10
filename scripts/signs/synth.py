@@ -109,6 +109,9 @@ class SignRenderer:
         self.r2 = load_speed_template("MUTCD_R2-1.png", 0.45)
         self.s5 = load_speed_template("MUTCD_S5-1.png", 0.45)
         self.templates = {k: [Image.open(TEMPLATES / f).convert("RGBA") for f in v] for k, v in KIND_TEMPLATES.items()}
+        # Look-alikes that carry numbers but are not speed limits (route shields, advisory/exit plates, NIGHT and
+        # MINIMUM speeds, other text signs): never labeled, so both networks learn to leave them alone.
+        self.distractors = [Image.open(f).convert("RGBA") for f in sorted((TEMPLATES / "distractors").glob("*.png"))]
 
     def speed(self, value: int, school: bool, rng: np.random.Generator) -> Image.Image:
         """A SPEED LIMIT (or SCHOOL SPEED LIMIT) sign showing `value`."""
@@ -140,6 +143,20 @@ class SignRenderer:
         if kind in ("pedestrian_crossing",) and rng.random() < 0.5:
             img = recolor_yellow(img, YELLOW_GREEN)
         return img
+
+    def distractor(self, rng: np.random.Generator) -> Image.Image:
+        """A random number-bearing look-alike (route shield, advisory plate, ...), sometimes under a direction plate."""
+        if not self.distractors:
+            raise FileNotFoundError(f"no distractor templates in {TEMPLATES / 'distractors'}")
+        img = self.distractors[int(rng.integers(len(self.distractors)))]
+        east = next((d for d in self.distractors if d.width > 1.8 * d.height and d.height < 0.5 * img.height), None)
+        if east is not None and img.height >= img.width * 0.8 and rng.random() < 0.25:
+            plate = east.resize((img.width, max(1, round(east.height * img.width / east.width))))
+            stacked = Image.new("RGBA", (img.width, img.height + plate.height), (0, 0, 0, 0))
+            stacked.paste(plate, (0, 0), plate)
+            stacked.paste(img, (0, plate.height), img)
+            return stacked
+        return img.copy()
 
     def any(self, kind: str, value: int | None, rng: np.random.Generator) -> Image.Image:
         """Render any taxonomy kind."""

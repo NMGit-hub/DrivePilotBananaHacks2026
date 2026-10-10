@@ -12,6 +12,11 @@ were classified by Claude Opus 5.5 (scripts/signs/label_bdd_signs.py), then chec
 - other kinds keep Opus's labels (spot-checked on contact sheets, not exhaustively).
 Boxes labeled "unclear", sign boxes too small to label (< 12 px tall) and REVIEW["ignore"] are ignore regions: a
 detection there is neither a hit nor a false alarm (but a wrong speed value there still counts as wrong).
+
+AUDIT: the speed values an interim model reported where the labels had no speed limit were checked by eye on
+full-resolution crops. Some were real (school) speed limits that the labeler called "other" or that BDD's
+annotators never boxed. Because the audit was triggered by detections it can only add signs a model found, so
+each image keeps its audit separately and `scripts/signs/evaluate.py --no-audit` reports the numbers without it.
 """
 
 from __future__ import annotations
@@ -51,6 +56,22 @@ REVIEW = {
     ],
 }
 
+# key -> (kind, value, readable): labeler said "other", the crop shows one of our kinds.
+AUDIT_RELABEL: dict[str, tuple[str, int | None, bool]] = {
+    "valid/10903606-c6c54402/2": ("school_speed_limit", 20, True),  # yellow-green SCHOOL panel over 20, night
+}
+# Labeler said "other" but the kind is doubtful (could be a speed limit): ignore regions.
+AUDIT_IGNORE = [
+    "valid/047cf4fc-34ad5b08/3",  # red header over "40": not clearly an R2-1
+    "valid/2430b667-a2df628e/21",  # blurred "?0" under a lamp
+    "valid/28dbc980-86029e53/0",  # yellow-lit sign, "30" under a word that may be SCHOOL
+]
+# Signs BDD's annotators didn't box (no traffic-sign box there): (image, box from the detection, kind, value, readable).
+AUDIT_ADD: list[tuple[str, list[float], str, int | None, bool]] = [
+    ("valid/shard_000/12011d41-208b652b.jpg", [752, 285, 768, 315], "school_speed_limit", 20, True),
+    ("valid/shard_000/28b3996a-d5e1d98d.jpg", [822, 165, 850, 212], "speed_limit", 25, False),  # dark
+]
+
 
 def main() -> int:
     """Build the held-out file from the valid pseudo-labels plus the review above."""
@@ -68,9 +89,19 @@ def main() -> int:
         if Path(rel).stem in banned:
             continue
         signs, ignore, negatives = [], [], []
+        audit: dict[str, list] = {"signs": [], "ignore": [], "drop_negatives": []}
         labeled = set()
         for r in by_image[rel]:
             labeled.add(r["key"].rsplit("/", 1)[1])
+            if r["key"] in AUDIT_RELABEL:
+                kind, value, readable = AUDIT_RELABEL[r["key"]]
+                audit["signs"].append(
+                    {"key": r["key"], "box": r["box"], "kind": kind, "value": value, "readable": readable}
+                )
+                audit["drop_negatives"].append(r["box"])
+            elif r["key"] in AUDIT_IGNORE:
+                audit["ignore"].append(r["box"])
+                audit["drop_negatives"].append(r["box"])
             if r["key"] in ignore_keys or r["kind"] == "unclear":
                 ignore.append(r["box"])
             elif r["kind"] in KIND_INDEX:
@@ -91,12 +122,18 @@ def main() -> int:
         for k, xyxy in signs_meta.get(rel, {}).items():
             if k not in labeled:  # too small to have been labeled
                 ignore.append([round(v, 1) for v in xyxy])
-        images.append({"image": rel, "signs": signs, "ignore": ignore, "negatives": negatives})
+        for image, box, kind, value, readable in AUDIT_ADD:
+            if image == rel:
+                audit["signs"].append(
+                    {"key": f"audit/{Path(image).stem}", "box": box, "kind": kind, "value": value, "readable": readable}
+                )
+        images.append({"image": rel, "signs": signs, "ignore": ignore, "negatives": negatives, "audit": audit})
     data = {
         "description": __doc__.strip().splitlines()[0],
         "source": "BDD100K valid (dronefreak/BDD100K mirror, shard_000), 1280x720; "
         "labels: Claude Opus 5.5 + hand review",
         "review": REVIEW,
+        "audit": {"relabel": AUDIT_RELABEL, "ignore": AUDIT_IGNORE, "add": AUDIT_ADD},
         "counts": dict(counts),
         "images": images,
     }
