@@ -5,6 +5,7 @@
 
 # Python environments and caches
 .venv/
+.venv-*/
 venv/
 env/
 __pycache__/
@@ -20,6 +21,7 @@ htmlcov/
 data/videos/
 data/gps/
 data/audio/
+data/wakeword/
 *.mp4
 *.mov
 *.mkv

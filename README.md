@@ -6,8 +6,8 @@ to be in, which roundabout exit, what a sign means, whether you can park here.
 
 - **Local and instant:** YOLO26s + ByteTrack on the GPU track every car. Right-of-way questions are answered
   from tracker state with no cloud call.
-- **Model only when needed:** sign, parking, traffic-light and road questions go to a vision-language model
-  (Gemini Flash by default, swappable in `config.yaml`) with the latest frames.
+- **Model only when needed:** sign, parking, traffic-light, lane and road questions go to a vision-language
+  model (Claude Haiku by default; Gemini Flash or a local Ollama model via `config.yaml`) with the latest frames.
 - **Navigation:** Mapbox route + phone GPS for lane guidance, roundabout exits and route questions.
 
 See [PLAN.md](PLAN.md) for the full design and [PROGRESS.md](PROGRESS.md) for current status.
@@ -19,7 +19,7 @@ This repository is building **V1** (the base app); V2 extras come later.
 - [uv](https://docs.astral.sh/uv/) (installs Python 3.11 for you) and git
 - For live camera mode: an Android phone with USB debugging, plus [scrcpy](https://github.com/Genymobile/scrcpy)
   (it bundles `adb`)
-- API keys: Gemini (vision model) and Mapbox (navigation). Without keys the app still runs. Local answers
+- API keys: Anthropic (vision model) and Mapbox (navigation). Without keys the app still runs. Local answers
   work, and the cloud features report that they are not configured.
 
 ## Setup
@@ -40,7 +40,7 @@ uv pip install --python .venv\Scripts\python.exe -r requirements.txt --index-str
 
 # 4. API keys
 copy .env.example .env
-#    then edit .env and fill in GEMINI_API_KEY and MAPBOX_ACCESS_TOKEN
+#    then edit .env and fill in ANTHROPIC_API_KEY and MAPBOX_ACCESS_TOKEN
 ```
 
 Without uv: create a Python 3.11 venv any way you like, then run
@@ -58,7 +58,7 @@ Everything lives in [config.yaml](config.yaml). The most important settings:
 | --- | --- |
 | `video.source` | `camera` (phone via scrcpy) or `file` (a recorded drive). Same pipeline for both. |
 | `video.video_path`, `video.gpx_path` | The recorded drive and its optional GPX track (file mode). File mode plays at real-time speed. |
-| `vision_model` | Which vision-language provider answers scene questions: `gemini` (default), `claude`, `ollama` or `mock`. |
+| `vision_model` | Which vision-language provider answers scene questions: `claude` (default, Claude Haiku), `gemini`, `ollama` or `mock`. |
 
 ## Running
 

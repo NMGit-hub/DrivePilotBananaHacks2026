@@ -38,6 +38,7 @@ V1 is the complete working co-pilot — phone camera, laptop, voice in and voice
 - Screen: plain camera video with your question and the answer as text, no overlays
 
 **V2 — extras on top of V1**
+**IMPORTANT** - DO NOT START UNTIL I TELL YOU ABOUT THE NEW PARKING FEATURE TO ADD HERE IN THE CLAUDE PROMPT (FOR V2 ONLY. CONINUTE WITH V1)
 
 - Visualization: all overlays (car badges, green target lane, red drift line, roundabout diagram, sign cards, curb highlights)
 - YOLOPv2 lane detection, replacing the model's lane count with a per-frame one

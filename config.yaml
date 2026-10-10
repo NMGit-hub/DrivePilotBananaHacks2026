@@ -11,7 +11,7 @@ video:
 gps:
   source: auto            # "auto" = GPX in file mode, phone page in camera mode; or "gpx", "phone", "none"
 
-vision_model: gemini      # provider for scene questions: gemini | claude | ollama | mock
+vision_model: claude      # provider for scene questions: claude (Haiku, default) | gemini | ollama | mock
 
 logging:
   level: INFO

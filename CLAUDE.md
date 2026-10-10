@@ -6,6 +6,9 @@ is the live status. Read both before starting work.
 ## Scope
 - **Build V1 only.** Everything tagged V2 in PLAN.md (overlays, YOLOPv2 lanes, drift warning, pedestrian and
   cyclist alerts, sign fine-tune, memory, answer highlight) is off limits until the user explicitly says so.
+- V1 is the whole co-pilot, not just the 4-way stop: lane guidance ("am I in the right lane?"), roundabout exits,
+  traffic lights (incl. "tell me when the light is green", added by the user), signs, parking, road questions,
+  navigation by voice and route questions. BUILD_PLAN.md has the feature → milestone → test table.
 - V1 screen = plain camera video + the question and answer as text. No overlays.
 
 ## Platform
@@ -19,8 +22,10 @@ is the live status. Read both before starting work.
   (recorded drive + optional GPX). Same pipeline for both; file input plays at real-time speed.
 - **Detection:** YOLO26s + ByteTrack through the `ultralytics` library.
 - **Vision model:** behind one interface (`answers/vision/`); `vision_model` in `config.yaml` picks the
-  provider. Gemini Flash is the default. Other providers are drop-ins and never leak into callers.
-- **Voice input is wake word only.** No push-to-talk buttons or extra devices. (Typed questions exist only as
+  provider. **Claude Haiku (`claude-haiku-4-5`) is the default** (user switched from Gemini on 2026-10-09);
+  Gemini Flash, Ollama and a mock stay available as drop-ins and never leak into callers.
+- **Voice input is wake word only:** "Hey DrivePilot" (custom openWakeWord model trained locally, in
+  `scripts/wakeword/`). No push-to-talk buttons or extra devices. (Typed questions exist only as
   the replay/dev tool described in PLAN.md "Replay mode".)
 - **Secrets** live in `.env` (gitignored). `.env.example` documents them. Never commit keys, and never print
   them in logs.
@@ -38,7 +43,7 @@ is the live status. Read both before starting work.
 
 ## Workflow
 - **Commit after every piece that works**, with clear messages. Work on `main` (tracks `origin/main`).
-  Do not push unless the user has said to.
+  **Push to GitHub (`origin main`) at the end of every milestone.** Git identity: NMGit-hub (confirmed).
 - **Keep PROGRESS.md updated:** what's done, what's verified and how, what's next, known issues.
 - Only stop for things that need the user: physical actions (phone, scrcpy, mic, driving), missing API keys
   (build against a mock until provided), or genuine decisions. Batch all asks into one message with exact steps.
