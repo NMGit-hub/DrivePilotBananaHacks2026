@@ -376,6 +376,26 @@ def test_per_kind_confidence_threshold(fake_detector: Any) -> None:
     assert [d.kind for d in dets] == ["yield"]
 
 
+def test_one_sign_reported_as_two_kinds_keeps_the_surer_one(fake_detector: Any) -> None:
+    _FakeYOLO.det_rows = [
+        (600, 200, 630, 240, 0.6, KIND_INDEX["school_speed_limit"]),
+        (601, 201, 631, 241, 0.8, KIND_INDEX["speed_limit"]),
+        (700, 200, 730, 240, 0.7, KIND_INDEX["stop"]),  # a different sign nearby stays
+    ]
+    _FakeYOLO.probs = [0.0, 0.0, 1.0]
+    dets = fake_detector().detect(_frame())
+    assert [d.kind for d in dets] == ["speed_limit", "stop"]
+
+
+def test_drop_duplicates_keeps_stacked_signs() -> None:
+    from perception.signs import drop_duplicates
+
+    a = SignDetection("one_way", None, 0.9, (100.0, 100.0, 160.0, 120.0))
+    b = SignDetection("stop", None, 0.8, (110.0, 122.0, 150.0, 162.0))  # mounted right below: no overlap
+    c = SignDetection("yield", None, 0.5, (100.0, 101.0, 160.0, 121.0))  # same box as a, less sure
+    assert drop_duplicates([c, b, a]) == [a, b]
+
+
 def test_detections_sorted_and_timed(fake_detector: Any) -> None:
     _FakeYOLO.det_rows = [(0, 0, 30, 30, 0.5, 2), (50, 0, 80, 30, 0.9, 3)]
     det = fake_detector()

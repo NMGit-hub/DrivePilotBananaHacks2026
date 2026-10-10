@@ -31,6 +31,21 @@ school_speed_limit are thin in real data and lean on synthetic examples: see Kno
 | Overpass font | numbers on synthetic speed-limit signs | SIL OFL |
 | Not used: LISA (official download now 404s; Roboflow copy needs a key that wasn't provided in time), the HF Mapillary mirror `ThankGod/mapillary_traffic_sign_dataset_cleaned` (boxes visibly misaligned with images; category ids undocumented) | | |
 
+## For the integrating session (main)
+- Merge `v2-signs`; it only appends to `config.yaml` (`signs:`), `core/config.py` (`SignsConfig` + the `signs`
+  field at the end of `AppConfig`) and `.gitignore`, and adds `scripts/__init__.py` + `scripts/signs/__init__.py`
+  (so mypy maps `scripts.signs.*` consistently). Everything else is new files.
+- Files in `models/signs/` (delivered there, gitignored): `signs_yolo26s.pt`, `signs_yolo26s_736x1280_fp16.engine`,
+  `speed_value_cls.pt`, `speed_value_cls_96x96_fp16.engine` (+ tracked `metrics.json`). The engines only load
+  with the TensorRT in `.venv` (tensorrt-cu12 11.4.0.106); on another machine rebuild them with
+  `scripts/signs/export_engines.py`.
+- Run it on its own thread at a few fps on the latest frame (like the lanes thread). Construct `SignDetector` on
+  that thread (CUDA state is per thread; the constructor warms up and verifies CUDA/FP16).
+- `SignDetection.value` is None whenever the reading isn't certain (a wrong limit is worse than none). For
+  "Speed limit is now 35." still require two agreeing frames (V2_BUILD_PLAN): one frame can be a look-alike.
+  `value_conf` is there if you want to log it. `school_speed_limit` also carries a value (15-25 mph).
+- `kind` is one of `perception.sign_classes.KINDS`; `SignDetection.to_record()` is ready for run logs.
+
 ## Numbers
 To be filled with measured results (detector training in progress).
 

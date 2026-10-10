@@ -32,6 +32,7 @@ log = get_logger(__name__)
 
 CROP_PAD = 0.15  # context added around a speed-limit box before classifying (scripts/signs/prepare_data.py)
 REFERENCE_WIDTH = 1280  # value_min_px is measured at this frame width
+DUPLICATE_IOU = 0.6  # one sign reported as two kinds (e.g. speed_limit and school_speed_limit): keep the surer one
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +43,7 @@ class SignDetection:
     value: int | None  # mph for speed limits when read confidently, else None
     conf: float  # detector confidence
     box: tuple[float, float, float, float]  # x1, y1, x2, y2 in frame pixels
-    value_conf: float | None = None  # classifier probability of `value` (None when no value was attempted)
+    value_conf: float | None = None  # classifier's top-class probability (None when the value wasn't attempted)
 
     def to_record(self) -> dict[str, Any]:
         """Compact JSON-friendly form for run logs."""
@@ -91,6 +92,23 @@ def decide_value(probs: np.ndarray, names: dict[int, str], min_prob: float) -> t
     if value is None or p < min_prob:
         return None, p
     return value, p
+
+
+def _iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
+    iw = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    ih = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = iw * ih
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def drop_duplicates(dets: list[SignDetection], iou: float = DUPLICATE_IOU) -> list[SignDetection]:
+    """Most confident first, without boxes that overlap a more confident detection of any kind by more than iou."""
+    kept: list[SignDetection] = []
+    for d in sorted(dets, key=lambda d: -d.conf):
+        if all(_iou(d.box, k.box) <= iou for k in kept):
+            kept.append(d)
+    return kept
 
 
 def engine_path(weights: Path, imgsz: tuple[int, int], half: bool) -> Path:
@@ -224,8 +242,8 @@ class SignDetector:
                     value, value_conf = decide_value(probs, self.cls_names, self.cfg.value_conf)
                     n_cls += 1
             out.append(SignDetection(kind, value, float(conf), box, value_conf))
+        out = drop_duplicates(out)
         t2 = time.perf_counter()
-        out.sort(key=lambda d: -d.conf)
         speed = result.speed
         self.last_timings_ms = {
             "preprocess": float(speed.get("preprocess") or 0.0),
