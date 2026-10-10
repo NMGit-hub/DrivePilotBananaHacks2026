@@ -89,3 +89,14 @@ def test_manual_verdicts_win_and_the_summary_counts_them(tmp_path: Path) -> None
         written = list(csv.DictReader(f))
     assert [r["verdict"] for r in written] == ["right", "partly", "wrong"] and written[1]["manual"] == "partly"
     assert "| lights | 2 | 1 | 1 | 0 | 0.5 |" in (tmp_path / "report.md").read_text(encoding="utf-8")
+
+
+def test_the_judge_verdict_survives_broken_json() -> None:
+    from eval.run_sheet import parse_verdict
+
+    assert parse_verdict('{"verdict": "partly", "reason": "It reads "AHEAD" but calls it a pedestrian sign."}') == (
+        "partly",
+        'It reads "AHEAD" but calls it a pedestrian sign.',
+    )
+    assert parse_verdict('Sure: {"verdict": "Right", "reason": "ok"}') == ("right", "ok")
+    assert parse_verdict("no verdict at all")[0] == ""

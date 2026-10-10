@@ -289,18 +289,41 @@ def judge(model: VisionModel | None, row: Row, temperature: float | None = 0.0) 
         max_tokens=300,
         temperature=temperature,
     )
-    data: dict[str, Any] = {}
-    for attempt in range(JUDGE_ATTEMPTS):  # an occasional reply that isn't valid JSON: ask again
+    request = VisionRequest(
+        system=request.system + "\nReply with a single JSON object only, no prose and no code fences.",
+        text=request.text,
+        max_tokens=request.max_tokens,
+        temperature=request.temperature,
+    )
+    error = ""
+    for _ in range(JUDGE_ATTEMPTS):
         try:
-            data = model.complete_json(request, 8.0, 30.0)
-            break
+            verdict, reason = parse_verdict(model.complete(request, 8.0, 30.0))
         except VisionError as exc:
-            if attempt == JUDGE_ATTEMPTS - 1:
-                row.judge, row.judge_reason = "", f"judge failed: {exc}"
-                return
-    verdict = str(data.get("verdict", "")).lower()
-    row.judge = verdict if verdict in VERDICTS else ""
-    row.judge_reason = str(data.get("reason", ""))[:300]
+            error = str(exc)
+            continue
+        if verdict:
+            row.judge, row.judge_reason = verdict, reason
+            return
+        error = "no verdict in the reply"
+    row.judge, row.judge_reason = "", f"judge failed: {error}"
+
+
+def parse_verdict(text: str) -> tuple[str, str]:
+    """(verdict, reason) from the judge's reply; tolerates broken JSON (e.g. unescaped quotes in the reason)."""
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match is not None:
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            verdict = str(data.get("verdict", "")).lower()
+            return (verdict if verdict in VERDICTS else ""), str(data.get("reason", ""))[:300]
+    verdict_match = re.search(r'"verdict"\s*:\s*"(right|partly|wrong)"', text, re.IGNORECASE)
+    reason_match = re.search(r'"reason"\s*:\s*"(.*)"\s*}?\s*$', text, re.DOTALL)
+    verdict = verdict_match.group(1).lower() if verdict_match else ""
+    return verdict, (reason_match.group(1) if reason_match else "")[:300]
 
 
 # ---------------------------------------------------------------------------------------------- report

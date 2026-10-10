@@ -4,7 +4,51 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
-### M7: app integration, V1 screen, run logging (2026-10-10; independent review of M4 + M7 running)
+### M8: test sheet, scoring (2026-10-10)
+- `eval/test_sheet.csv`: 29 questions at verified moments of the 9 dev clips (each expected answer checked on
+  full-resolution frames; three of my first expectations were wrong and were corrected): right of way 2,
+  lights 7 (incl. "tell me when it's green" with its alert time), signs 6, road 6, parking 2, lanes 1,
+  safety 4, controls 1. `eval/run_sheet.py` plays each clip frame by frame, asks through the same Assistant
+  as the app, has Claude Haiku judge each answer (verdict + reason; broken JSON tolerated), keeps a `manual`
+  column that wins over the judge, and writes results.csv / report.md / report.json (`--voice`: questions
+  spoken through the wake word and Whisper).
+- **Score: 23 right, 3 partly, 3 wrong of 29** (79% right; 84% counting partly as half), typed questions,
+  `runs/20261010-085118_sheet` (+ row 15 re-judged in `runs/*_sheet` after the judge fix). Lights 7/7, road
+  6/6, right of way 2/2, lanes 1/1, controls 1/1, safety 3/4 + 1 partly (didn't mention the person with the
+  dog), parking 1/2 + 1 partly (hedged on the meter), signs 2/6 + 1 partly. The 3 wrong are sign reading:
+  "31 St" not read, DO NOT ENTER read as "STOP", and New York's no-right-on-red rule not known (the model
+  doesn't know which city it is in).
+- The first run (16/29) found real safety bugs, fixed with tests: behind a stopped school bus, "should I go
+  around them?" got "check both ways before going around it", "can I pass the school bus?" got the generic
+  gap refusal, and the bus with its STOP arm out was said to be stopped "for pedestrians" (now: a fixed local
+  rule for passing a school bus, a prompt rule, and a net that replaces a model answer mentioning a school
+  bus when the question is about passing); a "no turn on red" sign and overhead-board text were invented
+  (prompt: never name a sign you can't read; vision temperature 0, sent in the request body since the
+  1.x SDK dropped the argument).
+- Answer times (typed, until the first sentence is ready and synthesized): median 1.29 s overall, local
+  ~0.4 s, vision model ~1.4-1.6 s. Spoken end-to-end times: `scripts/bench_app.py` (below, M7).
+- Not covered by the sheet yet: navigation (dev clips have no GPX), a 4-way stop with other cars, roundabouts,
+  lane guidance with route data: they need our own recorded drives (M9). Navigation is covered by 70 tests.
+
+### M4 + M7 independent review (2026-10-10): 15 findings, all confirmed, all fixed with tests
+- Speech: a slow one-piece answer (navigation, lane reading, destination) was still spoken after "stop", the
+  wake word, a newer question or "Light's green" (now dropped if overtaken); the wake word and "repeat that"
+  threw away a queued or playing alert for good (now they stop answers only); a stop or alert landing while a
+  sound was being prepared was lost (start checked under the output's lock); alerts waited for an answer's
+  synthesis (synthesis moved to its own thread; pre-rendered alerts ready at once: 550 ms -> < 100 ms);
+  route-changing navigation alerts didn't drop stale answers; "repeat that" repeated only the last sentence.
+- Navigation questions were refused while the camera was out (they only need GPS).
+- Latency bookkeeping could file a latency under the wrong question (now matched by utterance id; every
+  utterance, dropped ones too, gets a record).
+- Page server: reachable through DNS rebinding and from other sites' pages over the WebSocket (now: allowed
+  host names only, same-origin POSTs and WebSocket); messages could reach the page out of order; page
+  messages and summary.json are redacted.
+- A lost camera ended the app after 100 restarts (now retried forever with backoff); at the end of a replay
+  the clock kept running (now the last frame is held and seeking back works).
+- bench_app could mismatch questions and silently leave out answers that never played; a flaky end-to-end test
+  and two tests that couldn't fail were fixed.
+
+### M7: app integration, V1 screen, run logging (2026-10-10)
 - `python -m app` runs everything in one process for the camera or a file (`--video`, `--camera`, `--gpx`,
   `--no-voice`, `--no-audio`, `--ask`, `--exit-at-end`); components that can't start (no mic, no key, no audio
   device) are reported on the page and the rest runs. A live camera that drops out is restarted; meanwhile
@@ -14,7 +58,8 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   kept across reloads) and the phone GPS page (once a second, screen kept on); JSON-only POSTs.
 - Run folder: events, frames (1/s + every frame sent to the vision model), detections, perf, `summary.json`.
   `core/latency.py` measures end of question → first sound and detection frame → alert sound.
-- **Full-pipeline benchmark** (`scripts/bench_app.py --silent`, SF red-light clip, 6 synthesized spoken
+- **Full-pipeline benchmark** (re-run after the review fixes, `runs/20261010-090257_bench_app`: same
+  numbers, 6/6 answers played, alert 94 ms) (`scripts/bench_app.py --silent`, SF red-light clip, 6 synthesized spoken
   questions over car noise, fed in real time): 6/6 heard and routed right; "Light's green" alert **87 ms**
   from the detection frame to sound (target < 300 ms); local answers **2.3 s** (target 1.0) and model answers
   **3.1 s** (target 2.5); perception **15 fps** while Whisper shares the GPU (target 25.2). All three misses
@@ -210,7 +255,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
-- M4 + M7 independent review (running), fixes; M8 (test sheet runner + scoring); M9 (hardware, needs you).
+- M9 (needs the team): fix the GPU throttling and re-measure latency; live phone camera + GPS page;
+  real-voice wake-word check (`scripts/wakeword/check_real.py`); recorded drives with GPX to add
+  navigation, 4-way-stop and roundabout rows to the test sheet; then the live drive.
 
 ## Test data
 - Source: BDD100K `videos/100k/val` clips (720p, 30 fps, ~40 s, US cities), pulled by HTTP range requests
@@ -222,6 +269,11 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   tested with synthetic GPX files in tests until real drives are recorded.
 
 ## Known issues / compromises
+- **Sign reading by the vision model (Claude Haiku)** is the weakest category on the sheet (2/6): small or
+  distant text is misread (DO NOT ENTER as "STOP") or not read; the model doesn't know the city's rules (no
+  location context in V1). It now says when it can't read a sign instead of inventing text.
+- `vision.temperature: 0` works with Claude Haiku 4.5 (sent in the request body); Claude models newer than the
+  4.6 line reject it: set it to null when switching (the startup check shows the failure on the page).
 - **The GPU is throttled to ~1/10 of its speed** (2026-10-10, Surface Laptop Studio 2): it stays at 210 MHz
   (P8) under load, throttle reasons "SW power cap" + "SW thermal slowdown" at 48 °C, charger connected, Windows
   power mode Balanced. fp16 matmul ~2.1 TFLOPS (21 on 2026-10-09), YOLO 28 ms/frame (2.7), Whisper 1.7 s per
