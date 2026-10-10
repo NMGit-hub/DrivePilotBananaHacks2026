@@ -32,4 +32,4 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 check_untyped_defs = true
 disallow_untyped_defs = true
-exclude = ['^tests/', '^scripts/wakeword/', '^\.venv']
+exclude = ['^tests/', '^scripts/wakeword/', '^\.venv', '^data/', '^runs/', '^models/']

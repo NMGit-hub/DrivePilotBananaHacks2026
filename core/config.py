@@ -222,6 +222,9 @@ class VehicleMotionConfig(_Strict):
     stopped_below: float = Field(0.12, gt=0.0, description="Box heights per second below which a car is still.")
     moving_above: float = Field(0.35, gt=0.0, description="Box heights per second above which it moves.")
     stopped_after_s: float = Field(0.5, ge=0.0, description="PLAN.md: a car is stopped after 0.5 s of stillness.")
+    still_radius: float = Field(
+        0.1, gt=0.0, description="Box heights: a car within this of where it rests has stopped (dates the stop)."
+    )
     max_track_age_s: float = Field(3.0, gt=0.0)
 
 
@@ -261,7 +264,8 @@ class TrafficLightConfig(_Strict):
     center_band: float = Field(0.40, gt=0.0, le=0.5)
     max_center_y: float = Field(0.65, gt=0.0, le=1.0)
     v_min: int = Field(150, ge=0, le=255)
-    lamp_contrast: int = Field(60, ge=0, le=255)
+    lamp_contrast: int = Field(60, ge=0, le=255, description="A lit lamp is this much brighter than its housing…")
+    lamp_v_cap: int = Field(245, ge=0, le=255, description="…but never needs to exceed this (lamps clip at 255).")
     min_lit_frac: float = Field(0.02, ge=0.0, lt=1.0)
     max_lamp_frac: float = Field(0.40, gt=0.0, le=1.0)
     s_min_halo: int = Field(70, ge=0, le=255)

@@ -148,14 +148,20 @@ def right_of_way_order(
     an entry must wait for any group member on its right; entries are released in topological order, earlier
     arrival first among those free to go. If every remaining member has someone on its right (4-way tie), the
     group is a deadlock and the rest keep arrival order.
+
+    Entries whose arrival is unknown (already standing still when first seen) are assumed to have been there
+    first: they come before every known arrival and never tie with one (a tie could hand us a right of way we
+    can't justify), and are ordered among themselves by the same rules.
     """
-    by_time = sorted(entries, key=lambda e: (e.arrived, e.key))
     groups: list[list[QueueEntry]] = []
-    for entry in by_time:
-        if groups and entry.arrived - groups[-1][0].arrived <= tie_window_s:
-            groups[-1].append(entry)
-        else:
-            groups.append([entry])
+    for known in (False, True):
+        part = sorted((e for e in entries if e.arrival_known is known), key=lambda e: (e.arrived, e.key))
+        first_group = len(groups)
+        for entry in part:
+            if len(groups) > first_group and entry.arrived - groups[-1][0].arrived <= tie_window_s:
+                groups[-1].append(entry)
+            else:
+                groups.append([entry])
 
     ordered: list[QueueEntry] = []
     tie_groups: list[list[str]] = []
@@ -220,8 +226,9 @@ class StopQueue:
                     arrived = v.stopped_since
                     if not v.arrival_known:
                         # Already stationary when first seen (e.g. it came out from behind a truck): we can't know
-                        # when it arrived, so assume it was there before us. Wrongly yielding is the safe mistake.
-                        arrived = min(arrived, self._ego_arrived - 1e-3)
+                        # when it arrived, so assume it was there before us (right_of_way_order puts it ahead of
+                        # every known arrival, without a tie). Wrongly yielding is the safe mistake.
+                        arrived = min(arrived, self._ego_arrived)
                     entry = QueueEntry(
                         key=key,
                         approach=v.approach,

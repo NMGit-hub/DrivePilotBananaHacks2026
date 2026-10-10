@@ -61,6 +61,33 @@ ego_motion:                 # "are we stopped?" from optical flow on a small fra
   stopped_after_s: 0.5      # PLAN.md: stopped when the background barely moves for 0.5 s
   smoothing_s: 0.2          # rolling median removes one-frame glitches
 
+vehicle_motion:             # is each tracked car stopped? (box heights per second, ego motion compensated)
+  window_s: 0.6
+  stopped_below: 0.12
+  moving_above: 0.35
+  stopped_after_s: 0.5      # PLAN.md: a car is stopped after 0.5 s of stillness
+  still_radius: 0.1         # dates the stop: when the car came within this many box heights of where it rests
+
+intersection:               # where waiting cars are relative to us, and when we are "at a stop sign"
+  side_x: 0.30              # left/right zones = outer 30 % of the width (cross-street cars seen side-on)
+  lead_min_height: 0.18     # a big centered car is the one in front of us (we're queued behind it, not at the line)
+  stop_sign_min_conf: 0.45
+  stop_sign_memory_s: 10.0  # at a stop = stopped within 10 s of seeing a stop sign
+  camera_hfov_deg: 114.0    # OnePlus 12 ultrawide; below ~100° answers warn that the sides may be out of view
+
+stop_queue:                 # 4-way stop: who goes first
+  tie_window_s: 1.0         # PLAN.md: stops within 1 s are a tie; the car on the right goes first
+  depart_moved: 1.0         # a waiting car that moved this many box heights has gone
+  lost_timeout_s: 8.0       # a hidden car (crossing traffic) keeps its place this long
+  max_wait_s: 45.0          # a car that never leaves is probably parked
+  ego_depart_s: 1.5         # moving this long = we left (creeping forward to see is not leaving)
+
+traffic_light:              # light color from the lit lamp; "tell me when it's green"
+  stable_s: 0.5             # reported color = majority over this window
+  green_confirm_frames: 5   # consecutive green frames after red/yellow, while stopped = "turned green"
+  red_memory_s: 5.0
+  anchor_pad: 0.15          # while stopped, lights are read at a remembered (padded) box even if YOLO misses them
+
 vision_model: claude        # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
 vision:
   claude:

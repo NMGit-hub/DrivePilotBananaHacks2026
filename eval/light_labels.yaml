@@ -1,0 +1,18 @@
+# Hand-labeled state of the traffic light facing our lane on dev clips (seconds of video time), from viewing
+# light crops and frames. Intervals: [start, end (null = clip end), color]. Outside the intervals: not scored.
+# turns_green: when the light facing us changes to green (the "tell me when it's green" event).
+clips:
+  - bdd_id: b97b9ee8-612c36ef  # SF: red while we wait; the light facing us (left pole) turns green at ~36.4 s
+    states:                     # (first labeled 39.6 s from a thumbnail; full-resolution frames show 36.4 s)
+      - [21.0, 36.3, red]
+      - [36.5, null, green]
+    turns_green: 36.4
+  - bdd_id: b44a71bf-4d366798  # NYC overpass: red
+    states:
+      - [21.0, null, red]
+  - bdd_id: c4130097-887da34f  # suburban queue: red
+    states:
+      - [28.0, null, red]
+  - bdd_id: b61456bb-5bfb50ee  # NYC rain, yellow-painted housings: red
+    states:
+      - [21.0, null, red]

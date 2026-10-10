@@ -110,6 +110,30 @@ def test_cars_already_waiting_when_we_arrive_are_ahead_of_us() -> None:
     assert q.snapshot().order[0].arrived == pytest.approx(2.0)
 
 
+def test_car_of_unknown_arrival_is_ahead_of_us_even_on_our_left() -> None:
+    # Already standing still when first seen (it may have waited long before we came): it must not count as a
+    # tie with us, because the tie rule would give us the right of way over a car on our left.
+    q = StopQueue()
+    ego = EgoStop(at_stop=True, stopped_since=10.0, moving_for_s=0.0)
+    q.update(10.0, ego, [])
+    events = q.update(10.6, ego, [WaitingVehicle(1, L, True, 10.1, 0.0, BOXES[L], arrival_known=False)])
+    snap = q.snapshot()
+    assert order_of(q) == ["left", "us"] and snap.tie_groups == () and not snap.your_turn
+    assert kinds(events) == ["vehicle_joined"]
+
+
+def test_unknown_arrivals_come_first_and_only_tie_among_themselves() -> None:
+    entries = [
+        QueueEntry("k", R, 0.0),
+        QueueEntry("u1", A, 5.0, arrival_known=False),
+        QueueEntry("u2", L, 5.5, arrival_known=False),
+        QueueEntry(EGO_KEY, US, 5.2),
+    ]
+    ordered, groups, deadlock = right_of_way_order(entries, tie_window_s=1.0)
+    assert [e.key for e in ordered] == ["u2", "u1", "k", EGO_KEY]  # u1 (ahead) yields to u2 (on its right)
+    assert groups == [["u1", "u2"]] and not deadlock
+
+
 def test_car_arriving_after_us_goes_behind_us() -> None:
     q, _ = run([Car(1, L, stop_t=12.0)], ego_stop_t=10.0, until=13.0)
     assert order_of(q) == ["us", "left"] and q.snapshot().ego_position == 1
