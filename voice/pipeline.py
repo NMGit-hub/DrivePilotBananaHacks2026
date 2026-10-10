@@ -53,6 +53,7 @@ class HeardQuestion:
     reason: str  # "silence" | "maximum length"
     speculated_t: float | None = None  # stream time the (used) speculative transcription started
     resumed: bool = False  # heard after a first end that turned out to be only the wake phrase
+    reply: bool = False  # heard in a reply window (no wake word): only a plain yes/no is taken (answers/parking.py)
 
 
 @dataclass(slots=True)
@@ -99,6 +100,8 @@ class VoicePipeline:
         self._resumed = False  # the question being collected was resumed after a wake-phrase-only transcript
         self._lock = threading.Lock()  # `_held` is shared with the transcription thread
         self._held: _Held | None = None
+        self._reply_request: float | None = None  # seconds to listen without the wake word (any thread sets it)
+        self._replying = False  # the question being collected is a reply (no wake word)
         self.wakes = 0
         self.timeouts = 0
         self.empty_transcripts = 0
@@ -119,11 +122,21 @@ class VoicePipeline:
             resuming = self._held is not None and self._held.state == "resume"
         return self._endpointer.active or resuming
 
+    def expect_reply(self, seconds: float) -> None:
+        """Listen for a short reply without the wake word, for `seconds` (DrivePilot just asked a yes/no question:
+        the parking-lot offer). Any thread; starts with the next chunk, unless a question is being collected."""
+        with self._lock:
+            self._reply_request = seconds
+
     def feed(self, chunk: np.ndarray) -> None:
         """Process one 80 ms int16 chunk at 16 kHz."""
         arrived = time.perf_counter()
         self._samples += len(chunk)
         t = self.t
+        with self._lock:
+            reply_s, self._reply_request = self._reply_request, None
+        if reply_s is not None and not self._endpointer.active:
+            self._listen_for_reply(t, reply_s)
         fired = self.wake.process(chunk, t)
         # Before the pre-roll is taken: the chunk the wake word fired in belongs to the question's audio (missing
         # it left an 80 ms hole right after "Hey DrivePilot" that garbled the first word, on real voices).
@@ -142,7 +155,7 @@ class VoicePipeline:
                 self._held = None
         self.wakes += 1
         self._wake_t = self._window_t = t
-        self._resumed = False
+        self._resumed = self._replying = False
         pre_roll = (
             np.concatenate(self._ring)[-round(self.cfg.endpoint.pre_roll_s * SAMPLE_RATE) :]
             if self._ring
@@ -156,12 +169,24 @@ class VoicePipeline:
             except Exception:
                 log.exception("on_wake failed")
 
+    def _listen_for_reply(self, t: float, seconds: float) -> None:
+        with self._lock:
+            if self._held is not None:  # (a pending wake-phrase-only question is dropped)
+                self._held.state = "superseded"
+                self._held = None
+        self._wake_t = self._window_t = t
+        self._resumed, self._replying = False, True
+        self._speculation = None
+        self._endpointer.resume(t, t, timeout_s=seconds)
+        log.info("listening for a reply", seconds=seconds)
+
     def _rewoke(self, t: float) -> None:
         """The wake word fired again while a question is being collected: the driver repeated it (maybe after an
         early wake). It doesn't start a new question: a wake at the end of one ("is it safe, DrivePilot?") would
         lose it, and the app would count the question as superseded. The listening window restarts from it."""
         log.info("wake word again while listening", t=round(t, 2))
         self._window_t = t
+        self._replying = False  # "Hey DrivePilot, ..." during a reply window is a question, not a reply
         self._endpointer.rewoke(t)
 
     def _take(self, chunk: np.ndarray, t: float, arrived: float) -> None:
@@ -193,7 +218,7 @@ class VoicePipeline:
             self._take(chunk, t, arrived)
 
     def _transcribe(self, audio: np.ndarray) -> Future[tuple[str, float]]:
-        if self._resumed:  # the audio starts after the wake phrase: only a repeat of it is stripped
+        if self._resumed or self._replying:  # no wake phrase at the start: only a repeat of it is stripped
             return self._stt_pool.submit(self.stt.transcribe, audio, pre_roll=False)
         return self._stt_pool.submit(self.stt.transcribe, audio)
 
@@ -203,6 +228,11 @@ class VoicePipeline:
             self._speculated_t = t
             return
         if event.kind == "timeout":
+            if self._replying:
+                self._replying = False
+                log.info("no reply")
+                self._nothing("no reply")
+                return
             self.timeouts += 1
             log.info("no question after the wake word", t=round(t, 2))
             self._nothing("timeout")
@@ -211,10 +241,11 @@ class VoicePipeline:
         speculative = self._speculation is not None and self._endpointer.speculation_still_valid()
         future = self._speculation if speculative and self._speculation is not None else self._transcribe(event.audio)
         self._speculation = None
-        wake_t, speech_end_t, resumed = self._wake_t, event.speech_end_t, self._resumed
+        wake_t, speech_end_t, resumed, reply = self._wake_t, event.speech_end_t, self._resumed, self._replying
+        self._replying = False
         speculated_t = self._speculated_t if speculative else None
         # Until the transcript is known, keep what comes next: if it was only the wake phrase, the question follows.
-        held = _Held(t) if t - self._window_t < self.cfg.endpoint.no_speech_timeout_s else None
+        held = _Held(t) if not reply and t - self._window_t < self.cfg.endpoint.no_speech_timeout_s else None
         with self._lock:
             self._held = held
 
@@ -242,6 +273,7 @@ class VoicePipeline:
                 event.reason,
                 speculated_t,
                 resumed,
+                reply,
             )
             log.info("heard", text=text, stt_ms=round(stt_ms), speculative=speculative, reason=event.reason)
             if not text:
@@ -252,6 +284,9 @@ class VoicePipeline:
                         if resume:
                             held.state = "resume"  # picked up with the next chunk (or by `flush`)
                         superseded = held.state == "superseded"
+                if reply:
+                    self._nothing("no reply")
+                    return
                 if resume or superseded:
                     return  # still listening for this question, or a new wake word took over
                 self.empty_transcripts += 1

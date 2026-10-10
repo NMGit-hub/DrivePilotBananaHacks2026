@@ -27,6 +27,8 @@ from perception.detector import VEHICLE_CLASSES, Track
 from perception.pipeline import PerceptionResult
 from state.approach import LEAD, classify_approach, front_of_approach, is_clipped
 from state.colors import color_name, frame_gains
+from state.parking import EMPTY as EMPTY_PARKING
+from state.parking import ParkingEvent, ParkingSnapshot, ParkingTracker
 from state.stop_queue import Approach, EgoStop, QueueSnapshot, StopQueue, WaitingVehicle
 from state.traffic_light import LightColor, LightReading, TrafficLightTracker
 from state.vehicle_motion import VehicleMotionTracker, VehicleState
@@ -58,9 +60,10 @@ class VehicleView:
 class WorldEvent:
     """Something the alert engine may announce."""
 
-    kind: str  # "your_turn", "light_green", "arrived_at_stop", "left_intersection", "drove_off", ...
+    kind: str  # "your_turn", "light_green", "arrived_at_stop", "left_intersection", "drove_off", "parking_spot", ...
     t: float
-    detail: dict[str, object] = field(default_factory=dict)
+    detail: dict[str, object] = field(default_factory=dict)  # logged
+    payload: object = field(default=None, compare=False, repr=False)  # not logged (parking: (event, frame))
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +85,7 @@ class WorldSnapshot:
     caveats: tuple[str, ...]
     people_ahead: int = 0  # pedestrians in front of us (answers add "watch for the pedestrian")
     behind_lead: bool = False  # stopped, and a car was in front of us during this stop (not at the line yet)
+    parking: ParkingSnapshot = EMPTY_PARKING  # parked cars, open spaces, "looks like a lot" (V2)
 
 
 def _empty_queue(t: float) -> QueueSnapshot:
@@ -100,6 +104,8 @@ class WorldState:
         self.vehicle_motion = VehicleMotionTracker(cfg.vehicle_motion)
         self.queue = StopQueue(cfg.stop_queue)
         self.lights = TrafficLightTracker(cfg.traffic_light)
+        self.parking = ParkingTracker(cfg.parking, cfg.effective_hfov_deg)
+        self._parking_mode: str | None = None  # a mode change asked by the parking watch (applied on the next frame)
         self._colors: dict[int, tuple[float, str]] = {}  # track id -> (when named, color)
         self._frames: deque[Frame] = deque()  # guarded by _lock
         self._stop_sign_last_seen: float | None = None
@@ -116,6 +122,7 @@ class WorldState:
         self.vehicle_motion.reset()
         self.queue.reset()
         self.lights.reset()
+        self.parking.reset()
         self._colors.clear()
         with self._lock:
             self._frames.clear()
@@ -200,6 +207,12 @@ class WorldState:
         if turned_green:
             events.append(WorldEvent("light_green", t, {"ego_stopped": ego.stopped}))
 
+        mode, self._parking_mode = self._parking_mode, None
+        if mode is not None:
+            self.parking.set_mode(mode)
+        for pe in self.parking.update(t, frame.width, frame.height, result.tracks, ego.stopped, ego.homography):
+            events.append(WorldEvent(f"parking_{pe.kind}", t, _parking_detail(pe), payload=(pe, frame)))
+
         people_ahead = sum(
             1
             for tr in result.tracks
@@ -232,6 +245,7 @@ class WorldState:
             caveats=tuple(caveats),
             people_ahead=people_ahead,
             behind_lead=ego.stopped and self._lead_this_stop,
+            parking=self.parking.snapshot(),
         )
         with self._lock:
             self._buffer_frame(frame)
@@ -314,6 +328,31 @@ class WorldState:
     def light_is(snapshot: WorldSnapshot, color: LightColor) -> bool:
         """True if the smoothed light state facing us is `color` with confidence."""
         return snapshot.light.color is color and snapshot.light.confident
+
+    def set_parking_mode(self, mode: str) -> None:
+        """ "lot" or "street" (the parking watch decides; any thread): applied on the next frame."""
+        if mode not in ("lot", "street"):
+            raise ValueError(f"unknown parking mode: {mode}")
+        self._parking_mode = mode
+
+
+def _parking_detail(event: ParkingEvent) -> dict[str, object]:
+    """What a parking event logs (the full event and its frame travel in the payload)."""
+    detail: dict[str, object] = {}
+    if event.space is not None:
+        space = event.space
+        detail.update(
+            side=space.side,
+            stalls=space.stalls,
+            cars_before=space.cars_before,
+            z=round(space.z, 1),
+            depth=round(space.visible_depth, 2),
+            near=space.near.track_id,
+            far=space.far.track_id,
+        )
+    if event.car is not None:
+        detail.update(side=event.car.side, track=event.car.track_id, z=round(event.car.z, 1))
+    return detail
 
 
 def empty_snapshot(t: float = 0.0) -> WorldSnapshot:

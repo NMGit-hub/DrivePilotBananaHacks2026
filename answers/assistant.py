@@ -23,11 +23,12 @@ from typing import Protocol
 
 from answers import local
 from answers.alerts import LIGHT_GREEN, YOUR_TURN, AlertEngine, ArmResult
+from answers.parking import ParkingWatch
 from answers.speech import Priority, Speaker, Utterance
 from core.config import AppConfig
 from core.logging_setup import get_logger
 from state.world import WorldEvent, WorldSnapshot
-from voice.router import Route, RouteKind, route
+from voice.router import Route, RouteKind, parse_yes_no, route
 
 log = get_logger(__name__)
 
@@ -37,6 +38,7 @@ NOTHING_TO_REPEAT = "I haven't said anything yet."
 STARTING = "I'm still starting up. Ask me again in a moment."
 NO_MODEL = "I can't look at the scene right now: the vision model isn't connected."
 NO_NAV = "Navigation isn't available right now."
+NO_PARKING = "I can't look for parking spots right now."
 CAMERA_LOST = "I've lost the camera feed, so I can't see the road right now."
 HANDLER_ERROR = "Sorry, something went wrong answering that."
 CANCELLED = "Okay, cancelled."
@@ -92,6 +94,7 @@ class Assistant:
         nav: NavAnswerer | None = None,
         model: SceneAnswerer | None = None,
         unavailable: Callable[[], str | None] | None = None,
+        parking: ParkingWatch | None = None,
     ) -> None:
         self.cfg = cfg
         self._snapshot = snapshot
@@ -99,6 +102,7 @@ class Assistant:
         self.speaker = speaker
         self.nav = nav
         self.model = model
+        self.parking = parking  # V2: "find me a parking spot" (set after construction when it needs `say`)
         self.alerts = AlertEngine(cfg.alerts, self.say)
         self._lock = threading.Lock()
         self._last: Utterance | None = None
@@ -127,11 +131,21 @@ class Assistant:
             return self._last
 
     def on_world_event(self, event: WorldEvent) -> None:
-        """WorldState event callback (perception thread): alerts."""
+        """WorldState event callback (perception thread): alerts, and the parking watch."""
+        if self.parking is not None:
+            self.parking.on_world_event(event)
         if event.kind == "segment_reset":
             self.alerts.reset()
             return
         self.alerts.on_world_event(event)
+
+    def takes_reply(self, text: str) -> bool:
+        """Speech heard in a reply window (no wake word: after "Want help finding a spot?") is only answered if it
+        is a clear yes or no to a pending offer; anything else is ignored (it may be a passenger talking)."""
+        taken = self.parking is not None and self.parking.awaiting_reply() and parse_yes_no(text) is not None
+        if not taken:
+            log.info("reply ignored", text=text)
+        return taken
 
     # -------------------------------------------------------------------------------- questions
 
@@ -215,10 +229,20 @@ class Assistant:
     def _answer(
         self, r: Route, snap: WorldSnapshot | None, generation: int, cancel: threading.Event
     ) -> tuple[Answer, str]:
+        if self.parking is not None and self.parking.awaiting_reply():
+            yes = parse_yes_no(r.question)  # the answer to "Want help finding a spot?"
+            if yes is not None:
+                return self.parking.on_reply(yes), "parking"
         if r.kind is RouteKind.EMPTY:
             return None, "none"
         if r.kind is RouteKind.CONTROL:
             return self._control(r.intent, snap), "control"
+        if r.kind is RouteKind.PARKING:
+            if self.parking is None:
+                return NO_PARKING, "parking"
+            if r.intent == "stop":
+                return self.parking.cancel(), "parking"
+            return self.parking.arm(street=r.intent == "find_street"), "parking"
         if r.kind is RouteKind.GAP_CHECK and r.intent == "school_bus":
             return local.SCHOOL_BUS_RULE, "local"  # a fixed rule: no camera needed
         if r.kind in (RouteKind.DESTINATION, RouteKind.NAV, RouteKind.LANE):  # GPS and the route, not the camera
@@ -288,7 +312,10 @@ class Assistant:
             return None
         if intent == "cancel":
             self._interrupt()
-            return CANCELLED if self.alerts.cancel(snap.t if snap is not None else None) else OKAY
+            cancelled = self.alerts.cancel(snap.t if snap is not None else None)
+            if self.parking is not None and self.parking.stop_silently():
+                cancelled = True
+            return CANCELLED if cancelled else OKAY
         if intent == "repeat":
             last = self.last
             if last is None:

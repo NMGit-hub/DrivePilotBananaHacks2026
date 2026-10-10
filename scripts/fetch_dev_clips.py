@@ -24,7 +24,8 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = REPO_ROOT / "eval" / "dev_clips.yaml"
 OUT_DIR = REPO_ROOT / "data" / "videos" / "dev"
-INDEX_CACHE = REPO_ROOT / "data" / "videos" / ".bdd100k_val_index.json"
+INDEX_CACHE = REPO_ROOT / "data" / "videos" / ".bdd100k_index.json"  # every split (train, val, test)
+SPLITS = ("train", "val", "test")
 
 PART_URL = (
     "https://huggingface.co/datasets/linxxx3/bdd100k_videos/resolve/main/bdd100k_videos/bdd100k_videos.zip.part-%05d"
@@ -50,8 +51,8 @@ def fetch_range(start: int, end: int) -> bytes:
     return bytes(out)
 
 
-def read_val_index() -> dict[str, dict[str, int]]:
-    """Map 'xxxxxxxx-xxxxxxxx' → {offset, size, crc} for every val video, from the zip64 central directory."""
+def read_index() -> dict[str, dict[str, int | str]]:
+    """Map 'xxxxxxxx-xxxxxxxx' → {offset, size, crc, split} for every video, from the zip64 central directory."""
     tail = fetch_range(TOTAL_SIZE - 65_536, TOTAL_SIZE - 1)
     locator = tail.rfind(b"PK\x06\x07")
     if locator < 0:
@@ -63,7 +64,7 @@ def read_val_index() -> dict[str, dict[str, int]]:
     cd_size, cd_offset = struct.unpack("<QQ", eocd64[40:56])
     cd = fetch_range(cd_offset, cd_offset + cd_size - 1)
 
-    index: dict[str, dict[str, int]] = {}
+    index: dict[str, dict[str, int | str]] = {}
     pos = 0
     while cd[pos : pos + 4] == b"PK\x01\x02":
         method = struct.unpack("<H", cd[pos + 10 : pos + 12])[0]
@@ -86,31 +87,33 @@ def read_val_index() -> dict[str, dict[str, int]]:
                 if local_offset == 0xFFFFFFFF:
                     local_offset = struct.unpack("<Q", values[k : k + 8])[0]
             e += 4 + size
-        if "/val/" in name and name.endswith(".mov") and method == 0:
-            index[Path(name).stem] = {"offset": local_offset, "size": csize, "crc": crc}
+        split = next((s for s in SPLITS if f"/{s}/" in name), None)
+        if split is not None and name.endswith(".mov") and method == 0:
+            index[Path(name).stem] = {"offset": local_offset, "size": csize, "crc": crc, "split": split}
         pos += 46 + name_len + extra_len + comment_len
     return index
 
 
-def load_index() -> dict[str, dict[str, int]]:
-    """Return the cached val index, building it on first use."""
+def load_index() -> dict[str, dict[str, int | str]]:
+    """Return the cached index of every video, building it on first use."""
     if INDEX_CACHE.exists():
         return json.loads(INDEX_CACHE.read_text(encoding="utf-8"))
     print("reading the archive's central directory (one-time, ~13 MB)...")
-    index = read_val_index()
+    index = read_index()
     INDEX_CACHE.parent.mkdir(parents=True, exist_ok=True)
     INDEX_CACHE.write_text(json.dumps(index), encoding="utf-8")
     return index
 
 
-def download_clip(entry: dict[str, int], dest: Path) -> None:
+def download_clip(entry: dict[str, int | str], dest: Path) -> None:
     """Download one stored zip entry and verify its CRC-32 before writing it."""
-    header = fetch_range(entry["offset"], entry["offset"] + 29)
+    offset, size = int(entry["offset"]), int(entry["size"])
+    header = fetch_range(offset, offset + 29)
     if header[:4] != b"PK\x03\x04":
         raise RuntimeError("local file header not found")
     name_len, extra_len = struct.unpack("<HH", header[26:30])
-    start = entry["offset"] + 30 + name_len + extra_len
-    data = fetch_range(start, start + entry["size"] - 1)
+    start = offset + 30 + name_len + extra_len
+    data = fetch_range(start, start + size - 1)
     if zlib.crc32(data) != entry["crc"]:
         raise RuntimeError(f"CRC mismatch for {dest.name}")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"not found in archive: {clip['bdd_id']}", file=sys.stderr)
             return 1
         dest = OUT_DIR / f"{clip['name']}__{clip['bdd_id']}.mov"
-        print(f"downloading {dest.name} ({entry['size'] / 1e6:.1f} MB)")
+        print(f"downloading {dest.name} ({int(entry['size']) / 1e6:.1f} MB)")
         download_clip(entry, dest)
     print("done")
     return 0

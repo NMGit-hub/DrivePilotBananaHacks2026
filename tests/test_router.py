@@ -6,6 +6,7 @@ import pytest
 
 from voice.router import RouteKind, normalize, route, strip_wake_word
 
+P = RouteKind.PARKING
 C, D, W, G, R, N, L, M = (
     RouteKind.CONTROL,
     RouteKind.DESTINATION,
@@ -45,6 +46,23 @@ TABLE: list[tuple[str, RouteKind, str]] = [
     ("We're heading to the airport", D, "set_destination"),
     ("I'm going to turn left here, is that allowed?", M, "scene"),  # "going to" + verb is not a place
     ("I'm going to park here, is that okay?", M, "scene"),
+    # --- find me a parking spot (V2)
+    ("Hey DrivePilot, find me a parking spot.", P, "find"),
+    ("Help me find a spot.", P, "find"),
+    ("Can you help me find parking?", P, "find"),
+    ("Where can I park?", P, "find"),
+    ("Look for an open space.", P, "find"),
+    ("Keep an eye out for parking.", P, "find"),
+    ("Are there any open spots?", P, "find"),
+    ("Find me street parking.", P, "find_street"),
+    ("Look for a spot on the street.", P, "find_street"),
+    ("Stop looking.", P, "stop"),
+    ("Stop looking for parking.", P, "stop"),
+    ("I found a spot.", P, "stop"),
+    ("We're parked.", P, "stop"),
+    ("Can I park here?", M, "scene"),  # a sign question, not the parking watch
+    ("Is this a parking spot?", M, "scene"),
+    ("What does that parking sign say?", M, "scene"),
     # --- watches
     ("Tell me when it's green.", W, "light_watch"),
     ("Tell me when the light turns green", W, "light_watch"),

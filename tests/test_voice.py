@@ -410,6 +410,36 @@ def test_the_name_at_the_end_of_a_resumed_question_does_not_lose_it() -> None:
     assert [q.text for q in heard] == ["stop watching the light"] and nothing == [] and len(wakes) == 1
 
 
+def test_a_reply_window_hears_a_plain_answer_without_the_wake_word() -> None:
+    # The parking-lot offer: DrivePilot asks, then listens 5 s for a plain yes/no (the user's choice, V2).
+    wakes: list[float] = []
+    pipe, heard, nothing = wake_only_pipeline([], QuestionStt())
+    pipe.on_wake = lambda: wakes.append(pipe.t)
+    feed_pcm(pipe, speech_stream(1.0), live=True)
+    pipe.expect_reply(5.0)
+    feed_pcm(pipe, speech_stream(4.0, (0.8, 1.6, QUESTION)), live=True)
+    pipe.flush()
+    assert [(q.text, q.reply) for q in heard] == [("stop watching the light", True)]
+    assert wakes == [] and nothing == [] and not pipe.listening
+
+
+def test_a_reply_window_that_hears_nothing_reports_it() -> None:
+    pipe, heard, nothing = wake_only_pipeline([], QuestionStt())
+    pipe.expect_reply(2.0)
+    feed_pcm(pipe, speech_stream(4.0), live=True)
+    pipe.flush()
+    assert heard == [] and nothing == ["no reply"] and pipe.timeouts == 0  # (the page turns its light off)
+
+
+def test_the_wake_word_in_a_reply_window_makes_it_a_question() -> None:
+    # "Hey DrivePilot, what's that sign?" right after the offer is a question, not a non-answer to ignore.
+    pipe, heard, _ = wake_only_pipeline([1.5], QuestionStt())
+    pipe.expect_reply(5.0)
+    feed_pcm(pipe, speech_stream(6.0, (0.8, 1.5, WAKE_TAIL), (2.2, 3.2, QUESTION)), live=True)
+    pipe.flush()
+    assert [(q.text, q.reply) for q in heard] == [("stop watching the light", False)]
+
+
 def test_after_a_wake_phrase_only_transcript_listening_still_ends_at_the_wake_timeout() -> None:
     pipe, heard, nothing = wake_only_pipeline([1.0], QuestionStt())
     feed_pcm(pipe, speech_stream(8.0, (0.6, 1.5, WAKE_TAIL)), live=True)

@@ -89,6 +89,13 @@ class FileVideoConfig(_Strict):
     realtime: bool = Field(True, description="Play at real-time speed, dropping frames if processing lags.")
     start_s: float = Field(0.0, ge=0.0, description="Start playback this many seconds into the clip.")
     loop: bool = False
+    hfov_deg: float | None = Field(
+        None,
+        gt=0.0,
+        lt=180.0,
+        description="Horizontal field of view of recorded clips (BDD100K dashcams ~60°); None = the live "
+        "camera's (intersection.camera_hfov_deg). Used where geometry needs the focal length (parking).",
+    )
 
 
 class CameraVideoConfig(_Strict):
@@ -353,6 +360,69 @@ class AlertsConfig(_Strict):
     seek_back_tolerance_s: float = Field(1.0, ge=0.0, description="Video jumping back more than this drops requests.")
 
 
+class ParkingConfig(_Strict):
+    """Finding an open parking spot (state/parking.py: geometry and spots; answers/parking.py: the watch)."""
+
+    camera_height_m: float = Field(1.3, gt=0.0, description="Camera above the ground (windshield mount).")
+    car_height_m: float = Field(1.5, gt=0.0, description="A typical car's height (horizon estimate from boxes).")
+    horizon_prior: float = Field(0.5, gt=0.0, lt=1.0, description="Horizon row / frame height until estimated.")
+    horizon_samples: int = Field(30, ge=1, description="Car boxes needed before the estimated horizon is used.")
+    lot_pitch_m: float = Field(2.7, gt=0.0, description="Stall spacing in lots (prior until measured).")
+    curb_pitch_m: float = Field(6.0, gt=0.0, description="Parallel-parked car spacing (car length + ~1 m).")
+    pitch_window_s: float = Field(6.0, gt=0.0, description="Spacings measured over this long give the pitch.")
+    lane_half_width_m: float = Field(1.4, gt=0.0, description="Cars nearer our path than this are in the aisle.")
+    row_max_x_m: float = Field(9.0, gt=0.0, description="Parked cars further to the side are in another row.")
+    row_depth_m: float = Field(2.5, gt=0.0, description="Cars within this of the nearest one sideways = its row.")
+    max_ahead_pitches: float = Field(8.0, gt=0.0, description="Spots further ahead than this many stalls: ignored.")
+    gap_ratio: float = Field(1.7, gt=1.0, description="Spacing (in pitches) between parked cars that leaves a space.")
+    car_width_m: float = Field(1.85, gt=0.0)
+    car_length_m: float = Field(4.7, gt=0.0, description="Depth of a stall: anything standing in it fills it.")
+    space_front_m: float = Field(
+        0.5,
+        gt=0.0,
+        description="The aisle-side face of a space (where a parked car's front would show) is checked "
+        "for visibility: deeper parts are always hidden behind the nearer neighbour in perspective.",
+    )
+    max_occlusion: float = Field(0.5, ge=0.0, le=1.0, description="A space more hidden by nearer vehicles is unseen.")
+    min_visible_depth_m: float = Field(
+        1.0,
+        ge=0.0,
+        description="Report a space only once we can see this far into the middle of the stall past the nearer "
+        "neighbour (a small car pulled in behind a big one stays hidden until then); the reach grows as we get closer.",
+    )
+    confirm_s: float = Field(0.7, gt=0.0, description="A space must look open this long while we approach...")
+    confirm_approach_pitches: float = Field(0.3, ge=0.0, description="...and we must move this far (viewpoints).")
+    confirm_stopped_s: float = Field(2.0, gt=0.0, description="Standing still: confirmed after this long instead.")
+    grace_s: float = Field(0.25, ge=0.0, description="A candidate unseen for this long (a dropout) keeps its streak.")
+    history_s: float = Field(1.5, gt=0.0, description="Position history kept per car.")
+    fit_s: float = Field(0.7, gt=0.0, description="Velocities are fitted over this long.")
+    static_rel_tol: float = Field(0.35, ge=0.0, description="Parked: moves against our motion by < this fraction...")
+    static_abs_tol: float = Field(0.25, ge=0.0, description="...plus this many pitches per second...")
+    static_abs_tol_x: float = Field(0.1, ge=0.0, description="Sideways (precise, unlike depth): pitches per second.")
+    box_jitter_px: float = Field(
+        1.5,
+        ge=0.0,
+        description="...plus 3x the speed noise from this much box jitter (depth from one image row is "
+        "noisy far away: at 30 m, 1 px is ~0.6 m).",
+    )
+    min_parked_s: float = Field(0.5, ge=0.0, description="A car counts as parked after this long still.")
+    move_confirm_s: float = Field(0.4, ge=0.0, description="...and stops counting as parked after moving this long.")
+    max_yaw_rate_dps: float = Field(12.0, gt=0.0, description="Turning faster than this: positions aren't compared.")
+    pull_out_parked_s: float = Field(3.0, gt=0.0, description="A car parked at least this long...")
+    pull_out_moving_s: float = Field(0.7, gt=0.0, description="...that moves this long is pulling out.")
+    lot_min_parked: int = Field(6, ge=1, description="Parked cars in rows (recently) for 'this looks like a lot'.")
+    lot_window_s: float = Field(5.0, gt=0.0)
+    lot_max_speed_mps: float = Field(4.5, gt=0.0, description="~10 mph: faster isn't looking for a spot.")
+    parked_after_s: float = Field(10.0, gt=0.0, description="We have parked: stopped this long after a turn...")
+    parked_turn_deg: float = Field(50.0, gt=0.0, description="...of at least this much (into a stall)...")
+    parked_turn_window_s: float = Field(20.0, gt=0.0, description="...within this long before stopping...")
+    parked_long_stop_s: float = Field(45.0, gt=0.0, description="...or stopped this long anyway.")
+    watch_timeout_s: float = Field(300.0, gt=0.0, description="The user: stop looking after 5 minutes.")
+    offer_cooldown_s: float = Field(180.0, ge=0.0, description="After an offer, don't offer again for this long.")
+    reply_window_s: float = Field(5.0, gt=0.0, description="Listen this long for a plain yes/no after an offer.")
+    max_checks_per_min: int = Field(20, ge=1, description="Vision-model checks of candidate spots, at most.")
+
+
 # ------------------------------------------------------------------------------------------- vision
 
 
@@ -545,6 +615,16 @@ class AppConfig(_Strict):
     stop_queue: StopQueueConfig = StopQueueConfig()
     traffic_light: TrafficLightConfig = TrafficLightConfig()
     alerts: AlertsConfig = AlertsConfig()
+    parking: ParkingConfig = ParkingConfig()
+
+    @property
+    def effective_hfov_deg(self) -> float:
+        """Field of view of the frames being processed: a recorded clip's own (`video.file.hfov_deg`) when set,
+        otherwise the live camera's (`intersection.camera_hfov_deg`)."""
+        if self.video.source == "file" and self.video.file.hfov_deg is not None:
+            return self.video.file.hfov_deg
+        return self.intersection.camera_hfov_deg
+
     vision_model: Literal["claude", "gemini", "ollama", "mock"] = "claude"
     vision: VisionConfig = VisionConfig()
     voice: VoiceConfig = VoiceConfig()

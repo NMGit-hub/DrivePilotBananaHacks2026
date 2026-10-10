@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 from answers.alerts import LIGHT_GREEN, YOUR_TURN
 from answers.assistant import CAMERA_LOST, Assistant
 from answers.lanes import VisionLaneReader
+from answers.parking import ParkingWatch
 from answers.scene import SceneHandler
 from answers.speech import Priority, Speaker, TextSpeaker, Utterance
 from answers.vision import VisionModel
@@ -220,12 +221,39 @@ class DrivePilotApp:
         self.assistant = Assistant(
             cfg, self._snapshot, self.screen, nav=self.nav, model=self.scene, unavailable=self._unavailable
         )
+        self.parking = ParkingWatch(  # V2: "find me a parking spot"
+            cfg.parking,
+            cfg.vision,
+            vision,
+            self.assistant.say,
+            self._snapshot,
+            self.world.set_parking_mode,
+            self.media_time,
+            expect_reply=self._expect_reply,
+            quiet=lambda: self.assistant.alerts.quiet,
+        )
+        self.assistant.parking = self.parking
 
     # ------------------------------------------------------------------------------------ wiring
 
     def attach_voice(self, pipeline: Any, mic: Any) -> None:
         """Use a `VoicePipeline` (built with this app's `on_heard` / `on_wake` / `on_nothing`) on `mic`."""
         self.voice, self._mic = pipeline, mic
+
+    def _expect_reply(self, seconds: float) -> None:
+        """DrivePilot asked a yes/no question (the parking-lot offer): once it has finished saying it (the
+        microphone must not hear our own voice), listen a few seconds for a plain answer, no wake word needed."""
+
+        def run() -> None:
+            wait_idle = getattr(self.speaker, "wait_idle", None)
+            if callable(wait_idle):
+                wait_idle(8.0)
+            if self.voice is not None and not self._stop.is_set():
+                self.voice.expect_reply(seconds)
+                if self.hub is not None:
+                    self.hub.publish("listening")
+
+        threading.Thread(target=run, name="expect-reply", daemon=True).start()
 
     def media_time(self) -> float:
         """The pipeline clock: video time in file mode, wall time in camera mode."""
@@ -298,6 +326,9 @@ class DrivePilotApp:
 
     def on_heard(self, heard: HeardQuestion) -> None:
         """A transcribed spoken question (`HeardQuestion`, voice answer thread)."""
+        if heard.reply and not self.assistant.takes_reply(heard.text):
+            self.on_nothing("reply")  # not a yes/no to the offer (a passenger?): ignored
+            return
         lag = heard.end_t - heard.speech_end_t if heard.speech_end_t is not None else 0.0
         origin = heard.end_detected_at - max(lag, 0.0)  # when the driver stopped talking
         timings = {
@@ -598,6 +629,7 @@ class DrivePilotApp:
     def stop(self) -> None:
         """Stop every thread and write the summary."""
         self._stop.set()
+        self.parking.close()
         if self.voice is not None:
             self.voice.stop()
         if self._mic is not None:

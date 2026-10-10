@@ -91,19 +91,24 @@ class Endpointer:
         self._speech_end: float | None = None  # end of the last speech (stream time)
         self._speculated_at: float | None = None
         self._started_at = t
+        self._timeout_s = self.cfg.no_speech_timeout_s
         self.vad.process(pre_roll)  # warm the VAD state on the pre-roll (may contain the end of "pilot")
         self._vad_t = self._t0 + (len(pre_roll) // 512) * 512 / SAMPLE_RATE
         self.active = True
 
-    def resume(self, t: float, wake_t: float) -> None:
-        """Listen again from stream time `t`: what ended before was only the wake phrase (its transcript was empty).
+    def resume(self, t: float, wake_t: float, timeout_s: float | None = None) -> None:
+        """Listen again from stream time `t`: what ended before was only the wake phrase (its transcript was empty),
+        or DrivePilot asked a yes/no question and waits for the reply (no wake word).
 
         The wake phrase is over, so any speech now is the question and ends after `end_silence_s`; the
-        no-speech timeout still counts from the wake word (`wake_t`), so a resume never extends it.
+        no-speech timeout (`timeout_s`, default `no_speech_timeout_s`) counts from `wake_t`, so a resume never
+        extends it.
         """
         self.start(np.zeros(0, np.float32), t)
         self._in_wake_tail = False
         self._started_at = wake_t
+        if timeout_s is not None:
+            self._timeout_s = timeout_s
 
     def rewoke(self, t: float) -> None:
         """The wake word fired again while collecting (the driver repeated it): the no-speech timeout now counts
@@ -131,7 +136,7 @@ class Endpointer:
                 if self._heard_speech and self._speech_end is None:
                     self._speech_end = self._vad_t - VAD_CHUNK / SAMPLE_RATE
         if not self._heard_speech:
-            if t - self._started_at >= cfg.no_speech_timeout_s:
+            if t - self._started_at >= self._timeout_s:
                 return self._finish("timeout", "nothing said")
             return None
         if self._samples / SAMPLE_RATE >= cfg.max_utterance_s:

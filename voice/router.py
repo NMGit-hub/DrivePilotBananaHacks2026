@@ -35,6 +35,7 @@ class RouteKind(StrEnum):
     CONTROL = "control"
     DESTINATION = "destination"
     WATCH = "watch"
+    PARKING = "parking"  # V2: "find me a parking spot" / "stop looking"
     GAP_CHECK = "gap_check"
     RIGHT_OF_WAY = "right_of_way"
     NAV = "nav"
@@ -181,6 +182,69 @@ _CONTROLS: list[tuple[str, re.Pattern[str]]] = [
         ),
     ),
 ]
+
+# ------------------------------------------------------------------------------------------- parking
+
+_SPACE_WORDS = (
+    r"(?:parking|parking spots?|parking spaces?|parking places?|spots?|spaces?|places? to park|spots? to park|"
+    r"spaces? to park|somewhere to park)"
+)
+_PARKING: list[tuple[str, re.Pattern[str]]] = [
+    (
+        "stop",
+        _rx(
+            r"^(?:ok |okay )?(?:stop|quit|cancel|end|no more) (?:looking|searching)(?: for (?:a |an |some )?"
+            rf"(?:open |empty |free )?{_SPACE_WORDS})?(?: now| please)?$",
+            r"\b(?:stop|quit|cancel|end) (?:the )?(?:parking|spot) (?:search|watch|finder|help)\b",
+            r"^(?:i|we) (?:found|got|have) (?:a |one|it|the )?(?:spot|space|parking spot|parking space)?(?: now)?$",
+            r"^(?:i am|we are|i have|we have) parked(?: now)?$",
+            r"^(?:i|we) parked$",
+        ),
+    ),
+    (
+        "find_street",
+        _rx(
+            r"\b(?:find|look for|looking for|search for|help (?:me|us) find|get (?:me|us))\b.*\b(?:street|curb|"
+            r"curbside|parallel) parking\b",
+            r"\b(?:find|look for|looking for|search for|help (?:me|us) find|get (?:me|us))\b.*\b(?:spot|space|place)s?"
+            r" (?:on|along) (?:the|this) (?:street|road|curb)\b",
+        ),
+    ),
+    (
+        "find",
+        _rx(
+            r"\b(?:find|look for|looking for|search for|hunt for|keep an eye out for) (?:me |us )?"
+            rf"(?:a |an |some |any |another )?(?:open |empty |free |good |close |closer |better )?{_SPACE_WORDS}\b",
+            rf"\bhelp (?:me|us) (?:find |look for |search for |get )?(?:a |an |some )?{_SPACE_WORDS}\b",
+            r"\bhelp (?:me|us) park\b",
+            r"\bget (?:me|us) (?:a|an) (?:parking )?(?:spot|space)\b",
+            r"\bwhere (?:can|could|should|do) (?:i|we) park\b",
+            r"\b(?:are there|is there) (?:any |an |a )?(?:open|empty|free) (?:parking )?(?:spots?|spaces?)\b",
+        ),
+    ),
+]
+_YES = re.compile(
+    r"^(?:yes|yeah|yea|yep|yup|sure|please|ok|okay|alright|go ahead|do it|sounds good|absolutely|definitely|"
+    r"of course|why not|please do|yes please|that would be great|help me)\b"
+)
+_NO = re.compile(
+    r"^(?:no|nope|nah|not now|not right now|no thanks|no thank you|do not|i am good|we are good|i am fine|"
+    r"we are fine|never ?mind|maybe later|not yet)\b"
+)
+
+
+def parse_yes_no(text: str) -> bool | None:
+    """A plain reply to a yes/no offer (the parking-lot offer is answered without the wake word): True, False, or
+    None if it isn't clearly either (then it's ignored: it may be a passenger talking)."""
+    norm = strip_wake_word(text).lower()  # (not `normalize`: it drops a leading "yes"/"okay" as filler)
+    norm = _CONTRACTION.sub(lambda m: _CONTRACTIONS[m.group(1)], norm)
+    norm = re.sub(r"\s+", " ", re.sub(r"[^\w\s']", " ", norm)).strip(" '")
+    if _NO.search(norm):
+        return False
+    if _YES.search(norm):
+        return True
+    return None
+
 
 # ----------------------------------------------------------------------------------------- navigation
 
@@ -480,6 +544,10 @@ def _route_once(text: str) -> Route:
 
     if _SCHOOL_BUS_PASS.search(norm):  # a fixed legal rule, whatever the traffic: never pass a stopped school bus
         return make(RouteKind.GAP_CHECK, "school_bus")
+
+    for intent, pattern in _PARKING:  # "find me a spot" (not "can I park here?": that's a sign question)
+        if pattern.search(norm):
+            return make(RouteKind.PARKING, intent)
 
     for intent, pattern in _NAV_FIRST:  # "did I miss my turn", "tell me where to go" before right of way / watches
         if pattern.search(norm):
