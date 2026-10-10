@@ -139,7 +139,7 @@ function show(m) {
   if (m.id) lastId = m.id;
   switch (m.type) {
     case "question":
-      listening.classList.remove("on");
+      if (!m.superseded) listening.classList.remove("on");  // an old, skipped question: still listening
       turn("q", m.via === "typed" ? "You (typed)" : "You", m.text, m.t);
       answerBlock = null;
       break;

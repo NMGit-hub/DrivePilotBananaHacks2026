@@ -4,7 +4,7 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
-### V2 start (2026-10-10): throttle check, the early-wake voice bug fixed
+### V1 polish (2026-10-10): throttle check, the early-wake voice bug fixed and reviewed
 - **Throttle check** (HANDOFF.md section 3 item 2): not throttled. On the charger; under a 4-thread load the busy
   cores ran at ~135% of rated speed (~3.9 GHz); all 20 threads busy: 89% (2.66 GHz, the package power limit,
   not the 31% stuck state seen earlier); GPU fp16 matmul 22.9 TFLOPS at P0. The Windows power mode overlay is
@@ -17,12 +17,24 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   wake phrase at its start, so only a whole repeated wake phrase is stripped there ("is it my turn,
   DrivePilot?" keeps its words); a repeated "Hey DrivePilot" at the start of any transcript is now stripped.
   The benchmarks (`voice_eval.py`, `check_real.py`, `run_sheet.py --voice`) feed silence until the pipeline is
-  idle, so a question still being waited for can't spill into the next clip. 10 new test cases (the pipeline ones fail on the old code).
-- **Measured:** `scripts/voice_eval.py --limit 40` (`runs/20261010-111819_voice`, before:
-  `runs/20261010-110459_voice`): the "woke, heard nothing" rows went from 4 (3 clear voices + Reza) to 1 (Reza
-  only); heard and routed right of all rows 82.5% / 85% (clean / car noise) before, 87.5-90% / 90-92.5% after
-  (two runs); 0 false wakes in 10 min; local answer audio 0.49 s / 0.52 s median. Real voices
-  (`check_real.py --evaluate data/wakeword/real`): 14/20 wake, **14/14 heard and routed right** (unchanged).
+  idle, so a question still being waited for can't spill into the next clip. 10 new test cases (the pipeline
+  ones fail on the old code).
+- **Independent review of the fix: no bugs, 2 risks + 2 nits, each confirmed with a reproducer, all fixed** with
+  tests that fail on the reviewed code: a repeated "Hey DrivePilot" during resumed listening was swallowed and
+  the window still ran from the first wake (question lost); now a wake word during a question restarts the
+  listening window (not the question: a wake on a trailing "...DrivePilot?" would lose it, and `on_wake` would
+  make the app count it as superseded). An end found while replaying held audio was dated at the replay (app
+  latency under-reported when Whisper is slow); held chunks keep their arrival time. The batch test now forces
+  the `flush()` path. Whisper's spellings of a repeated wake phrase ("It's a driver's pilot", "Hey Dr. Pilot")
+  are stripped from resumed questions. Also fixed (pre-existing, found by the review): a late question that a
+  newer wake word superseded switched the page's listening light off during the new question.
+- **Measured** (final, `runs/20261010-114439_voice`; before the fix: `runs/20261010-110459_voice`):
+  `scripts/voice_eval.py --limit 40`: "woke, heard nothing" rows **4 → 0** (before: 3 clear voices + Reza;
+  every remaining miss is the Reza voice not waking); heard and routed right of all rows 82.5% / 85% (clean / car
+  noise) before, **95% / 92.5%** after; wake on intelligible clips 100% / 96.9%; 0 false wakes in 10 min; local
+  answer audio 0.49 s / 0.52 s median. Real voices (`check_real.py --evaluate data/wakeword/real`): 14/20 wake,
+  **14/14 heard and routed right** (unchanged). Checked in the browser: the listening light stays on through a
+  superseded question and goes off after a normal one. 807 tests pass; ruff + mypy clean.
   Note: Piper synthesis is random (same sentence, different audio each run), so per-row wake results on the
   borderline Reza voice, and rarely another voice, change from run to run; the wake score itself depends only
   on the audio (checked: in-stream = fresh model on the same audio).
@@ -300,9 +312,10 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
-- **V2 build plan proposed** (`V2_BUILD_PLAN.md`, 2026-10-10): milestones V2-M0..M8 with "done when" tests and how
-  each feature is tested without a live drive; waiting for the user's approval and answers (parking design, sign
-  fine-tune go/no-go, Monday's deadline) before building.
+- **V2 build plan** (`V2_BUILD_PLAN.md`, 2026-10-10): milestones V2-M0..M8 with "done when" tests and how each
+  feature is tested without a live drive. The user answered the parking questions, set the deadline (**Sunday
+  2026-10-11, 8:59 pm PDT**) and moved the sign fine-tune to a separate session (`SIGN_FINETUNE_PROMPT.md`).
+  **Waiting for the user's go before any V2 work.**
 - **Before calling V1 done (needs the team):** check the CPU throttling (below) and re-run
   `scripts/bench_app.py --silent` (all targets were met at 10:01; at 10:20 the CPU was stuck at ~0.75 GHz);
   ask a few questions live by voice with the phone camera (`python -m app --camera`) and try the phone GPS page;
@@ -325,6 +338,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   tested with synthetic GPX files in tests until real drives are recorded.
 
 ## Known issues / compromises
+- **After the wake word, the microphone listens for up to 4 s** (`voice.endpoint.no_speech_timeout_s`, counted from
+  the latest wake word), now also after an empty transcript (noise, a cough, a hallucination): a passenger
+  talking in that window can be taken as the question. The price of not losing a question asked after a pause.
 - **The synthetic voice benchmark varies from run to run** (`scripts/voice_eval.py`): Piper's synthesis is random,
   so the same question is different audio each run; on 40 questions a run can lose or gain a wake on the
   borderline Reza voice and, rarely, on a clear voice (a bad synthesis). Compare several runs, not single rows.

@@ -163,7 +163,26 @@ is the one new feature the user asked for, and the overlay page next because eve
 If time runs short, cut from the bottom (PLAN.md's fallback rule): RF-DETR, then the sign fine-tune, then drift;
 a V2 feature only goes in the demo if it works.
 
-## Open questions (asked 2026-10-10, before building)
-Parking (HANDOFF.md section 4 + this plan): lots only or street parking too; legality checks; range; after the
-first spot; side preference; when it counts as found / the watch ends; phrasing. Also: the sign fine-tune go/no-go
-(PLAN.md open decision) and its data access; the submission deadline time on Monday (sets the cut line).
+## Decisions (user, 2026-10-10)
+- **Deadline: Sunday 2026-10-11, 8:59 pm PDT** (not Monday): the cut line moves up accordingly.
+- **Order** as proposed. **The sign fine-tune (V2-M6) runs in a separate Claude session** in parallel
+  (`SIGN_FINETUNE_PROMPT.md`: branch `v2-signs` in its own worktree, model + `perception/signs.py` + eval); this
+  session integrates it (alerts, memory, overlays, prompts).
+- **V2 starts only when the user says go**, after V1 is polished.
+- **Parking** (supersedes the open questions in V2-M1):
+  1. **Lots and street parking.** Street parking only when the driver asks (never offered). When we enter a lot,
+     DrivePilot may offer help ("Looks like a parking lot. Want help finding a spot?"), or the driver asks.
+  2. **Restrictions:** skip handicap, reserved, fire lane and no-parking spots; **announce EV-only spots** as such
+     ("Open EV charging spot on your left…").
+  3. **Either side, as far ahead as it can see reliably.** Smaller cars hidden behind bigger ones must not become
+     "open spots": a gap only counts once its ground is visible (not covered by a nearer vehicle's box), seen from
+     several viewpoints as we approach, and checked by the model.
+  4. After a spot: announce the nearest, keep watching, speak again only if it's passed or taken or a closer one
+     opens; also "A car is pulling out on your right."
+  5. The watch ends when we've parked in a spot, on "stop looking", or after 5 minutes.
+  6. Phrasing: "Open spot on your left, two cars ahead", **plus the car right before the spot** ("…just after the
+     white SUV"). **Few false positives from a tiny car in a spot** (small cars, motorcycles): small vehicles count
+     as occupying, and the model check must see an empty stall.
+- Open design detail to settle in V2-M1: CLAUDE.md allows voice input by wake word only, so the lot offer asks the
+  driver to answer with the wake word ("Hey DrivePilot, yes" / "find me a spot"); a no-wake-word reply window
+  would need the user's OK.

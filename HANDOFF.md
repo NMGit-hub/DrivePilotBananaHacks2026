@@ -37,6 +37,9 @@ roundabout rows.
 
 ## 3. Open problems to fix first
 
+> Update 2026-10-10 (next session): items 1 and 2 are done. Item 1 is fixed, reviewed and measured, and the
+> machine was not throttled (see PROGRESS.md, "V1 polish"). Item 3 is still open; the sign fine-tune (V2) targets it.
+
 1. **Wake word fires early, then the question ends at the pause after "Hey DrivePilot".** Seen on synthetic
    voices (`scripts/voice_eval.py --limit 40`: e.g. "Stop watching the light" woke, transcript empty) after the
    threshold went from 0.25 to 0.15. A lower threshold fires earlier inside the phrase, so the end of "...pilot"

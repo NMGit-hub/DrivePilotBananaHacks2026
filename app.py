@@ -326,7 +326,8 @@ class DrivePilotApp:
         if self.recorder is not None:
             self.recorder.event("question", t=t, qid=qid, text=text, via="voice", superseded=True, **timings)
         if self.hub is not None:
-            self.hub.publish("question", text=text, via="voice", t=round(t, 2))
+            # `superseded`: the page keeps its listening light on (the driver is asking the newer question now).
+            self.hub.publish("question", text=text, via="voice", t=round(t, 2), superseded=True)
             self.hub.publish("note", text="(skipped: you asked something else)")
 
     def on_wake(self) -> None:

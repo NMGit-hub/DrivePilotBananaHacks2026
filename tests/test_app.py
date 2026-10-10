@@ -355,12 +355,15 @@ def test_app_runs_a_replay_end_to_end(tmp_path: Path, clip: Path) -> None:
 
 
 def test_a_question_overtaken_by_a_newer_wake_word_is_not_answered(clip: Path) -> None:
-    speaker = TextSpeaker()
-    app = DrivePilotApp(load_config(), lambda: FileSource(clip), FakeDetector(), speaker)  # type: ignore[arg-type]
+    speaker, hub = TextSpeaker(), UiHub()
+    app = DrivePilotApp(load_config(), lambda: FileSource(clip), FakeDetector(), speaker, hub=hub)  # type: ignore[arg-type]
     ended = time.perf_counter()
     app.on_wake()  # the driver starts the next question before this one was transcribed
     app.on_heard(HeardQuestion("who got here first?", 1.0, 2.0, 2.6, ended + 0.6, ended + 1.8, 1700.0, True, "silence"))
     assert speaker.said == [] and [q.source for q in app.questions.values()] == ["superseded"]
+    # The page shows the old question but keeps its listening light on for the new one (review finding).
+    shown = [m for m in hub.history() if m["type"] == "question"]
+    assert len(shown) == 1 and shown[0]["superseded"] is True
 
 
 def test_light_green_cuts_off_a_streaming_answer() -> None:
