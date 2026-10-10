@@ -4,6 +4,28 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### M7: app integration, V1 screen, run logging (2026-10-10; independent review of M4 + M7 running)
+- `python -m app` runs everything in one process for the camera or a file (`--video`, `--camera`, `--gpx`,
+  `--no-voice`, `--no-audio`, `--ask`, `--exit-at-end`); components that can't start (no mic, no key, no audio
+  device) are reported on the page and the rest runs. A live camera that drops out is restarted; meanwhile
+  questions get "I've lost the camera feed". The vision model gets a tiny startup request (checks the key,
+  opens the connection).
+- `ui/`: the V1 page (MJPEG video + the conversation as text, status line, hotkeys space / arrows / Q, history
+  kept across reloads) and the phone GPS page (once a second, screen kept on); JSON-only POSTs.
+- Run folder: events, frames (1/s + every frame sent to the vision model), detections, perf, `summary.json`.
+  `core/latency.py` measures end of question → first sound and detection frame → alert sound.
+- **Full-pipeline benchmark** (`scripts/bench_app.py --silent`, SF red-light clip, 6 synthesized spoken
+  questions over car noise, fed in real time): 6/6 heard and routed right; "Light's green" alert **87 ms**
+  from the detection frame to sound (target < 300 ms); local answers **2.3 s** (target 1.0) and model answers
+  **3.1 s** (target 2.5); perception **15 fps** while Whisper shares the GPU (target 25.2). All three misses
+  come from the GPU throttling (Known issues): Whisper takes 1.5-1.85 s per question instead of ~0.2 s, and
+  YOLO slows while it runs. Breakdown for a local answer: end of question detected 0.6 s after speech,
+  Whisper (started at 0.25 s of silence) 1.5-1.85 s, speech synthesis ~0.25 s. Re-measure once the GPU runs
+  at full speed.
+- The benchmark found two bugs (fixed, with tests): "Light's green" interrupted "Not yet, the light's red" and
+  the old answer then resumed; an answer to a slowly transcribed question was spoken over the next question.
+- Checked in the browser: video, a typed question answered by the vision model, pause / seek / resume.
+
 ### M6: navigation (2026-10-10; independent review done, all findings fixed)
 - `nav/mapbox.py`: "take me to ..." via Mapbox Search Box + Geocoding v6 candidates, picked by spoken-word
   match vs distance (`pick_place`; plain geocoding alone sent "Space Needle" to Arizona); Directions v5
@@ -188,9 +210,7 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
-- M7 (in progress): `app.py` wiring (camera/file, perception, world state, assistant, voice, navigation, vision),
-  the V1 page (video + question/answer text, hotkeys) and phone GPS page (`ui/`), run logging, a full-pipeline
-  headless benchmark; then the M4 + M7 independent review. M8 (test sheet), M9 (hardware, needs you).
+- M4 + M7 independent review (running), fixes; M8 (test sheet runner + scoring); M9 (hardware, needs you).
 
 ## Test data
 - Source: BDD100K `videos/100k/val` clips (720p, 30 fps, ~40 s, US cities), pulled by HTTP range requests
