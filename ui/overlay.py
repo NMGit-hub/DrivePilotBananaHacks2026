@@ -64,21 +64,48 @@ def resample(points: Sequence[tuple[float, float]], n: int = 8) -> list[list[flo
 
 
 LANE_POINTS = 8
+TARGET_LANE_M = 2000.0  # the target lane is shown from this far before a maneuver that needs certain lanes
 
 
-def lanes_packet(lanes: LanesSnapshot | None) -> dict[str, Any] | None:
-    """Our lane (its left and right lines), the other lines, and the drift side, or None without a lane."""
+def lane_target(lanes: LanesSnapshot | None, progress: Progress | None) -> dict[str, Any] | None:
+    """Where lane guidance wants us (PLAN.md: "the green target lane"): "ours" if our lane works for the next
+    maneuver, else the side to move to and by how many lanes. Only when lane detection's count matches the
+    route's lane data for that maneuver (the same check the spoken lane advice makes), else None."""
+    if lanes is None or progress is None or progress.arrived:
+        return None
+    step, to_next = progress.next_step, progress.to_next_m
+    if step is None or to_next is None or to_next > TARGET_LANE_M or not step.lanes or not step.needs_lanes:
+        return None
+    ours, count = lanes.lane_index, lanes.lane_count
+    if ours is None or count is None or count != len(step.lanes):
+        return None
+    valid = [i + 1 for i, lane in enumerate(step.lanes) if lane.valid]
+    if not valid:
+        return None
+    if ours in valid:
+        return {"lane": "ours"}
+    nearest = min(valid, key=lambda i: (abs(i - ours), i))
+    return {"lane": "left" if nearest < ours else "right", "moves": abs(nearest - ours)}
+
+
+def lanes_packet(lanes: LanesSnapshot | None, target: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Our lane (its left and right lines), the lines just beyond them (the lanes beside ours), the other lines,
+    the drift side and the target lane, or None without a lane."""
     if lanes is None or not lanes.valid:
         return None
-    left = next((line for line in lanes.lines if line.role == "left"), None)
-    right = next((line for line in lanes.lines if line.role == "right"), None)
-    if left is None or right is None:
+    roles = [line.role for line in lanes.lines]
+    if "left" not in roles or "right" not in roles:
         return None
+    i, j = roles.index("left"), roles.index("right")
+    lines = lanes.lines
     return {
-        "left": resample(left.points, LANE_POINTS),
-        "right": resample(right.points, LANE_POINTS),
-        "others": [resample(line.points, LANE_POINTS) for line in lanes.lines if line.role == "other"],
+        "left": resample(lines[i].points, LANE_POINTS),
+        "right": resample(lines[j].points, LANE_POINTS),
+        "left_next": resample(lines[i - 1].points, LANE_POINTS) if i > 0 else None,
+        "right_next": resample(lines[j + 1].points, LANE_POINTS) if j + 1 < len(lines) else None,
+        "others": [resample(line.points, LANE_POINTS) for line in lines if line.role == "other"],
         "drift": lanes.drift_side,
+        "target": target,
     }
 
 
@@ -91,13 +118,14 @@ def frame_packet(
     parking_active: bool = False,
     highlight: int | None = None,
     lanes: LanesSnapshot | None = None,
+    lane_goal: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The overlay for one frame: every tracked object with its meaning, the 4-way badges, the light's state,
     open parking spots (while the parking watch is on), the "YOU" badge and our lane (`lanes`: lane detection's
-    latest, if it is recent). `highlight`: a track id to pulse."""
+    latest, if it is recent; `lane_goal`: `lane_target`'s answer). `highlight`: a track id to pulse."""
     items: list[dict[str, Any]] = []
     if snap is None:
-        return {"items": items, "you": None, "lanes": lanes_packet(lanes)}
+        return {"items": items, "you": None, "lanes": lanes_packet(lanes, lane_goal)}
     queue = snap.queue
     queued: dict[int, tuple[int, float]] = {}  # track id -> (position, arrived)
     next_id: int | None = None
@@ -186,7 +214,7 @@ def frame_packet(
             "text": "YOU: your turn" if queue.your_turn else f"YOU: {ordinal(queue.ego_position)}",
             "color": GREEN if queue.your_turn else WHITE,
         }
-    return {"items": items, "you": you, "lanes": lanes_packet(lanes)}
+    return {"items": items, "you": you, "lanes": lanes_packet(lanes, lane_goal)}
 
 
 def hud_packet(

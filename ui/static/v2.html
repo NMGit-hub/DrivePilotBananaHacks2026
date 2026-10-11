@@ -351,8 +351,12 @@ function easeLanes(target) {
   const mix = (a, b) => a.map((q, i) => [q[0] + k * (b[i][0] - q[0]), q[1] + k * (b[i][1] - q[1])]);
   laneShown.left = mix(laneShown.left, target.left);
   laneShown.right = mix(laneShown.right, target.right);
+  for (const key of ["left_next", "right_next"]) { // the lines beyond ours (for the target lane): may come and go
+    laneShown[key] = target[key] && laneShown[key] ? mix(laneShown[key], target[key]) : target[key];
+  }
   laneShown.others = laneShown.others.map((line, j) => mix(line, target.others[j]));
   laneShown.drift = target.drift;
+  laneShown.target = target.target;
   return laneShown;
 }
 
@@ -369,11 +373,31 @@ function drawLanes(lanes, ox, oy, vw, vh, dpr, now) {
   };
   ctx.save();
   ctx.lineJoin = ctx.lineCap = "round";
-  trace([...lanes.left, ...lanes.right.slice().reverse()]); // our lane, filled
+  const goal = lanes.target && lanes.target.lane;
+  trace([...lanes.left, ...lanes.right.slice().reverse()]); // our lane, filled (green: it's the one to be in)
   ctx.closePath();
-  ctx.fillStyle = COLORS.white;
-  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = goal === "ours" ? COLORS.green : COLORS.white;
+  ctx.globalAlpha = goal === "ours" ? 0.3 : 0.18;
   ctx.fill();
+  if (goal === "left" || goal === "right") { // lane guidance: the lane beside ours, toward the right ones, in green
+    const inner = goal === "left" ? lanes.left : lanes.right, outer = goal === "left" ? lanes.left_next : lanes.right_next;
+    if (outer) {
+      trace([...outer, ...inner.slice().reverse()]);
+      ctx.closePath();
+      ctx.fillStyle = COLORS.green;
+      ctx.globalAlpha = 0.32;
+      ctx.fill();
+    }
+    const fs = Math.max(11 * dpr, Math.round(vh / 40));
+    const n = lanes.target.moves || 1, text = goal === "left" ? `← move ${n} lane${n > 1 ? "s" : ""} left`
+                                                               : `move ${n} lane${n > 1 ? "s" : ""} right →`;
+    ctx.globalAlpha = 1;
+    ctx.font = `750 ${fs}px system-ui, sans-serif`;
+    const w = ctx.measureText(text).width + fs * 0.9;
+    const [bx, by] = at(inner[Math.min(2, inner.length - 1)]);
+    pill(goal === "left" ? Math.max(ox + 8, bx - w - fs) : Math.min(ox + vw - w - 8, bx + fs), by - fs * 2.2, text,
+         "#062418", COLORS.green, fs);
+  }
   ctx.lineWidth = 2 * dpr; // the other lanes' lines
   ctx.strokeStyle = COLORS.gray;
   ctx.globalAlpha = 0.6;

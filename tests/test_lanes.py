@@ -614,3 +614,29 @@ def test_app_runs_the_lanes_thread_on_its_frames(tmp_path: Path) -> None:
         assert app.lanes.snapshot().valid and app._drivable is not None
     finally:
         app.stop()
+
+
+def test_the_green_target_lane() -> None:
+    """Lane guidance on the page: our lane green if it works for the next maneuver, else the side to move to,
+    only when lane detection's count matches the route's lanes (else nothing: no guess on screen)."""
+    from types import SimpleNamespace
+
+    from nav.route import Lane
+    from ui.overlay import lane_target, lanes_packet
+
+    def progress(valid: list[bool], to_next: float = 800.0, needs: bool = True) -> Any:
+        step = SimpleNamespace(lanes=tuple(Lane(("straight",), v) for v in valid), needs_lanes=needs)
+        return SimpleNamespace(arrived=False, next_step=step, to_next_m=to_next)
+
+    snap = _lanes_snapshot()  # lane 2 of 3
+    assert lane_target(snap, progress([False, True, True])) == {"lane": "ours"}
+    assert lane_target(snap, progress([False, False, True])) == {"lane": "right", "moves": 1}
+    assert lane_target(snap, progress([True, False, False])) == {"lane": "left", "moves": 1}
+    assert lane_target(snap, progress([True, True])) is None  # the counts disagree
+    assert lane_target(snap, progress([False, False, True], to_next=3000.0)) is None  # too far yet
+    assert lane_target(snap, progress([False, False, True], needs=False)) is None
+    assert lane_target(None, progress([False, False, True])) is None
+    packet = lanes_packet(snap, {"lane": "right", "moves": 1})
+    assert packet is not None and packet["target"] == {"lane": "right", "moves": 1}
+    assert packet["left_next"] is not None and packet["right_next"] is not None  # the lanes beside ours
+    assert packet["right_next"][0][0] > packet["right"][0][0]

@@ -66,7 +66,7 @@ from state.signs import SignTracker
 from state.signs import alert_texts as sign_alert_texts
 from state.world import WorldEvent, WorldSnapshot, WorldState
 from ui.hub import UiHub
-from ui.overlay import frame_packet, hud_packet
+from ui.overlay import frame_packet, hud_packet, lane_target
 
 if TYPE_CHECKING:
     from voice.pipeline import HeardQuestion
@@ -381,6 +381,7 @@ class DrivePilotApp:
         frame = result.frame
         highlight = self._highlight
         left = highlight[1] - time.perf_counter() if highlight is not None else 0.0
+        lanes = self.lanes_view(frame.t)
         try:
             overlay = frame_packet(
                 self.world.snapshot(),
@@ -389,7 +390,8 @@ class DrivePilotApp:
                 frame.height,
                 parking_active=self.parking.active,
                 highlight=highlight[0] if highlight is not None and left > 0 else None,
-                lanes=self.lanes_view(frame.t),
+                lanes=lanes,
+                lane_goal=lane_target(lanes, self.nav.progress if self.nav is not None and self.nav.route else None),
             )
         except Exception:
             log.exception("overlay failed")
