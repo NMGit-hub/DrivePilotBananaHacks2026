@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             if not masks.exists():
                 emit(f"== {clip.stem}: no lane-mask cache (scripts/eval_lanes.py cache)")
                 continue
-            road = [DrivableArea(m.t, m.drivable) for m in load_mask_cache(masks)]
+            road = [DrivableArea(m.t, m.drivable, view=m.view) for m in load_mask_cache(masks)]
         run = replay(frames, cfg, speed, road)
         costs += run.cost_ms
         name = clip.stem.split("__")[0]

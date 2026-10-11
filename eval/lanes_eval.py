@@ -54,11 +54,13 @@ def build_mask_cache(
     fps: float,
     transform: Callable[[float, np.ndarray], np.ndarray] | None = None,
     cfg: LanesConfig | None = None,
+    view: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0),
 ) -> int:
     """Run `model` (LaneModel.infer) over the clip at `fps` and save the masks; returns the number of frames.
 
     `transform(t, image)` changes each frame before the model sees it (the virtual-drift warp, the app's crop).
-    `cfg`: also keep which line pixels are yellow (`perception.lanes.yellow_lines`).
+    `cfg`: also keep which line pixels are yellow (`perception.lanes.yellow_lines`). `view`: the crop `transform`
+    takes (frame shares), recorded so replays map and check it.
     """
     times, indices, lines, drivable, ms, yellow = [], [], [], [], [], []
     size = (0, 0)
@@ -85,9 +87,18 @@ def build_mask_cache(
         lines=np.array(lines),
         drivable=np.array(drivable),
         ms=np.array(ms),
+        view=np.array(view, dtype=np.float64),
         **extra,
     )
     return len(times)
+
+
+def cache_view(data: Any) -> tuple[float, float, float, float]:
+    """The crop a loaded cache's masks cover (caches made before it was recorded: the whole frame)."""
+    if "view" not in data.files:
+        return (0.0, 0.0, 1.0, 1.0)
+    x0, y0, x1, y1 = (float(v) for v in data["view"])
+    return (x0, y0, x1, y1)
 
 
 def load_mask_cache(path: Path) -> list[LaneMasks]:
@@ -97,6 +108,7 @@ def load_mask_cache(path: Path) -> list[LaneMasks]:
         raise ValueError(f"{path}: cache version {int(data['version'])}, expected {CACHE_VERSION}")
     w, h = (int(v) for v in data["size"])
     colors = list(data["yellow"]) if "yellow" in data.files else [None] * len(data["t"])
+    view = cache_view(data)
     out = []
     for t, index, ll, da, ms, ye in zip(
         data["t"], data["index"], data["lines"], data["drivable"], data["ms"], colors, strict=True
@@ -110,6 +122,7 @@ def load_mask_cache(path: Path) -> list[LaneMasks]:
                 drivable=np.unpackbits(da, axis=1, count=MASK_SIZE[0]),
                 timings_ms={"total": float(ms)},
                 yellow=None if ye is None else np.unpackbits(ye, axis=1, count=MASK_SIZE[0]),
+                view=view,
             )
         )
     return out

@@ -865,3 +865,40 @@ def test_yellow_lines_marks_yellow_paint_only() -> None:
     lines[:, 299:311] = 1
     yellow = yellow_lines(image, lines, cfg_lanes())
     assert yellow[:, 100:110].all() and not yellow[:, 299:311].any() and not yellow[:, 200].any()
+
+
+def test_the_mask_cache_keeps_the_yellow_lines_and_its_crop(tmp_path: Path) -> None:
+    """eval/lanes_eval.py cache v2: the yellow line pixels and the crop are saved and loaded back; a cache without
+    them (version 1) loads as before: no color, the whole frame."""
+    import cv2
+
+    from eval.lanes_eval import build_mask_cache, load_mask_cache
+
+    clip = tmp_path / "clip.avi"
+    writer = cv2.VideoWriter(str(clip), cv2.VideoWriter_fourcc(*"MJPG"), 10.0, (640, 360))
+    for _ in range(10):
+        image = np.full((360, 640, 3), 90, np.uint8)
+        image[:, 100:112] = (40, 190, 230)  # a yellow line
+        image[:, 300:312] = (235, 235, 235)  # a white one
+        writer.write(image)
+    writer.release()
+
+    def model(image: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
+        lines = np.zeros(image.shape[:2], np.uint8)
+        lines[:, 101:111] = 1
+        lines[:, 301:311] = 1
+        return lines, np.ones_like(lines), {"total": 1.0}
+
+    view = (0.1, 0.2, 0.9, 1.0)
+    out = tmp_path / "masks.npz"
+    assert build_mask_cache(model, clip, out, 5.0, cfg=cfg_lanes(), view=view) == 5
+    masks = load_mask_cache(out)
+    assert len(masks) == 5 and masks[0].view == pytest.approx(view)
+    assert masks[0].yellow is not None and masks[0].yellow[:, 102:110].all() and not masks[0].yellow[:, 302:310].any()
+
+    old = dict(np.load(out))
+    del old["yellow"], old["view"]
+    old["version"] = np.array(1)
+    np.savez_compressed(tmp_path / "old.npz", **old)
+    legacy = load_mask_cache(tmp_path / "old.npz")
+    assert legacy[0].yellow is None and legacy[0].view == (0.0, 0.0, 1.0, 1.0)

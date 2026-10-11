@@ -60,7 +60,7 @@ def cmd_cache(args: argparse.Namespace) -> int:
             print(f"cached   {clip.name}")
             continue
         started = time.perf_counter()
-        n = build_mask_cache(model.infer, clip, out, args.fps or cfg.lanes.fps, transform, cfg.lanes)
+        n = build_mask_cache(model.infer, clip, out, args.fps or cfg.lanes.fps, transform, cfg.lanes, view)
         elapsed = time.perf_counter() - started
         print(f"built    {clip.name}: {n} frames in {elapsed:.0f} s", flush=True)
     return 0
@@ -117,6 +117,25 @@ def _tracker_hfov(args: argparse.Namespace, lc: LanesConfig) -> float:
     return lane_view(args.hfov, lc.max_view_deg)[1]
 
 
+def _load_checked(path: Path, args: argparse.Namespace, lc: LanesConfig) -> list[Any]:
+    """A clip's cached masks, refused when they don't match `--hfov`: a wide camera replayed at the crop's field of
+    view needs masks of that crop (and the other way round), else the geometry is silently wrong."""
+    from eval.lanes_eval import load_mask_cache
+    from perception.lanes import lane_view
+
+    masks = load_mask_cache(path)
+    full = (0.0, 0.0, 1.0, 1.0)
+    cropped = lane_view(args.hfov, lc.max_view_deg)[0] != full
+    if masks and (masks[0].view != full) != cropped:
+        made = "of a crop" if masks[0].view != full else "of the whole frame"
+        raise SystemExit(
+            f"{path.name}: masks {made}, but --hfov {args.hfov:g} replays "
+            f"{'a crop' if cropped else 'the whole frame'}: rebuild it with `cache --force"
+            f"{' --hfov ' + format(args.hfov, 'g') if cropped else ''}`"
+        )
+    return masks
+
+
 def _data_root(args: argparse.Namespace) -> Path:
     return Path(args.data_root) if args.data_root is not None else REPO_ROOT
 
@@ -125,7 +144,7 @@ def cmd_index(args: argparse.Namespace) -> int:
     """Score lane index / count against the hand labels (replaying cached masks)."""
     import yaml
 
-    from eval.lanes_eval import IndexScore, at_time, load_mask_cache, replay, speed_from_gpx
+    from eval.lanes_eval import IndexScore, at_time, replay, speed_from_gpx
 
     cfg = _config(args)
     labels = yaml.safe_load(args.labels.read_text(encoding="utf-8"))
@@ -139,7 +158,7 @@ def cmd_index(args: argparse.Namespace) -> int:
             return 1
         steps = replay(
             cfg.lanes,
-            load_mask_cache(cache),
+            _load_checked(cache, args, cfg.lanes),
             _tracker_hfov(args, cfg.lanes),
             speed_from_gpx(root / "data" / "gps" / f"{clip['id']}.gpx"),
         )
@@ -184,7 +203,7 @@ def cmd_drift(args: argparse.Namespace) -> int:
     """Replay clips with their GPS speed: every drift alert and lane change (and frames of each, with --frames)."""
     import cv2
 
-    from eval.lanes_eval import at_time, draw_lanes, load_mask_cache, read_frame, replay, speed_from_gpx
+    from eval.lanes_eval import at_time, draw_lanes, read_frame, replay, speed_from_gpx
     from state.lanes import LaneTracker
 
     cfg = _config(args)
@@ -197,7 +216,7 @@ def cmd_drift(args: argparse.Namespace) -> int:
         if not cache.exists():
             print(f"no cache for {video.name}{args.tag}: run `cache` first")
             return 1
-        masks = load_mask_cache(cache)
+        masks = _load_checked(cache, args, cfg.lanes)
         speed_at = speed_from_gpx(root / "data" / "gps" / f"{_clip_id(video)}.gpx")
         hfov = _tracker_hfov(args, cfg.lanes)
         tracker = LaneTracker(cfg.lanes, hfov)
@@ -275,6 +294,8 @@ def cmd_virtual(args: argparse.Namespace) -> int:
     lc = cfg.lanes
     root = _data_root(args)
     model: Any = None
+    if _tracker_hfov(args, lc) != args.hfov:
+        raise SystemExit("virtual: a camera wider than lanes.max_view_deg isn't supported (its warp needs the crop)")
     for video in args.clip:
         speed_at = speed_from_gpx(root / "data" / "gps" / f"{_clip_id(video)}.gpx")
         base_tracker = LaneTracker(lc, args.hfov)

@@ -5,8 +5,9 @@
         "runs/showcase/final/4_rain.mp4=Rain|What did that yellow sign say?"
 
 Each item is `<video>=<title>|<subtitle>` (subtitle optional). The reel takes the first video's size and frame rate
-(others are scaled to fit, letterboxed), re-encodes H.264 (CRF 18) + AAC at 48 kHz mono, and opens and closes with
-a card (--intro, --outro). Title cards are silent; each video keeps its own audio, in step with its frames.
+(others are scaled to fit, letterboxed; all must have its frame rate: frames are written one for one), re-encodes
+H.264 (CRF 18) + AAC at 48 kHz mono, and opens and closes with a card (--intro, --outro). Title cards are silent;
+each video keeps its own audio, in step with its frames.
 """
 
 from __future__ import annotations
@@ -131,8 +132,9 @@ class Writer:
         self.frames = 0
         self.samples = 0
 
-    def write(self, image: np.ndarray, audio: np.ndarray) -> None:
-        """One frame and the audio of its time slot (padded with silence or trimmed to the slot)."""
+    def write(self, image: np.ndarray, audio: np.ndarray) -> int:
+        """One frame and the audio of its time slot (padded with silence or trimmed to the slot); returns the slot's
+        length in samples (the caller's next audio starts there, so a clip's audio stays contiguous)."""
         vf = self.av.VideoFrame.from_ndarray(image, format="bgr24")
         vf.pts = self.frames
         for packet in self.v.encode(vf):
@@ -148,6 +150,7 @@ class Writer:
         self.samples += want
         for packet in self.a.encode(af):
             self.container.mux(packet)
+        return want
 
     def close(self) -> None:
         """Flush both encoders and close the file."""
@@ -172,6 +175,12 @@ def main(argv: list[str] | None = None) -> int:
         if not item.path.is_file():
             raise SystemExit(f"no such video: {item.path}")
     width, height, rate = probe(args.items[0].path)
+    for item in args.items[1:]:  # (frames are written one for one: another rate would drift from its audio)
+        other = probe(item.path)[2]
+        if other != rate:
+            raise SystemExit(
+                f"{item.path.name}: {float(other):.3f} fps, the reel is {float(rate):.3f} fps: render it at that rate"
+            )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     writer = Writer(args.out, width, height, rate, args.crf)
     step = 1.0 / float(rate)
@@ -187,10 +196,9 @@ def main(argv: list[str] | None = None) -> int:
         for item in args.items:
             card(item.title, item.subtitle)
             audio = read_audio(item.path)
-            frames = 0
+            frames = used = 0
             for image in read_frames(item.path):
-                start = round(frames * step * AUDIO_RATE)
-                writer.write(fit(image, width, height), audio[start:])
+                used += writer.write(fit(image, width, height), audio[used:])
                 frames += 1
             print(f"{item.path.name}: {frames} frames, {len(audio) / AUDIO_RATE:.1f} s of audio", flush=True)
         title, _, subtitle = args.outro.partition("|")

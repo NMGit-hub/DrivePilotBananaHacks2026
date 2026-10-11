@@ -298,13 +298,14 @@ def run_pass(
     gps: GpxReplay | None,
     mask_from: int | None,
     destination: str | None = None,
-    keep_rows: int | None = None,
+    keep_share: float | None = None,
 ) -> Recording:
     """Play the clip in lock-step from `t_from` (warm-up: the tracker and the light's state get their history) and
     record the page's overlay and HUD for every frame from `t_render` to `t_end`, the answers and what was said.
     `destination`: navigate there from the first GPS fix on, silently (a route already running when the video
     starts); "take me to ..." as a question works too, with navigation on (a GPX track and a Mapbox token).
-    `keep_rows`: answer thumbnails keep only the frame's rows above this (the dashcam's text bar is cropped)."""
+    `keep_share`: answer thumbnails keep only this top share of the frame's rows (the dashcam's text bar is cropped;
+    a share, not rows: remembered frames are downscaled)."""
     speaker = TextSpeaker()
     world_holder: list[WorldState] = []
     memory = SceneMemory(cfg.memory)
@@ -374,7 +375,7 @@ def run_pass(
 
     def on_image(frame: Frame) -> None:
         if current[0] is not None:
-            image = frame.image if keep_rows is None else frame.image[:keep_rows]
+            image = frame.image if keep_share is None else frame.image[: int(frame.image.shape[0] * keep_share)]
             scale = THUMB_W / image.shape[1]
             current[0].image = cv2.resize(image, (THUMB_W, round(image.shape[0] * scale)), interpolation=cv2.INTER_AREA)
             current[0].image_t = frame.t
@@ -921,9 +922,9 @@ def main(argv: list[str] | None = None) -> int:
         f"vision {models.vision.name if models.vision else 'off'}, navigation {navigation}",
         flush=True,
     )
-    keep_rows = bar_top if crop > 0 else None
+    keep_share = bar_top / info.height if crop > 0 else None
     rec = run_pass(
-        cfg, clip, models, sorted(args.ask), t_from, t_start, t_end, gps, mask_from, args.destination, keep_rows
+        cfg, clip, models, sorted(args.ask), t_from, t_start, t_end, gps, mask_from, args.destination, keep_share
     )
     print(
         f"pass 1: {rec.processed} frames in {rec.seconds:.1f} s ({rec.processed / max(rec.seconds, 1e-6):.1f} fps), "

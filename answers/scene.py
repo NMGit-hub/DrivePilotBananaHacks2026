@@ -164,12 +164,24 @@ LIGHT_WORDS = re.compile(r"\b(?:light|lights|signal|signals|arrow|arrows|green|r
 SIGN_WORDS = re.compile(r"\b(?:sign|signs|said|say|says|read|speed limit|limit|plate)\b", re.IGNORECASE)
 # Questions about *our* moving off (the router's gap checks are covered by the route kind already).
 GO_QUESTION = re.compile(
-    r"\b(?:(?:can|could|should|may|do|shall) (?:i|we) (?:still )?(?:go|turn|merge|pull out|pull in|cross|proceed|pass|"
+    r"\b(?:(?:can|could|should|may|do|shall) (?:i|we) (?:still )?(?:go|turn|merge|pull out|pull in|back out|back up|"
+    r"reverse|cross|proceed|pass|"
     r"change lanes?|get over|move over|make it|pull (?:forward|up|ahead)|creep|inch|roll (?:forward|up)|move up)|"
     r"(?:is it|it is|am i|are we|is that) (?:safe|clear|ok|okay|good)|"
     r"(?:safe|clear|ok|okay) to|(?:anyone|anybody|anything|someone|somebody|cars?|traffic) coming|room to|gap)\b",
     re.IGNORECASE,
 )
+# Questions about parking here (not moving off): their "okay to" / "you're fine" are about the stall.
+PARK_QUESTION = re.compile(r"\bpark(?:ing|ed)?\b(?! ?lot\b)", re.IGNORECASE)
+# ...unless it's about leaving the spot or moving through traffic ("is it safe to pull out of this parking spot?").
+MOVE_OFF = re.compile(
+    r"\b(?:pull(?:ing)? (?:out|away|off)|back(?:ing)? (?:out|up)|reverse|leave|leaving|go|going|merge|turn|cross|exit|"
+    r"drive|driving|move|moving)\b",
+    re.IGNORECASE,
+)
+# In an answer to a parking question, "You're fine here." / "You're good, it's a regular stall." are about the stall
+# (taken out before the permission net; "good to go", "you can go", "go ahead" still count).
+PARKING_OK = re.compile(r"\byou(?:'re| are) (?:good|fine|ok|okay)\b(?! to (?:go|pull|merge|turn|cross))", re.IGNORECASE)
 # Questions about passing / going around something; a school bus in the answer then gets the fixed rule.
 PASS_QUESTION = re.compile(
     r"\b(?:pass|passing|overtake|overtaking|go(?:ing)? around|get around|drive around|go past|get past|get by)\b",
@@ -549,9 +561,20 @@ def uses_reading_model(route: Route) -> bool:
     return not (_COLORS.search(text) and not SIGN_WORDS.search(text))  # "is it green yet?" is about the light
 
 
+def is_parking_question(route: Route) -> bool:
+    """A question about parking where we are ("is it okay to park here?", "can I park in that spot?"), not about
+    moving off: "okay to" / "is it ok" in it is about the stall, not traffic (the router's gap checks, like "can I
+    pull in here?", stay go questions)."""
+    text = route.text
+    return route.kind is not RouteKind.GAP_CHECK and bool(PARK_QUESTION.search(text)) and not MOVE_OFF.search(text)
+
+
 def is_go_question(route: Route) -> bool:
-    """Questions where vouching for traffic is dangerous: gap checks, "should I wait", go/turn/merge wording."""
-    return route.kind is RouteKind.GAP_CHECK or route.intent == "should_wait" or bool(GO_QUESTION.search(route.text))
+    """Questions where vouching for traffic is dangerous: gap checks, "should I wait", go/turn/merge wording (a
+    parking question isn't one: "is it okay to park here?")."""
+    if route.kind is RouteKind.GAP_CHECK or route.intent == "should_wait":
+        return True
+    return bool(GO_QUESTION.search(route.text)) and not is_parking_question(route)
 
 
 class SceneHandler:
@@ -722,6 +745,7 @@ class SceneHandler:
         return self._safe(
             sentences(pieces),
             strict=is_go_question(route),
+            parking=is_parking_question(route),
             passing=passing,
             planned=planned,
             green_check=snapshot.light.color if green_check else None,
@@ -755,6 +779,7 @@ class SceneHandler:
         strict: bool,
         passing: bool = False,
         planned: RequestPlan | None = None,
+        parking: bool = False,
         green_check: LightColor | None = None,
     ) -> Iterator[str]:
         """Safety nets on every sentence, hidden tags taken out, and spoken fallbacks for failures (`green_check`: the
@@ -784,7 +809,8 @@ class SceneHandler:
                     log.warning("school bus in a passing answer: replaced by the rule", sentence=sentence)
                     yield SCHOOL_BUS_RULE
                     return
-                if any(PERMISSION.search(p) or (strict and vouches(p)) for p in pieces):
+                checked = [PARKING_OK.sub(" ", p) if parking else p for p in pieces]
+                if any(PERMISSION.search(p) or (strict and vouches(p)) for p in checked):
                     log.warning("replaced a sentence that vouched for traffic", sentence=sentence, strict=strict)
                     replaced = True
                     if no_vouch_said:

@@ -488,3 +488,34 @@ def test_pulling_forward_is_a_go_question(question: str, reply: str) -> None:
     question and "you can pull forward" wasn't permission, so both answers were spoken as they were."""
     said = spoken_by_assistant(reply, question, ego_stopped=True, ego_stopped_since=10.0)
     assert said == [NO_VOUCH]
+
+
+# ------------------------------------------------- parking answers (review 2026-10-11: the nets undid "it's fine")
+
+
+@pytest.mark.parametrize(
+    ("question", "reply"),
+    [
+        ("is it okay to park here?", "That stall is empty and unmarked, so it looks fine to park."),
+        ("is it ok to park in that spot?", "The curb is clear of paint and signs, so it's a regular spot."),
+        ("can I park here?", "You're fine here: it's a regular stall with no markings."),
+        ("can I park in that space?", "You're good, it's an ordinary stall."),
+    ],
+)
+def test_a_plain_yes_to_a_parking_question_is_kept(question: str, reply: str) -> None:
+    said = spoken_by_assistant(reply, question, ego_stopped=True, ego_stopped_since=10.0)
+    assert NO_VOUCH not in said and " ".join(said).startswith(reply.split()[0]), said
+
+
+@pytest.mark.parametrize(
+    ("question", "reply"),
+    [
+        ("is it safe to pull out of this parking spot?", "Yes, it's clear, you can pull out."),
+        ("can I back out of this parking space?", "It's clear behind you."),
+        ("is it okay to park here?", "You're good to go."),  # permission to move stays caught, whatever the question
+        ("can I park here?", "Yes, go ahead."),
+    ],
+)
+def test_moving_off_from_a_parking_spot_is_still_a_go_question(question: str, reply: str) -> None:
+    said = spoken_by_assistant(reply, question, ego_stopped=True, ego_stopped_since=10.0)
+    assert said == [NO_VOUCH], said

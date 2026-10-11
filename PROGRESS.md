@@ -61,8 +61,19 @@ The user's Mercedes dashcam clips (D:\Dashcam, HANDOFF.md section 2) are the dat
   The prompt now says an ordinary stall or curb with no restriction in view is normally fine: say so first, then to
   check posted signs. On the parking rows (sets used before, so not blind): +5 right, 1 new wrong (a painted NO
   PARKING box it didn't read, now called an ordinary stall; before it hedged).
-- Tests: 1528 passed (new: the yellow edge, the hood threshold, the low lane crop, the reel, the renderer's stale
-  answers); ruff, mypy clean.
+- **Independent review** of the afternoon's commits (4 bugs, all fixed with tests; the yellow-edge logic, crop and hood
+  plumbing checked correct): (1) the reel drifted from its audio when a clip's frame rate differed from the first
+  one's: now refused, and each clip's audio taken contiguously by the writer's own sample counts (±1 sample at
+  NTSC rates); (2) the safety nets undid a plain yes to common parking questions ("is it okay to park here?" counted
+  as a go question; "You're fine here." as permission) and said the traffic disclaimer instead: a parking question
+  is not a go question unless it is about moving off ("pull out of this parking spot", "back out": those stay
+  strict, and "can I back out / back up / reverse" is now a go question, which it wasn't); "you're fine/good" is
+  allowed in a parking answer ("good to go", "go ahead" still caught); (3) answer thumbnails from memory frames
+  (downscaled) kept the masked bar's rows: cropped by share now; (4) the lane-mask cache records its crop, and the
+  replays refuse masks that don't match `--hfov` (a forgotten `cache --hfov` was silently wrong); `virtual` refuses
+  a cropped camera; `eval_pedestrians.py` passes the crop to the drivable area.
+- Tests: all pass (new: the yellow edge, the hood threshold, the low lane crop, the reel, the renderer's stale
+  answers, the parking nets, the cache round trip); ruff, mypy clean.
 
 ### Wake modes, unrequested alerts, destination box (2026-10-11, user request; branch `voice-alerts-destination`)
 - **Wake modes** (`voice.wake_mode`, `--wake`, Settings on the page while running): `hey_drivepilot` (default,
