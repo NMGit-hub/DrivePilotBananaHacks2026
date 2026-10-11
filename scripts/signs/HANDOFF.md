@@ -30,7 +30,8 @@ deadline Sun 20:59 PDT. Check the time with `date` (it is easy to lose track).
    `data/signs/watchdog.log`). It exits when 40 epochs are recorded. **If you start the fine-tune (also
    "train.py det") while the watchdog still runs, it won't interfere (it only acts when no train.py det runs),
    but kill it (`Stop-Process -Id 24908`) once the main run is finished to be safe.**
-3. **Fresh held-out labeling** (Claude Opus 5.5, ~$7.5, started ~17:06, ~15 min): the next 9,000 BDD valid sign
+3. **Fresh held-out labeling: DONE** (9,000 labels, 0 unparsed, $7.46; total Claude labeling spend now ≈ $47.9).
+   Details: Claude Opus 5.5, started ~17:06: the next 9,000 BDD valid sign
    crops (shards 000/001, min height 12) → `data/signs/bdd_labels/fresh_valid.jsonl`. The name deliberately does
    NOT match the `valid*.jsonl` glob used by `read_labels("valid")`, so the original held-out set is unaffected.
    Re-run the same command to finish if it stopped (it resumes; spend is capped by --max-usd):
