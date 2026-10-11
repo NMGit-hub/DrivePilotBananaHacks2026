@@ -55,6 +55,7 @@ from nav.mapbox import RoutingClient
 from nav.phrasing import in_distance, maneuver_phrase
 from perception.detector import Detector, Track
 from perception.ego_motion import EgoMotionEstimator
+from perception.frame_worker import FrameWorker
 from perception.gpu_monitor import GpuMonitor
 from perception.lanes import LaneMasks, LaneWorker, lane_view
 from perception.pipeline import AsyncListener, PerceptionResult, PerceptionWorker
@@ -80,7 +81,7 @@ STALE_CAMERA_S = 1.5  # a live camera with no processed frame for this long is "
 CAMERA_RETRY_S = 3.0  # first wait after a failed reconnect (doubles, up to CAMERA_RETRY_MAX_S)
 CAMERA_RETRY_MAX_S = 30.0
 CAMERA_HEALTHY_S = 30.0  # running this long after a reconnect resets the backoff
-MODEL_START_TIMEOUT_S = 30.0  # start() waits at most this long for the sign / lane model to build
+MODEL_START_TIMEOUT_S = 30.0  # start() waits at most this long for the lane model, then the sign model, to build
 LANES_FRESH_S = 0.5  # lane detection older than this (vs. the frame shown / the question) isn't used
 STALE_AFTER_NAV = {"nav_rerouted", "nav_not_this_exit", "nav_arrived", "nav_roundabout"}
 LaneModelFactory = Callable[[], Callable[[Frame], LaneMasks]]
@@ -739,18 +740,25 @@ class DrivePilotApp:
             if not quiet:
                 self.assistant.say(Utterance(event.text, "alert", Priority.INFO, t=event.t))
 
+    @staticmethod
+    def _await_model(worker: FrameWorker[Any] | None) -> None:
+        """Wait until a model thread has built its model (or failed to)."""
+        if worker is not None and not worker.ready.wait(MODEL_START_TIMEOUT_S):
+            log.warning("model still starting; the app goes on anyway", worker=worker.name)
+
     def start(self) -> None:
         """Start every thread."""
         if self.hub is not None:
             self.hub.start()
-        self._start_signs()
+        # Build the lane and sign models one at a time, each before the detector starts running: both capture CUDA
+        # graphs while they load (the lane model's own; ultralytics' TensorRT loader one per engine load, 17 for
+        # the sign model, in global capture mode), and GPU work from another thread during a capture breaks it
+        # (seen in the bench: built side by side, both models failed to start). The first seconds of a drive
+        # shouldn't lose frames to model warm-ups either. Nothing reloads an engine after this (checked).
         self._start_lanes()
-        # Let the sign and lane models build (and the lane model capture its CUDA graph) before the detector starts
-        # running: GPU work from other threads during a capture can break it, and the first seconds of a drive
-        # shouldn't lose frames to model warm-ups.
-        for model in (self.sign_worker, self.lane_worker):
-            if model is not None and not model.ready.wait(MODEL_START_TIMEOUT_S):
-                log.warning("model still starting; perception starts anyway", worker=model.name)
+        self._await_model(self.lane_worker)
+        self._start_signs()
+        self._await_model(self.sign_worker)
         self._world_thread.start()
         self.source.start()
         self.worker = self._make_worker()

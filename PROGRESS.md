@@ -5,6 +5,19 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 ## Done
 
 ### V2 (in progress, 2026-10-10): V2-M0..M6 built (M1 parking below the bar; M5 drift below its bars); M8 partly
+- **Full app with everything on (lanes + signs), `scripts/bench_app.py --silent`, GPU free** (2026-10-10 23:27):
+  **every target met, twice** (`runs/20261010-232722_bench_app`, `runs/20261010-232825_bench_app`): local answers
+  0.58 / 0.62 s and 0.57 / 0.73 s (median / p90, target 1.0), model answers 1.32 / 1.37 s and 1.55 / 1.59 s (2.5),
+  alerts 12 ms and 10 ms max (0.3 s), perception 29.3 fps (25.2), lane detection 10.6 fps (10), sign detection
+  3.8 fps (new check: >= 75 % of `sign_alerts.fps`), 6/6 heard and routed right. **The first run found a startup
+  bug**: the lane and sign models were built side by side on their threads, and both capture CUDA graphs while
+  loading (ultralytics' TensorRT loader captures one per engine load, 17 for the sign model, in global capture
+  mode): each broke the other's capture and **neither model started** (the bench still passed its V1 checks; the
+  21:44 live check had only been lucky with the timing). Now `start()` builds them one at a time before perception
+  runs (engines are never reloaded after start-up: counted, 0 loads in 30 detections); regression test. Also the
+  per-model rate counted from when the model was ready, so a model built first and waiting for the next one read
+  slow (9.7 fps for 10.6): now from its first frame (test). One earlier run with the fix had a local p90 of 1.01 s:
+  one answer's first sentence took Piper 0.72 s instead of ~0.25 s (CPU contention, not seen in the two re-runs).
 - **Sign alerts once per zone / per new limit** (2026-10-10 23:15, HANDOFF 2.1). Cause, from the detector's own
   detections on the school-zone dev clip (dumped at the app's 4 fps): the street has a school sign on each side
   (two sightings in the first frame), the right one's AHEAD plaque is boxed as a second "school zone" at 1.6 s and

@@ -44,7 +44,8 @@ class FrameWorker(Generic[R]):
         self.error: str | None = None
         self.processed = 0
         self.last_ms: float | None = None
-        self.started_at: float | None = None  # perf_counter when the model was ready (rates in summaries)
+        self.started_at: float | None = None  # perf_counter when it took its first frame (rates in summaries)
+        self.last_done_at: float | None = None  # ...and when it finished its latest one
 
     def start(self) -> Self:
         """Start the thread (returns self)."""
@@ -61,10 +62,12 @@ class FrameWorker(Generic[R]):
             self._thread.join(timeout=timeout)
 
     def rate(self) -> float | None:
-        """Frames processed per second since the model was ready (None before)."""
-        if self.started_at is None:
+        """Frames processed per second from its first frame to its latest one (None before two). Not from when the
+        model was ready: the app builds its models one at a time before the video starts, so a model built first
+        waits for the others."""
+        if self.started_at is None or self.last_done_at is None or self.processed < 2:
             return None
-        elapsed = time.perf_counter() - self.started_at
+        elapsed = self.last_done_at - self.started_at
         return round(self.processed / elapsed, 1) if elapsed > 0 else None
 
     @property
@@ -86,7 +89,6 @@ class FrameWorker(Generic[R]):
             log.exception("model could not start", worker=self.name)
             self.ready.set()
             return
-        self.started_at = time.perf_counter()
         self.ready.set()
         log.info("model ready", worker=self.name)
         next_at = 0.0
@@ -105,12 +107,15 @@ class FrameWorker(Generic[R]):
                         frame, self._pending = self._pending, None
             next_at = time.perf_counter() + self._interval
             started = time.perf_counter()
+            if self.started_at is None:
+                self.started_at = started
             try:
                 result = model(frame)
             except Exception:
                 log.exception("model failed on a frame", worker=self.name, t=frame.t)
                 continue
-            self.last_ms = (time.perf_counter() - started) * 1000.0
+            self.last_done_at = time.perf_counter()
+            self.last_ms = (self.last_done_at - started) * 1000.0
             self.processed += 1
             try:
                 self._on_result(frame, result)

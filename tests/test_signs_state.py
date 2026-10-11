@@ -206,6 +206,22 @@ def test_the_worker_builds_the_detector_on_its_thread_and_keeps_only_the_newest_
     assert all(n == 1 for _, n in results)
 
 
+def test_the_rate_counts_from_the_first_frame_not_from_when_the_model_was_ready() -> None:
+    """The app builds its models one at a time before the video starts: a model built first waits for frames, and
+    that wait isn't a slow model (the bench read 9.7 fps for a lane model doing 10.6)."""
+    worker = SignWorker(SlowDetector, lambda f, dets: None, fps=20.0).start()
+    assert worker.ready.wait(2.0)
+    time.sleep(0.5)  # nothing to do yet
+    assert worker.rate() is None
+    for k in range(20):
+        worker.offer(frame(k / 20))
+        time.sleep(0.05)
+    time.sleep(0.1)
+    worker.stop()
+    rate = worker.rate()
+    assert rate is not None and 14.0 <= rate <= 26.0  # ~20 a second (0.5 s idle would have made it ~13)
+
+
 def test_a_detector_that_cannot_start_reports_why() -> None:
     def broken() -> SlowDetector:
         raise RuntimeError("CUDA is not available")
@@ -214,6 +230,45 @@ def test_a_detector_that_cannot_start_reports_why() -> None:
     assert worker.ready.wait(2.0)
     time.sleep(0.05)
     assert worker.error == "RuntimeError: CUDA is not available" and not worker.running
+
+
+def test_the_app_builds_the_lane_and_sign_models_one_at_a_time(tmp_path: Path) -> None:
+    """Regression (bench, 2026-10-10 23:19): both models capture CUDA graphs while they build (ultralytics' TensorRT
+    loader in global capture mode), and built side by side on their threads each broke the other's capture: both
+    failed to start. start() now builds them one after the other, before perception runs."""
+    from perception.lanes import LaneMasks
+    from tests.test_lanes import _app
+
+    building: list[str] = []
+    overlaps: list[tuple[str, ...]] = []
+    built: list[str] = []
+    guard = threading.Lock()
+
+    def slow_build(name: str) -> None:
+        with guard:
+            building.append(name)
+            if len(building) > 1:
+                overlaps.append(tuple(building))
+        time.sleep(0.3)  # a model loading and capturing its graph
+        with guard:
+            building.remove(name)
+            built.append(name)
+
+    def lane_factory() -> object:
+        slow_build("lanes")
+        return lambda f: LaneMasks(f.t, f.index, (8, 8), np.zeros((8, 8), np.uint8), np.zeros((8, 8), np.uint8), {})
+
+    def sign_factory() -> SlowDetector:
+        slow_build("signs")
+        return SlowDetector()
+
+    app, _ = _app(tmp_path, lane_model=lane_factory, sign_model=sign_factory)
+    app.start()
+    try:
+        assert built == ["lanes", "signs"] and overlaps == []
+        assert app.status["lanes"] == "on" and app.status["signs"] == "on"
+    finally:
+        app.stop()
 
 
 def test_sign_alerts_are_muted_in_quiet_mode(tmp_path: Path) -> None:
