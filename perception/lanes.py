@@ -151,7 +151,10 @@ class LaneModel:
             return
         try:
             graph = torch.cuda.CUDAGraph()
-            with torch.inference_mode(), torch.cuda.graph(graph, stream=self.stream):
+            # Thread-local: the app's other threads (the detector, the sign model) may use the GPU meanwhile; in
+            # the default global mode their calls invalidate the capture (seen in the app: the capture failed and
+            # took one of the detector's frames with it).
+            with torch.inference_mode(), torch.cuda.graph(graph, stream=self.stream, capture_error_mode="thread_local"):
                 outputs = self._forward()
             graph.replay()
             self.stream.synchronize()

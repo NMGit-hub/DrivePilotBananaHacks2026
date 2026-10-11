@@ -80,6 +80,7 @@ STALE_CAMERA_S = 1.5  # a live camera with no processed frame for this long is "
 CAMERA_RETRY_S = 3.0  # first wait after a failed reconnect (doubles, up to CAMERA_RETRY_MAX_S)
 CAMERA_RETRY_MAX_S = 30.0
 CAMERA_HEALTHY_S = 30.0  # running this long after a reconnect resets the backoff
+MODEL_START_TIMEOUT_S = 30.0  # start() waits at most this long for the sign / lane model to build
 LANES_FRESH_S = 0.5  # lane detection older than this (vs. the frame shown / the question) isn't used
 STALE_AFTER_NAV = {"nav_rerouted", "nav_not_this_exit", "nav_arrived", "nav_roundabout"}
 LaneModelFactory = Callable[[], Callable[[Frame], LaneMasks]]
@@ -741,6 +742,12 @@ class DrivePilotApp:
             self.hub.start()
         self._start_signs()
         self._start_lanes()
+        # Let the sign and lane models build (and the lane model capture its CUDA graph) before the detector starts
+        # running: GPU work from other threads during a capture can break it, and the first seconds of a drive
+        # shouldn't lose frames to model warm-ups.
+        for model in (self.sign_worker, self.lane_worker):
+            if model is not None and not model.ready.wait(MODEL_START_TIMEOUT_S):
+                log.warning("model still starting; perception starts anyway", worker=model.name)
         self._world_thread.start()
         self.source.start()
         self.worker = self._make_worker()

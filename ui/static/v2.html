@@ -368,21 +368,28 @@ function drawLanes(lanes, ox, oy, vw, vh, dpr, now) {
     pts.forEach((q, i) => { const [x, y] = at(q); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
   };
   ctx.save();
-  trace([...lanes.left, ...lanes.right.slice().reverse()]); // our lane, faintly filled
+  ctx.lineJoin = ctx.lineCap = "round";
+  trace([...lanes.left, ...lanes.right.slice().reverse()]); // our lane, filled
   ctx.closePath();
   ctx.fillStyle = COLORS.white;
-  ctx.globalAlpha = 0.1;
+  ctx.globalAlpha = 0.18;
   ctx.fill();
-  ctx.globalAlpha = 0.5; // the other lanes' lines
-  ctx.lineWidth = 1.5 * dpr;
+  ctx.lineWidth = 2 * dpr; // the other lanes' lines
   ctx.strokeStyle = COLORS.gray;
+  ctx.globalAlpha = 0.6;
+  ctx.setLineDash([8 * dpr, 8 * dpr]);
   for (const line of lanes.others) { trace(line); ctx.stroke(); }
-  for (const side of ["left", "right"]) { // our lane's lines; the one we drift toward in red
-    const red = lanes.drift === side;
-    ctx.globalAlpha = red ? 0.95 : 0.75;
+  ctx.setLineDash([]);
+  for (const side of ["left", "right"]) { // our lane's lines (they sit on the road's own white paint: a dark halo
+    const red = lanes.drift === side;      // keeps them visible); the one we drift toward in red
+    trace(lanes[side]);
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = (red ? 9 : 7) * dpr;
+    ctx.strokeStyle = "#0b0d10";
+    ctx.stroke();
+    ctx.globalAlpha = 0.95;
     ctx.lineWidth = (red ? 5 : 3) * dpr;
     ctx.strokeStyle = red ? COLORS.red : COLORS.white;
-    trace(lanes[side]);
     ctx.stroke();
   }
   if (lanes.drift) { // ...and that side's screen edge pulses
