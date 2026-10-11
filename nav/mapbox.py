@@ -80,22 +80,28 @@ def _tokens(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9']+", text.lower().replace("'s", "")) if w not in _STOPWORDS}
 
 
+def _match_score(query: str, place: Place, near: LatLon | None) -> float:
+    """How well a place's name matches the words said (or typed), weighed against distance from us."""
+    spoken = _tokens(query)
+    name = _tokens(place.name)
+    overlap = len(spoken & name) / max(len(spoken), 1)  # share of the spoken words in the name
+    extra = len(name - spoken) / max(len(name), 1)  # words in the name nobody said
+    value = overlap - 0.2 * extra + (0.5 if name == spoken else 0.0)
+    value += 0.1 if place.kind in ("poi", "address") else 0.0
+    if near is not None:
+        km = haversine_m(near, place.location) / 1000.0
+        value -= 0.3 * math.log10(1.0 + km / 5.0) + (1.0 if km > 300.0 else 0.0)
+    return value
+
+
+def rank_places(query: str, candidates: list[Place], near: LatLon | None) -> list[Place]:
+    """Candidates best match first (a stable sort: the services' own order breaks ties)."""
+    return sorted(candidates, key=lambda place: -_match_score(query, place, near))
+
+
 def pick_place(query: str, candidates: list[Place], near: LatLon | None) -> Place:
     """The candidate whose name best matches the spoken words, weighed against distance from us."""
-    spoken = _tokens(query)
-
-    def score(place: Place) -> float:
-        name = _tokens(place.name)
-        overlap = len(spoken & name) / max(len(spoken), 1)  # share of the spoken words in the name
-        extra = len(name - spoken) / max(len(name), 1)  # words in the name nobody said
-        value = overlap - 0.2 * extra + (0.5 if name == spoken else 0.0)
-        value += 0.1 if place.kind in ("poi", "address") else 0.0
-        if near is not None:
-            km = haversine_m(near, place.location) / 1000.0
-            value -= 0.3 * math.log10(1.0 + km / 5.0) + (1.0 if km > 300.0 else 0.0)
-        return value
-
-    best = max(candidates, key=score)
+    best = max(candidates, key=lambda place: _match_score(query, place, near))
     log.info(
         "destination chosen",
         query=query,
@@ -175,6 +181,31 @@ class MapboxClient:
             raise PlaceNotFound(f"no place found for {query!r}")
         return pick_place(query, candidates, near)
 
+    def search(self, query: str, near: LatLon | None = None, limit: int = 5) -> list[Place]:
+        """Places for a destination box as the driver types: the Search Box API (businesses, landmarks, addresses),
+        topped up from Geocoding v6, duplicates dropped, best matches first (`pick_place`'s scoring)."""
+        if len(query.strip()) < 2:
+            return []
+        params: dict[str, Any] = {"q": query, "language": "en"}
+        if near is not None:
+            params["proximity"] = f"{near[1]:.6f},{near[0]:.6f}"
+        if self.country:
+            params["country"] = self.country
+        candidates: list[Place] = []
+        errors: list[str] = []
+        for url, extra in ((SEARCHBOX_URL, {}), (GEOCODE_URL, {"autocomplete": "true"})):
+            try:
+                candidates += _places(self._get(url, {**params, **extra, "limit": limit}))
+            except NavError as exc:
+                errors.append(str(exc))
+        if not candidates and errors:
+            raise NavError(errors[0])
+        unique: dict[tuple[str, float, float], Place] = {}
+        for place in candidates:
+            key = (place.name.lower(), round(place.location[0], 3), round(place.location[1], 3))
+            unique.setdefault(key, place)
+        return rank_places(query, list(unique.values()), near)[:limit]
+
     def directions(self, origin: LatLon, destination: LatLon, heading: float | None = None) -> dict[str, Any]:
         """The raw directions response (kept for fixtures)."""
         coordinates = f"{origin[1]:.6f},{origin[0]:.6f};{destination[1]:.6f},{destination[0]:.6f}"
@@ -230,6 +261,11 @@ class FixtureClient:
             if q in key or key in q or q in place.name.lower():
                 return place
         raise PlaceNotFound(f"no place found for {query!r}")
+
+    def search(self, query: str, near: LatLon | None = None, limit: int = 5) -> list[Place]:
+        """Saved places whose name contains the query (the destination box)."""
+        q = query.lower().strip()
+        return [place for place in self.places.values() if q and q in place.name.lower()][:limit]
 
     def route(self, origin: LatLon, destination: Place, heading: float | None = None) -> Route:
         """The saved route to that place."""

@@ -44,6 +44,7 @@ nav:                        # Mapbox routing, rerouting and spoken guidance
   join_slack_m: 100.0       # starting off the road: "off route" only when this much further from it than at the start
   home: null                # address for "take me home" (null: it asks for the address)
   lane_reminders_m: [1609.0, 402.0]  # PLAN.md: lane reminders ~1 mile and ~0.25 mile before a junction
+  turn_prompts_m: [800.0, 150.0]     # turn-by-turn (alerts.auto.turns): "In half a mile, turn right onto ..."
 
 perception:
   weights: models/yolo26s.pt  # downloaded on first run
@@ -116,6 +117,19 @@ alerts:                     # spoken on their own: "You're up, check and go." / 
   watch_timeout_s: 300.0    # "tell me when it's green" requests expire after 5 minutes
   safety_gap_s: 3.0         # a pedestrian warning repeating the last one within 3 s (same kind and side: a group
                             #   crossing) is said once; another kind or the other side is said
+  auto:                     # said without being asked (each also switchable on the page, Settings); pedestrian and
+                            #   drift warnings are always on. Muted in quiet mode, except turns and wrong lane.
+    light_green: true       # "Light's green." when our light turns green while we wait at it
+    car_ahead: true         # "The car ahead is moving." stopped behind a car that pulls away while we stay put
+    turns: true             # turn-by-turn while navigating (nav.turn_prompts_m)
+    wrong_lane: true        # navigating: "You're in the wrong lane for your turn. Move one lane left."
+    speeding: true          # "You're over the limit. It's 30 here." (the sign detector's limit + GPS speed)
+    stop_sign: true         # "Stop sign ahead." while driving toward one
+    car_ahead_wait_s: 2.0   # stopped this long behind the car before it pulls away...
+    car_ahead_delay_s: 1.5  # ...and still stopped this long after it started moving
+    wrong_lane_within_m: 800.0   # wrong-lane warnings within this far of the turn, after 2 s in the wrong lane
+    speeding_margin_mph: 5.0     # over the limit by more than 5 mph for 4 s
+    speeding_hold_s: 4.0
 
 pedestrians:                # "Pedestrian stepping into the road on your right." (V2; state/pedestrians.py)
   half_width_m: 1.5         # our path: 1.5 m either side of where we're heading (half the car + a margin)...
@@ -229,6 +243,11 @@ voice:
   input_device: null        # sounddevice name or index; null = system default
   output_device: null
   output_volume: 1.0        # 0-1; benchmarks run quieter
+  wake_mode: hey_drivepilot # hey_drivepilot | hey (just "hey") | none (no wake word: any question is answered).
+                            #   Also --wake on the command line, or Settings on the page while running.
+  open_mic:                 # the "hey" and "none" modes: speech itself starts a question
+    echo_tail_s: 0.6        # DrivePilot's own voice in the mic: ignored while it talks and this long after
+    only_questions: true    # "none": only questions and commands are answered, not every remark in the car
   wakeword:                 # "Hey DrivePilot" (openWakeWord model trained by scripts/wakeword)
     model: models/wakeword/hey_drivepilot.onnx
     threshold: 0.15         # real voices (scripts/wakeword/check_real.py): 0.25 missed clear takes; still 0

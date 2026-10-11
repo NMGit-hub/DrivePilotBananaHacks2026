@@ -9,6 +9,11 @@
     POST /api/ask     {"text": ...}: a typed question (hotkey Q)
     POST /api/control {"action": "pause"} | {"action": "seek", "delta_s": ±5}: replay hotkeys
     POST /api/gps     {"lat", "lon", "speed", "heading", "accuracy"}: a phone fix
+    POST /api/places  {"q": ...}: places for the destination box as the driver types
+    POST /api/destination  {"query": ..., "place": {...} | null}: navigate there (a typed place or a suggestion)
+    POST /api/route   {"action": "cancel"}: end navigation
+    POST /api/wake    {"mode": "hey_drivepilot" | "hey" | "none"}: the wake mode
+    POST /api/alerts  {"name": ..., "on": bool}: switch one of the alerts DrivePilot says on its own
     GET  /api/image/N a memory thumbnail an answer came from (JPEG)
     GET  /api/state   history + status (debugging, tests)
 
@@ -26,7 +31,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -60,6 +65,21 @@ class UiActions(Protocol):
     ) -> bool:
         """A fix from the phone; False if the app doesn't use phone GPS."""
 
+    def set_wake_mode(self, mode: str) -> bool:
+        """Switch the wake mode; False without voice input."""
+
+    def set_alert(self, name: str, on: bool) -> None:
+        """Switch one unrequested alert on or off (ValueError for an unknown name)."""
+
+    def suggest_places(self, query: str) -> list[dict[str, Any]]:
+        """Places matching what was typed (blocks on the network: called off the event loop)."""
+
+    def set_destination(self, query: str, place: dict[str, Any] | None) -> bool:
+        """Navigate to a typed place or a picked suggestion (must not block); False without navigation."""
+
+    def cancel_route(self) -> bool:
+        """End navigation; False without navigation."""
+
 
 class AskBody(BaseModel):
     """A typed question."""
@@ -82,6 +102,48 @@ class GpsBody(BaseModel):
     speed: float | None = Field(None, ge=0.0, le=120.0, description="m/s")
     heading: float | None = Field(None, ge=0.0, le=360.0, description="degrees clockwise from north")
     accuracy: float | None = Field(None, ge=0.0, description="m")
+
+
+class PlacesBody(BaseModel):
+    """What the driver has typed into the destination box."""
+
+    q: str = Field(max_length=200)
+
+
+class PlaceBody(BaseModel):
+    """A suggestion the driver picked."""
+
+    name: str = Field(min_length=1, max_length=200)
+    address: str = Field("", max_length=400)
+    lat: float = Field(ge=-90.0, le=90.0)
+    lon: float = Field(ge=-180.0, le=180.0)
+    kind: str = Field("", max_length=40)
+
+
+class DestinationBody(BaseModel):
+    """Navigate here."""
+
+    query: str = Field(min_length=1, max_length=200)
+    place: PlaceBody | None = None
+
+
+class RouteBody(BaseModel):
+    """A navigation control."""
+
+    action: Literal["cancel"]
+
+
+class WakeBody(BaseModel):
+    """The wake mode."""
+
+    mode: Literal["hey_drivepilot", "hey", "none"]
+
+
+class AlertSwitchBody(BaseModel):
+    """One unrequested alert on or off."""
+
+    name: str = Field(min_length=1, max_length=40)
+    on: bool
 
 
 LOCAL_HOSTS = ("localhost", "127.0.0.1")
@@ -231,6 +293,36 @@ def create_server(hub: UiHub, actions: UiActions, hosts: Sequence[str] = LOCAL_H
     async def gps(body: GpsBody) -> JSONResponse:
         used = actions.gps_fix(body.lat, body.lon, body.speed, body.heading, body.accuracy)
         return JSONResponse({"ok": used})
+
+    @app.post("/api/places", dependencies=guarded)
+    async def places(body: PlacesBody) -> JSONResponse:
+        query = body.q.strip()
+        found = await asyncio.to_thread(actions.suggest_places, query) if len(query) >= 2 else []
+        return JSONResponse({"places": found})
+
+    @app.post("/api/destination", dependencies=guarded)
+    async def destination(body: DestinationBody) -> JSONResponse:
+        query = body.query.strip()
+        if not query:
+            raise HTTPException(status_code=422, detail="empty destination")
+        place = body.place.model_dump() if body.place is not None else None
+        return JSONResponse({"ok": actions.set_destination(query, place)})
+
+    @app.post("/api/route", dependencies=guarded)
+    async def route(body: RouteBody) -> JSONResponse:
+        return JSONResponse({"ok": actions.cancel_route()})
+
+    @app.post("/api/wake", dependencies=guarded)
+    async def wake(body: WakeBody) -> JSONResponse:
+        return JSONResponse({"ok": actions.set_wake_mode(body.mode)})
+
+    @app.post("/api/alerts", dependencies=guarded)
+    async def alerts(body: AlertSwitchBody) -> JSONResponse:
+        try:
+            actions.set_alert(body.name, body.on)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return JSONResponse({"ok": True})
 
     @app.get("/api/image/{image_id}")
     async def image(image_id: int) -> Response:

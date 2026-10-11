@@ -10,6 +10,7 @@ import pytest
 from answers import local
 from answers.alerts import LIGHT_GREEN, YOUR_TURN, AlertEngine
 from answers.assistant import NO_MODEL, NO_NAV, QUIET_ON, STARTING, Assistant
+from answers.auto_alerts import LIGHT_GREEN_AUTO
 from answers.local import Watch
 from answers.speech import Priority, TextSpeaker, Utterance
 from core.config import AlertsConfig, load_config
@@ -251,19 +252,26 @@ def test_quiet_mode_keeps_only_requested_alerts() -> None:
     assert [u.priority for u in said] == [Priority.REQUESTED]
 
 
-def test_light_green_only_when_asked_and_only_once() -> None:
+def test_light_green_in_full_when_asked_and_only_once() -> None:
     alerts, said = engine()
-    alerts.on_world_event(WorldEvent("light_green", 30.0))
-    assert said == []  # nobody asked
+    alerts.on_world_event(WorldEvent("light_green", 30.0))  # nobody asked: the short heads-up (alerts.auto)
     alerts.arm(Watch.LIGHT, 40.0)
     alerts.on_world_event(WorldEvent("light_green", 50.0))
-    alerts.on_world_event(WorldEvent("light_green", 80.0))  # the watch was used up
-    assert [u.text for u in said] == [LIGHT_GREEN] and said[0].priority is Priority.REQUESTED
+    alerts.on_world_event(WorldEvent("light_green", 80.0))  # the watch was used up: the heads-up again
+    assert [(u.text, u.priority) for u in said] == [
+        (LIGHT_GREEN_AUTO, Priority.INFO),
+        (LIGHT_GREEN, Priority.REQUESTED),
+        (LIGHT_GREEN_AUTO, Priority.INFO),
+    ]
     assert alerts.armed() == set()
+    alerts.switches.set("light_green", False)  # switched off: only when asked
+    alerts.on_world_event(WorldEvent("light_green", 120.0))
+    assert len(said) == 3
 
 
 def test_watches_expire() -> None:
     alerts, said = engine(watch_timeout_s=60.0)
+    alerts.switches.set("light_green", False)  # (the unrequested heads-up is off: this is about the watch)
     alerts.arm(Watch.LIGHT, 0.0)
     alerts.on_world_event(WorldEvent("light_green", 61.0))
     assert said == []
@@ -289,6 +297,7 @@ def test_leaving_the_intersection_drops_the_turn_watch() -> None:
 
 def test_seeking_back_drops_watches() -> None:
     alerts, said = engine()
+    alerts.switches.set("light_green", False)  # (the unrequested heads-up is off: this is about the watch)
     alerts.arm(Watch.LIGHT, 50.0)
     alerts.on_world_event(WorldEvent("light_green", 10.0))  # replay jumped back before the request
     assert said == [] and alerts.armed() == set()

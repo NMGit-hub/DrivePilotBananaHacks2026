@@ -228,8 +228,13 @@ class WorldState:
         if turned_green:
             events.append(WorldEvent("light_green", t, {"ego_stopped": ego.stopped}))
 
-        lead_box = (lead.track_id, lead.box[3] - lead.box[1]) if lead is not None else None
-        if self.car_ahead.update(t, ego.stopped, ego.stopped_since, ego.confident, lead_box):
+        lead_box = (
+            (lead.track_id, lead.box[3] - lead.box[1], lead.stopped_since if lead.stopped else None)
+            if lead is not None
+            else None
+        )
+        red = light.color in (LightColor.RED, LightColor.YELLOW)
+        if self.car_ahead.update(t, ego.stopped, ego.stopped_since, ego.confident, lead_box, red_light=red):
             events.append(WorldEvent("car_ahead_moving", t, {"track": lead_box[0] if lead_box else None}))
 
         mode, self._parking_mode = self._parking_mode, None
@@ -237,7 +242,7 @@ class WorldState:
             self.parking.set_mode(mode)
         gps_speed = self._gps_speed(t)
         moving = not ego.stopped and ego.confident
-        sign_id = self.stop_signs.update(t, moving, gps_speed, signs, frame.width, frame.height)
+        sign_id = self.stop_signs.update(t, moving, gps_speed, signs, frame.image)
         if sign_id is not None:
             events.append(WorldEvent("stop_sign_ahead", t, {"track": sign_id}))
         for pe in self.parking.update(

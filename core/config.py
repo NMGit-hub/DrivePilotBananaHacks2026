@@ -357,13 +357,13 @@ class AutoAlertsConfig(_Strict):
     """What DrivePilot says on its own, without being asked (answers/auto_alerts.py). Each one can also be switched
     on and off on the page while running. Safety warnings (pedestrians, drift) are always on."""
 
-    light_green: bool = Field(True, description="\"Light's green.\" when our light turns green while we wait at it.")
+    light_green: bool = Field(True, description='"Light\'s green." when our light turns green while we wait at it.')
     car_ahead: bool = Field(
         True, description='"The car ahead is moving." stopped behind a car that pulls away while we stay put.'
     )
     turns: bool = Field(True, description='Turn-by-turn while navigating: "In half a mile, turn right onto Main St."')
     wrong_lane: bool = Field(
-        True, description="Navigating: \"You're in the wrong lane for your turn. Move one lane left.\" (lane detection)"
+        True, description='Navigating: "You\'re in the wrong lane for your turn. Move one lane left." (lane detection)'
     )
     speeding: bool = Field(True, description="\"You're over the limit. It's 30 here.\" (sign detector + GPS speed)")
     stop_sign: bool = Field(True, description='"Stop sign ahead." while driving toward one.')
@@ -401,7 +401,10 @@ class AutoAlertsConfig(_Strict):
         0.025, gt=0.0, lt=1.0, description="The sign's box must be this tall (share of the frame): close, not far off."
     )
     stop_sign_min_x: float = Field(
-        0.35, ge=0.0, le=1.0, description="...and centered right of this share of the width (US signs are on the right)."
+        0.35, ge=0.0, le=1.0, description="...and centered right of this share of the width (US signs: on the right)."
+    )
+    stop_sign_min_redness: float = Field(
+        8.0, description="...and facing us: its middle this much redder than green (median R - G; a back is grey: ~0)."
     )
     stop_sign_repeat_s: float = Field(20.0, ge=0.0, description="Another stop sign this soon is not announced.")
 

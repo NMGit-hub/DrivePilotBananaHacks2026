@@ -151,6 +151,7 @@ def test_race_with_newer_state_answers_from_the_newer_state() -> None:
 
 def test_watch_asked_while_driving_expires_if_we_never_stop() -> None:
     alerts, said = engine(approach_timeout_s=45.0)
+    alerts.switches.set("light_green", False)  # (the unrequested heads-up is off: this is about the watch)
     alerts.arm(Watch.LIGHT, 10.0, moving=True)  # approaching light A, which turned green before we got there
     alerts.on_world_event(WorldEvent("light_green", 250.0))  # light B, minutes later
     assert said == []

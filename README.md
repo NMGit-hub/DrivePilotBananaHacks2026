@@ -87,12 +87,25 @@ adb reverse tcp:8000 tcp:8000
 - The screen is at <http://localhost:8000/>: the video with its overlays (each frame and its boxes arrive in
   one message), the navigation banner, speed and speed limit, and the conversation as text. The plain V1 screen
   is at <http://localhost:8000/v1> (or `ui.overlays: false`). Hotkeys: **space** pause, **←/→** skip 5 s,
-  **Q** type a question.
+  **Q** type a question, **D** destination.
 - Say **"Hey DrivePilot"**, then the question ("who got here first?", "which lane for 520 east?",
   "I'm going to Redmond Town Center", "tell me when it's green", "what was that sign?", "help me find a
   parking spot", "quiet mode", "repeat that", "stop").
+- **Wake word** (`voice.wake_mode`, `--wake`, or Settings on the page while running): `hey_drivepilot`
+  (default), `hey` ("Hey, can I go?", or "Hey." and then the question), or `none` (no wake word: any question
+  or command is answered; remarks like "we're almost there" are not). "Hey DrivePilot, stop" works in every
+  mode, and DrivePilot never answers its own voice (the microphone is ignored while it talks).
+- **Destination:** type it in the **Where to?** box on the page (suggestions as you type, recent places as
+  chips, **End route** to stop), say "I'm going to ...", or start with `--destination "Costco"` (set as soon
+  as there's a GPS fix).
+- **Said without asking** (`alerts.auto`, each switchable under Settings on the page): "Light's green." when
+  our light changes while we wait, "The car ahead is moving." (never at a red light), turn-by-turn ("In half a
+  mile, turn right onto Main Street."), "You're in the wrong lane for your turn. Move one lane left.",
+  "You're over the limit. It's 30 here.", "Stop sign ahead." Pedestrian, cyclist and drift warnings are always
+  on. Quiet mode mutes all but the turn-by-turn and wrong-lane guidance.
 - On the phone, open <http://localhost:8000/gps> and tap Start: it sends the location once a second.
 - Options: `--no-voice` (typed questions only), `--no-audio` (answers on the screen only), `--gpx track.gpx`,
+  `--wake hey|none|hey_drivepilot`, `--destination PLACE`,
   `--ask "22.5=who got here first?"` (a typed question at a video time), `--exit-at-end`,
   `--set key=value` (any config value), `--print-config`.
 - Every run writes a review folder under `runs/`: log, questions, answers, alerts, world events, GPS,
@@ -138,6 +151,7 @@ For drives: plug the laptop into its own charger and set Windows to **Best perfo
 .venv/Scripts/python scripts/bench_app.py --silent     # whole app + spoken questions: latencies vs targets
 .venv/Scripts/python scripts/bench_pipeline.py         # perception FPS / latency / GPU memory vs targets
 .venv/Scripts/python scripts/voice_eval.py             # wake word + Whisper + routing on synthetic voices
+.venv/Scripts/python scripts/wake_modes_check.py       # the three wake modes on synthetic voices + car noise
 .venv/Scripts/python scripts/eval_ego_motion.py        # "are we stopped?" vs hand labels
 .venv/Scripts/python scripts/eval_traffic_lights.py    # traffic-light reading vs hand labels
 .venv/Scripts/python scripts/ask_model.py --suite eval/model_questions.yaml   # vision model on dev frames

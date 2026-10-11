@@ -28,11 +28,17 @@ is the live status. Read both before starting work.
   sign, parking and scene-description questions go to a second model, Claude Haiku 5.5 (`vision.reading`, added
   2026-10-11 when the user asked to improve the vision answers; measured in PROGRESS.md). Gemini Flash, Ollama and a
   mock stay available as drop-ins and never leak into callers.
-- **Voice input is wake word only:** "Hey DrivePilot" (custom openWakeWord model trained locally, in
-  `scripts/wakeword/`). No push-to-talk buttons or extra devices. (Typed questions exist only as
-  the replay/dev tool described in PLAN.md "Replay mode".) One exception (user, 2026-10-10): right after
-  DrivePilot itself asks a yes/no question (the V2 parking-lot offer), it listens a few seconds for a plain
-  "yes" / "no" without the wake word.
+- **Voice input is by voice only, no push-to-talk buttons or extra devices.** The wake word is "Hey DrivePilot"
+  (custom openWakeWord model trained locally, in `scripts/wakeword/`) by default. The user asked on 2026-10-11 for
+  a setting with two more modes (`voice.wake_mode`, also switchable on the page): `hey` (just "hey") and `none`
+  (no wake word: questions and commands are answered, remarks are not). "Hey DrivePilot" works in every mode, and
+  DrivePilot's own voice must never start a question. (Typed questions and the page's destination box are the
+  screen's tools, PLAN.md "Replay mode".) One more exception (user, 2026-10-10): right after DrivePilot itself
+  asks a yes/no question (the V2 parking-lot offer), it listens a few seconds for a plain "yes" / "no" without
+  the wake word.
+- **Unrequested spoken alerts** (`alerts.auto`, user 2026-10-11: "talk without needing the wake word"): light
+  green, car ahead moving, turn-by-turn, wrong lane, speeding, stop sign ahead. Each one switchable; never a
+  "go"-sounding alert at a red light (PLAN.md safety rules).
 - **Secrets** live in `.env` (gitignored). `.env.example` documents them. Never commit keys, and never print
   them in logs.
 - Config values go in `config.yaml`, not hard-coded numbers.

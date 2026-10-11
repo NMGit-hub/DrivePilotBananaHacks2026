@@ -3,7 +3,11 @@
 - "You're up, check and go." when it becomes our turn at a 4-way stop after waiting for other cars. Spoken on
   its own (INFO); if the user asked ("can I go?" → "I'll tell you"), it is REQUESTED and survives quiet mode.
   "Never mind" silences it for the current stop.
-- "Light's green, check the intersection and go." only when the user asked ("tell me when it's green").
+- "Light's green, check the intersection and go." when the user asked ("tell me when it's green"); otherwise just
+  "Light's green." (INFO) if `alerts.auto.light_green` is on.
+- Unrequested heads-ups (INFO, each behind its `AutoSwitches` switch, answers/auto_alerts.py): "The car ahead is
+  moving." (stopped behind a car that pulls away; not right after "Light's green", which says it already) and "Stop
+  sign ahead." (state/heads_up.py raises both).
 - Once per event: the world state emits each event once per stop; on top of that each alert kind has a
   cooldown (reset when we leave the intersection or drive off), so a flickering state can't repeat it. A watch
   is used up only when its alert is actually spoken.
@@ -30,6 +34,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
+from answers.auto_alerts import CAR_AHEAD_MOVING, LIGHT_GREEN_AUTO, STOP_SIGN_AHEAD, AutoSwitches
 from answers.local import Watch
 from answers.speech import Priority, Utterance
 from core.config import AlertsConfig
@@ -57,6 +62,7 @@ PEDESTRIAN_TEXTS: dict[tuple[str, str, str], str] = {
 }
 SAFETY_ALERT_TEXTS = tuple(PEDESTRIAN_TEXTS.values())  # pre-rendered at startup with the other fixed alerts
 _WARNED_MEMORY_S = 120.0  # how long a warned track id is remembered (ids only grow within a segment)
+GREEN_COVERS_S = 5.0  # "The car ahead is moving" this soon after "Light's green" adds nothing
 
 
 class ArmResult(StrEnum):
@@ -77,9 +83,12 @@ class _Watch:
 class AlertEngine:
     """Decides which world events are spoken, and how urgently."""
 
-    def __init__(self, cfg: AlertsConfig, emit: Callable[[Utterance], None]) -> None:
+    def __init__(
+        self, cfg: AlertsConfig, emit: Callable[[Utterance], None], switches: AutoSwitches | None = None
+    ) -> None:
         self.cfg = cfg
         self._emit = emit
+        self.switches = switches or AutoSwitches.from_config(cfg.auto)  # unrequested alerts on/off (the page)
         self._lock = threading.Lock()
         self._quiet = False
         self._watches: dict[Watch, _Watch] = {}
@@ -167,6 +176,17 @@ class AlertEngine:
                     utterance = self._fire("light_green", t, LIGHT_GREEN, Priority.REQUESTED)
                     if utterance is not None:
                         self._watches.pop(Watch.LIGHT, None)
+                elif self.switches.enabled("light_green"):
+                    utterance = self._fire("light_green", t, LIGHT_GREEN_AUTO, Priority.INFO)
+            elif event.kind == "car_ahead_moving":
+                green = self._last_fired.get("light_green")
+                if green is not None and 0.0 <= t - green < GREEN_COVERS_S:
+                    log.info("alert suppressed: the light just turned green", kind="car_ahead")
+                elif self.switches.enabled("car_ahead"):
+                    utterance = self._fire("car_ahead", t, CAR_AHEAD_MOVING, Priority.INFO)
+            elif event.kind == "stop_sign_ahead":
+                if self.switches.enabled("stop_sign"):
+                    utterance = self._fire("stop_sign", t, STOP_SIGN_AHEAD, Priority.INFO, drops_answers=False)
             elif event.kind == "left_intersection":
                 # The next stop is a new event: its "you're up" must not be eaten by this one's cooldown.
                 self._watches.pop(Watch.TURN, None)
@@ -217,7 +237,7 @@ class AlertEngine:
         log.info("alert", kind="pedestrian", t=round(t, 2), priority=Priority.SAFETY.name, track=track, text=text)
         return Utterance(text=text, kind="alert", priority=Priority.SAFETY, clip="pedestrian", t=t)
 
-    def _fire(self, kind: str, t: float, text: str, priority: Priority) -> Utterance | None:
+    def _fire(self, kind: str, t: float, text: str, priority: Priority, drops_answers: bool = True) -> Utterance | None:
         last = self._last_fired.get(kind)
         if last is not None and 0.0 <= t - last < self.cfg.cooldown_s:
             log.info("alert suppressed: cooldown", kind=kind, t=round(t, 2))
@@ -228,7 +248,7 @@ class AlertEngine:
         self._last_fired[kind] = t
         log.info("alert", kind=kind, t=round(t, 2), priority=priority.name)
         # "You're up" / "Light's green": whatever was being said about waiting is now out of date.
-        return Utterance(text=text, kind="alert", priority=priority, clip=kind, t=t, drops_answers=True)
+        return Utterance(text=text, kind="alert", priority=priority, clip=kind, t=t, drops_answers=drops_answers)
 
     def _expire(self, t: float) -> None:
         cfg = self.cfg

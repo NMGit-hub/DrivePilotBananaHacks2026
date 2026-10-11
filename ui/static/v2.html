@@ -90,12 +90,55 @@
   button { background: #2b3440; color: var(--text); border: 0; border-radius: 6px; padding: 8px 14px; font: inherit;
     cursor: pointer; }
   #keys { padding: 0 16px 10px; color: var(--muted); font-size: 12px; }
+
+  /* destination box */
+  #drive { border-bottom: 1px solid var(--line); padding: 10px 16px 12px; position: relative; }
+  #dest-form { padding: 0; border: 0; }
+  #dest-form input { font-size: 17px; padding: 10px 12px; }
+  #dest-form button { background: #2563eb; font-weight: 650; }
+  #dest-form button:disabled, #dest-form input:disabled { opacity: .5; cursor: default; }
+  #suggest { list-style: none; margin: 4px 0 0; padding: 4px; position: absolute; left: 16px; right: 16px; z-index: 5;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    max-height: 320px; overflow-y: auto; }
+  #suggest[hidden] { display: none; }
+  #suggest li { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+  #suggest li.on, #suggest li:hover { background: #1d2530; }
+  #suggest .name { font-weight: 600; }
+  #suggest .addr { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #suggest .empty { color: var(--muted); cursor: default; background: none; }
+  #recent { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  #recent:empty { display: none; }
+  .chip { padding: 4px 10px; border-radius: 999px; font-size: 13px; background: #1d2530; border: 1px solid var(--line); }
+  #route-now { display: none; align-items: center; gap: 10px; margin-top: 10px; padding: 8px 10px; border-radius: 8px;
+    background: rgba(52, 211, 153, .1); border: 1px solid rgba(52, 211, 153, .35); }
+  #route-now.on { display: flex; }
+  #route-now .where { flex: 1; min-width: 0; }
+  #route-now .where b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #route-now .eta { color: var(--green); font-size: 13px; }
+  #route-now button { padding: 6px 12px; }
+  #drive-hint { color: var(--amber); font-size: 13px; margin-top: 6px; }
+  #drive-hint:empty { display: none; }
+
+  /* settings */
+  #settings { border-top: 1px solid var(--line); padding: 8px 16px 10px; font-size: 14px; }
+  #settings summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  #settings h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 12px 0 6px;
+    font-weight: 600; }
+  .seg { display: flex; gap: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { flex: 1; border-radius: 0; background: transparent; padding: 7px 6px; font-size: 13px; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: #2563eb; color: white; font-weight: 600; }
+  .seg button:disabled { opacity: .45; cursor: default; }
+  #wake-note { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .switch { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; }
+  .switch input { flex: 0 0 auto; width: 16px; height: 16px; accent-color: #2563eb; }
   kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 11px ui-monospace, monospace; }
   @media (max-width: 900px) {
     main { flex-direction: column; height: auto; min-height: 100vh; }
     #video-box { height: 56vw; flex: 0 0 auto; }
     aside { flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--line); }
     #feed { max-height: 50vh; }
+    #suggest { left: 8px; right: 8px; }
     #banner { max-width: calc(100% - 120px); }
     #banner .step { font-size: 15px; }
   }
@@ -122,12 +165,38 @@
       <span id="listening">Listening…</span>
       <span id="conn">connecting</span>
     </header>
+    <section id="drive" aria-label="Destination">
+      <form id="dest-form" autocomplete="off">
+        <input id="dest" maxlength="200" placeholder="Where to? (D)" aria-label="Destination"
+               aria-autocomplete="list" aria-controls="suggest" role="combobox" aria-expanded="false">
+        <button type="submit" id="dest-go">Go</button>
+      </form>
+      <ul id="suggest" role="listbox" hidden></ul>
+      <div id="recent" aria-label="Recent destinations"></div>
+      <div id="route-now" aria-live="polite">
+        <div class="where"><b></b><span class="eta"></span></div>
+        <button type="button" id="end-route">End route</button>
+      </div>
+      <div id="drive-hint"></div>
+    </section>
     <div id="feed" aria-live="polite"></div>
     <form id="ask">
       <input id="question" autocomplete="off" maxlength="500" placeholder="Type a question (Q)">
       <button type="submit">Ask</button>
     </form>
-    <div id="keys"><kbd>Space</kbd> pause · <kbd>←</kbd>/<kbd>→</kbd> 5 s · <kbd>Q</kbd> type a question</div>
+    <details id="settings">
+      <summary>Settings: wake word and spoken alerts</summary>
+      <h2>Wake word</h2>
+      <div class="seg" id="wake" role="group" aria-label="Wake word">
+        <button type="button" data-mode="hey_drivepilot">"Hey DrivePilot"</button>
+        <button type="button" data-mode="hey">"Hey"</button>
+        <button type="button" data-mode="none">None</button>
+      </div>
+      <div id="wake-note"></div>
+      <h2>Say on its own</h2>
+      <div id="auto"></div>
+    </details>
+    <div id="keys"><kbd>Space</kbd> pause · <kbd>←</kbd>/<kbd>→</kbd> 5 s · <kbd>Q</kbd> question · <kbd>D</kbd> destination</div>
   </aside>
 </main>
 <script>
@@ -230,6 +299,8 @@ function showStatus(s) {
   if (s.vision) parts.push(`vision ${escapeHtml(s.vision)}`);
   statusLine.innerHTML = parts.join(" · ");
   showHud(s.hud || {});
+  showDrive(s);
+  showSettings(s);
 }
 
 // ------------------------------------------------------------------------------------- HUD (banner, corner)
@@ -565,6 +636,154 @@ async function post(path, body) {
   }
 }
 
+// ------------------------------------------------------------------------------------------- destination
+const dest = $("dest"), suggestList = $("suggest"), recentBox = $("recent"), routeNow = $("route-now");
+const RECENT_KEY = "drivepilot.recent";
+let suggestions = [], picked = -1, suggestTimer = null, suggestSeq = 0;
+
+function loadRecent() {
+  try { const v = JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+}
+function saveRecent(place) {
+  const list = [place, ...loadRecent().filter(p => p.name !== place.name || p.address !== place.address)].slice(0, 5);
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch (e) { /* private window: no history */ }
+  showRecent();
+}
+function showRecent() {
+  recentBox.replaceChildren(...loadRecent().map(place => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = place.name; b.title = place.address || place.name;
+    b.addEventListener("click", () => go(place.name, place));
+    return b;
+  }));
+}
+
+function closeSuggest() {
+  suggestList.hidden = true; suggestions = []; picked = -1;
+  dest.setAttribute("aria-expanded", "false");
+}
+function renderSuggest(list, query) {
+  suggestions = list; picked = list.length ? 0 : -1;
+  if (!list.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = `Press Enter to search for "${query}"`;
+    suggestList.replaceChildren(li);
+  } else {
+    suggestList.replaceChildren(...list.map((place, i) => {
+      const li = document.createElement("li");
+      li.setAttribute("role", "option");
+      li.className = i === picked ? "on" : "";
+      const name = document.createElement("div"); name.className = "name"; name.textContent = place.name;
+      const addr = document.createElement("div"); addr.className = "addr"; addr.textContent = place.address || "";
+      li.append(name, addr);
+      li.addEventListener("mousedown", ev => { ev.preventDefault(); go(place.name, place); });
+      return li;
+    }));
+  }
+  suggestList.hidden = false;
+  dest.setAttribute("aria-expanded", "true");
+}
+function highlightSuggest() {
+  [...suggestList.children].forEach((li, i) => li.classList.toggle("on", i === picked));
+}
+
+dest.addEventListener("input", () => {
+  clearTimeout(suggestTimer);
+  const q = dest.value.trim();
+  if (q.length < 2) { closeSuggest(); return; }
+  suggestTimer = setTimeout(async () => {
+    const seq = ++suggestSeq;
+    const r = await post("/api/places", {q});
+    if (seq !== suggestSeq || dest.value.trim() !== q) return; // the driver kept typing
+    renderSuggest((r && r.places) || [], q);
+  }, 250);
+});
+dest.addEventListener("keydown", ev => {
+  if (ev.key === "ArrowDown" && suggestions.length) { ev.preventDefault(); picked = (picked + 1) % suggestions.length; highlightSuggest(); }
+  else if (ev.key === "ArrowUp" && suggestions.length) { ev.preventDefault(); picked = (picked - 1 + suggestions.length) % suggestions.length; highlightSuggest(); }
+  else if (ev.key === "Escape") { closeSuggest(); dest.value = ""; dest.blur(); }
+});
+dest.addEventListener("blur", () => setTimeout(closeSuggest, 150));
+$("dest-form").addEventListener("submit", ev => {
+  ev.preventDefault();
+  const q = dest.value.trim();
+  if (!q) return;
+  const place = picked >= 0 ? suggestions[picked] : null;
+  go(place ? place.name : q, place);
+});
+
+async function go(query, place) {
+  clearTimeout(suggestTimer);
+  suggestSeq++;
+  closeSuggest();
+  dest.value = "";
+  dest.blur();
+  if (place) saveRecent(place);
+  const r = await post("/api/destination", place ? {query, place} : {query});
+  if (!r || !r.ok) note("Navigation isn't available right now.");
+}
+$("end-route").addEventListener("click", () => post("/api/route", {action: "cancel"}));
+
+function showDrive(s) {
+  const route = s.route;
+  const off = !!(route && route.off);
+  dest.disabled = off; $("dest-go").disabled = off;
+  dest.placeholder = off ? "Navigation is off (no Mapbox token)" : "Where to? (D)";
+  if (route && route.name) {
+    routeNow.querySelector("b").textContent = `To ${route.name}`;
+    const eta = [];
+    if (typeof route.minutes === "number") eta.push(`${route.minutes} min`);
+    if (typeof route.miles === "number") eta.push(`${route.miles} mi`);
+    routeNow.querySelector(".eta").textContent = eta.join(" · ");
+    routeNow.classList.add("on");
+  } else routeNow.classList.remove("on");
+  const hint = !off && s.gps && s.gps !== "ok"
+    ? (s.live ? "No GPS yet: open localhost:8000/gps on the phone and tap Start." : "No GPS track for this replay: routes need --gpx.")
+    : "";
+  $("drive-hint").textContent = hint;
+}
+showRecent();
+
+// ---------------------------------------------------------------------------------------------- settings
+const AUTO_LABELS = {
+  light_green: "\"Light's green\" when the light changes",
+  car_ahead: "\"The car ahead is moving\"",
+  turns: "Turn-by-turn directions",
+  wrong_lane: "\"You're in the wrong lane\" for your turn",
+  speeding: "Over the speed limit",
+  stop_sign: "\"Stop sign ahead\"",
+};
+const autoBox = $("auto");
+function showSettings(s) {
+  const mode = s.wake_mode;
+  document.querySelectorAll("#wake button").forEach(b => {
+    b.classList.toggle("on", b.dataset.mode === mode);
+    b.disabled = !mode;
+  });
+  $("wake-note").textContent = !mode ? "Voice input is off." :
+    mode === "none" ? "Any question is answered, no wake word. Passengers' questions too." :
+    mode === "hey" ? "Start with \"hey\". \"Hey DrivePilot\" still works." :
+    "Start with \"Hey DrivePilot\".";
+  const auto = s.auto || {};
+  Object.keys(AUTO_LABELS).forEach(name => {
+    let box = autoBox.querySelector(`input[data-name="${name}"]`);
+    if (!box) {
+      const label = document.createElement("label");
+      label.className = "switch";
+      box = document.createElement("input");
+      box.type = "checkbox"; box.dataset.name = name;
+      box.addEventListener("change", () => post("/api/alerts", {name, on: box.checked}));
+      label.append(box, document.createTextNode(AUTO_LABELS[name]));
+      autoBox.appendChild(label);
+    }
+    if (document.activeElement !== box && name in auto) box.checked = !!auto[name];
+  });
+}
+document.querySelectorAll("#wake button").forEach(b =>
+  b.addEventListener("click", () => post("/api/wake", {mode: b.dataset.mode})));
+
 $("ask").addEventListener("submit", ev => {
   ev.preventDefault();
   const text = input.value.trim();
@@ -579,11 +798,13 @@ document.addEventListener("keydown", ev => {
     if (ev.key === "Escape") { input.value = ""; input.blur(); }
     return;
   }
+  if (ev.target instanceof HTMLInputElement || ev.target instanceof HTMLButtonElement) return;
   if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
   if (ev.code === "Space") { ev.preventDefault(); post("/api/control", {action: "pause"}); }
   else if (ev.key === "ArrowLeft") { ev.preventDefault(); post("/api/control", {action: "seek", delta_s: -5}); }
   else if (ev.key === "ArrowRight") { ev.preventDefault(); post("/api/control", {action: "seek", delta_s: 5}); }
   else if (ev.key === "q" || ev.key === "Q") { ev.preventDefault(); input.focus(); }
+  else if ((ev.key === "d" || ev.key === "D") && !dest.disabled) { ev.preventDefault(); dest.focus(); }
 });
 </script>
 </body>

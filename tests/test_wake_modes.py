@@ -128,7 +128,7 @@ def test_the_wake_word_during_open_speech_makes_it_a_question_with_the_blip() ->
     run(pipe, 6.0, (1.0, 2.8, WAKE_PHRASE))
     # (the real Transcriber strips the repeated wake phrase, the router the name; the fake hears it all)
     assert [q.text for q in heard] == [SAID[WAKE_PHRASE]] and not heard[0].open
-    assert len(woke) == 1 and pipe.wakes == 1
+    assert len(woke) == 1 and pipe.wakes == 1 and nothing == []
 
 
 def test_the_mode_switches_while_running() -> None:

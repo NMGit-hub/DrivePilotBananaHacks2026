@@ -385,9 +385,7 @@ class VoicePipeline:
                 reply,
                 open_,
             )
-            log.info(
-                "heard", text=text, stt_ms=round(stt_ms), speculative=speculative, reason=event.reason, open=open_
-            )
+            log.info("heard", text=text, stt_ms=round(stt_ms), speculative=speculative, reason=event.reason, open=open_)
             if not text:
                 with self._lock:
                     resume = superseded = False

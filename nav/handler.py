@@ -3,6 +3,10 @@
 `NavHandler.answer` is the assistant's `NavAnswerer` (destination, route and lane questions);
 `NavHandler.on_fix` is fed every GPS fix and speaks guidance through `on_alert(kind, text)`:
 - lane reminders about 1 mile and 0.25 mile before a junction where only some lanes work (PLAN.md);
+- turn-by-turn, if `turn_prompts()` says so (`alerts.auto.turns`): "In half a mile, turn right onto Main Street."
+  as we come within each of `nav.turn_prompts_m` of a maneuver (not for roundabouts, which have their own, or
+  steps that need no action); a maneuver already within reach when the destination is set isn't repeated (the
+  answer said it);
 - roundabouts: "At the roundabout, take the 2nd exit onto Main Street.", then "Not this one, next exit." as we
   pass exits that aren't ours (only when our exit count agrees with Mapbox's exit number);
 - off the route (> 50 m for 5 s): a new route from where we are, "You're off the route, so I've rerouted.";
@@ -57,6 +61,8 @@ HOME_WORDS = {"home", "my home", "my house", "the house"}
 EXIT_TYPES = {"off ramp", "fork", "roundabout", "rotary", "roundabout turn"}
 # Steps that aren't a choice of lane by themselves (unless Mapbox gives lane data for them).
 NOT_LANE_MANEUVERS = {"depart", "new name", "continue", "notification", "exit roundabout", "exit rotary", "arrive"}
+# Steps that need no action from the driver: no turn-by-turn prompt.
+NOT_TURN_MANEUVERS = {"depart", "new name", "continue", "notification", "exit roundabout", "exit rotary"}
 REROUTED_RECENTLY_S = 60.0  # "did I miss my turn?" → "Yes, so I've rerouted." within this long of a reroute
 QUICK_REROUTE_S = 90.0  # another reroute this soon doubles the wait before the next one
 MAX_REROUTE_WAIT_S = 120.0
@@ -98,12 +104,14 @@ class NavHandler:
         gps: Callable[[], GpsFix | None],
         on_alert: Callable[[str, str], None] | None = None,
         lane_reader: LaneReader | None = None,
+        turn_prompts: Callable[[], bool] | None = None,
     ) -> None:
         self.cfg = cfg
         self.client = client
         self._gps = gps
         self._on_alert = on_alert
         self.lane_reader = lane_reader
+        self.turn_prompts = turn_prompts  # turn-by-turn on? (None: off; the page switches it while running)
         self._lock = threading.RLock()
         self.route: Route | None = None
         self.place: Place | None = None
@@ -148,10 +156,10 @@ class NavHandler:
             return f"About {_minutes(state.progress.remaining_s)}, {spoken_distance(state.progress.remaining_m)} to go."
         return self._next_step_answer(state)
 
-    def set_destination(self, query: str) -> str:
-        """Find the place and a route to it from where we are."""
+    def set_destination(self, query: str, place: Place | None = None) -> str:
+        """Find the place (unless the page already picked it: `place`) and a route to it from where we are."""
         query = query.strip()
-        if query.lower() in HOME_WORDS:
+        if place is None and query.lower() in HOME_WORDS:
             if not self.cfg.home:
                 return NO_HOME
             query = self.cfg.home
@@ -162,7 +170,8 @@ class NavHandler:
             self._generation += 1  # a reroute for the old destination that finishes now must not land
             generation = self._generation
         try:
-            place = self.client.geocode(query, near=fix.latlon)
+            if place is None:
+                place = self.client.geocode(query, near=fix.latlon)
             route = self.client.route(fix.latlon, place, fix.heading)
         except PlaceNotFound as exc:
             log.warning("destination not found", query=query, error=str(exc))
@@ -182,6 +191,19 @@ class NavHandler:
             first = f" First, {maneuver_phrase(progress.next_step)} {in_distance(progress.to_next_m)}."
         return f"Okay, {place.name}: {_minutes(route.duration_s)}, {spoken_distance(route.distance_m)}.{first}"
 
+    def suggest(self, query: str, limit: int = 5) -> list[Place]:
+        """Places matching what the driver is typing, nearest first among equals (the page's destination box)."""
+        search = getattr(self.client, "search", None)
+        if not callable(search):
+            return []
+        fix = self._gps()
+        try:
+            places: list[Place] = search(query.strip(), fix.latlon if fix is not None else None, limit)
+        except NavError as exc:
+            log.warning("place search failed", query=query, error=str(exc))
+            return []
+        return places
+
     def cancel(self) -> str:
         """Stop navigating."""
         with self._lock:
@@ -194,6 +216,11 @@ class NavHandler:
         self._reset_reroutes()
         self.arrived_at = None
         self._install(route, place, fix)
+        progress = self.progress
+        if progress is not None and progress.next_step is not None and progress.to_next_m is not None:
+            for threshold in self.cfg.turn_prompts_m:  # the answer names the first maneuver: don't say it again
+                if progress.to_next_m <= threshold:
+                    self._once("turn", progress.next_step.index, threshold)
 
     def _install(self, route: Route, place: Place, fix: GpsFix | None) -> None:
         """Follow a route (new destination or reroute; caller holds the lock)."""
@@ -365,6 +392,7 @@ class NavHandler:
             elif progress.off_route:
                 reroute = self._reroute_due(fix.t)
             else:
+                alerts += self._turn_prompt(progress)
                 alerts += self._lane_reminders(route, progress)
                 alerts += self._roundabout(route, progress)
         if reroute:
@@ -390,6 +418,21 @@ class NavHandler:
             self._reroute_gen, self._reroute_t = self._generation, fix.t
             generation = self._generation
         threading.Thread(target=self._reroute, args=(fix, generation), name="reroute", daemon=True).start()
+
+    def _turn_prompt(self, progress: Progress) -> list[tuple[str, str]]:
+        """Turn-by-turn: "In half a mile, turn right onto Main Street." once per maneuver and distance."""
+        if self.turn_prompts is None or not self.turn_prompts():
+            return []
+        step, distance = progress.next_step, progress.to_next_m
+        if step is None or distance is None or step.is_roundabout or step.maneuver in NOT_TURN_MANEUVERS:
+            return []
+        for threshold in sorted(self.cfg.turn_prompts_m):
+            # Said once as we come within the threshold (not if we were already much closer when it became next).
+            if threshold * 0.5 <= distance <= threshold:
+                if self._once("turn", step.index, threshold):
+                    return [("nav_turn", f"{_cap(in_distance(distance))}, {maneuver_phrase(step)}.")]
+                break
+        return []
 
     def _lane_reminders(self, route: Route, progress: Progress) -> list[tuple[str, str]]:
         out = []

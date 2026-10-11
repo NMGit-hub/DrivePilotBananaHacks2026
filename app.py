@@ -7,10 +7,12 @@
     python -m app --ask "22.5=who got here first?"      # typed questions at video times (repeatable)
     python -m app --print-config                        # the resolved config (keys masked)
     python -m app --set vision_model=gemini             # dotted-key overrides, repeatable
+    python -m app --camera --wake hey                   # "hey" instead of "Hey DrivePilot" (or: none, no wake word)
+    python -m app --camera --destination "Costco"       # navigate there once the phone sends a GPS fix
 
 The screen is at http://localhost:8000/ (video plus the question and answer as text; space = pause, ←/→ = skip
-5 s, Q = type a question). The phone's GPS page is http://localhost:8000/gps after
-`adb reverse tcp:8000 tcp:8000`.
+5 s, Q = type a question; the destination box, the wake mode and the spoken alerts are in its side panel). The
+phone's GPS page is http://localhost:8000/gps after `adb reverse tcp:8000 tcp:8000`.
 
 Threads: capture → perception (YOLO26s + ByteTrack ∥ ego motion on the GPU) → world state (its own thread) →
 alert engine; the world thread hands frames to the lanes thread (YOLOPv2 + lane tracker: drift warnings, the
@@ -38,13 +40,15 @@ from typing import TYPE_CHECKING, Any
 
 from answers.alerts import LIGHT_GREEN, SAFETY_ALERT_TEXTS, YOUR_TURN
 from answers.assistant import CAMERA_LOST, Assistant
+from answers.auto_alerts import FIXED_TEXTS as AUTO_ALERT_TEXTS
+from answers.auto_alerts import AutoSwitches, SpeedingWatch, WrongLaneWatch
 from answers.lanes import CameraLaneReader, VisionLaneReader
 from answers.parking import ParkingWatch
 from answers.scene import SceneHandler, encode_jpeg
 from answers.speech import Priority, Speaker, TextSpeaker, Utterance
 from answers.vision import VisionModel
 from capture.base import VideoSource
-from core.config import AppConfig, ConfigError, load_config
+from core.config import WAKE_MODES, AppConfig, ConfigError, load_config
 from core.latency import LatencyBook
 from core.logging_setup import get_logger, redact, setup_logging, to_jsonable
 from core.runlog import RunRecorder
@@ -52,7 +56,7 @@ from core.types import Frame
 from nav.gps import GpsFix, GpsSource, PhoneGps
 from nav.handler import FIXED_ALERTS, NavHandler
 from nav.location import LocationContext, Reverser, mapbox_reverser
-from nav.mapbox import RoutingClient
+from nav.mapbox import Place, RoutingClient
 from nav.phrasing import in_distance, maneuver_phrase
 from perception.detector import Detector, Track
 from perception.ego_motion import EgoMotionEstimator
@@ -93,6 +97,7 @@ FIXED_ALERT_TEXTS = (  # pre-rendered: play at once
     *DRIFT_TEXTS,
     *FIXED_ALERTS,
     *sign_alert_texts(list(range(5, 90, 5))),
+    *AUTO_ALERT_TEXTS,
 )
 
 
@@ -227,6 +232,11 @@ class DrivePilotApp:
         self._last_wake_at = 0.0  # perf_counter of the latest wake word
         self._fps_mark: tuple[float, int] = (time.perf_counter(), 0)
         self._started_at: float | None = None
+        # Spoken alerts nobody asked for (alerts.auto): switched on the page; two watches run on the GPS tick
+        self.switches = AutoSwitches.from_config(cfg.alerts.auto)
+        self.wrong_lane = WrongLaneWatch(cfg.alerts.auto)
+        self.speeding = SpeedingWatch(cfg.alerts.auto)
+        self.pending_destination: str | None = None  # --destination: set once there's a GPS fix
 
         # V2-M5: fed by the lanes thread; a wide camera's lane model sees only its center (the crop's view)
         self.lanes = LaneTracker(cfg.lanes, lane_view(cfg.effective_hfov_deg, cfg.lanes.max_view_deg)[1])
@@ -262,7 +272,14 @@ class DrivePilotApp:
                 else None
             )
             lane_reader = CameraLaneReader(lambda: self.lanes_view(self.media_time()), vision_reader)
-            self.nav = NavHandler(cfg.nav, routing, self.gps_fix, self._on_nav_alert, lane_reader)
+            self.nav = NavHandler(
+                cfg.nav,
+                routing,
+                self.gps_fix,
+                self._on_nav_alert,
+                lane_reader,
+                turn_prompts=lambda: self.switches.enabled("turns"),
+            )
         self.scene = (
             SceneHandler(
                 cfg,
@@ -282,6 +299,7 @@ class DrivePilotApp:
             cfg, self._snapshot, self.screen, nav=self.nav, model=self.scene, unavailable=self._unavailable
         )
         self.assistant.on_highlight = self.highlight
+        self.assistant.alerts.switches = self.switches
         self.parking = ParkingWatch(  # V2: "find me a parking spot"
             cfg.parking,
             cfg.vision,
@@ -296,6 +314,11 @@ class DrivePilotApp:
         self.assistant.parking = self.parking
 
     # ------------------------------------------------------------------------------------ wiring
+
+    def speaking(self) -> bool:
+        """DrivePilot is talking (or about to): the open-mic wake modes ignore the microphone meanwhile."""
+        speaking = getattr(self.speaker, "speaking", None)
+        return bool(speaking()) if callable(speaking) else False
 
     def attach_voice(self, pipeline: Any, mic: Any) -> None:
         """Use a `VoicePipeline` (built with this app's `on_heard` / `on_wake` / `on_nothing`) on `mic`."""
@@ -570,6 +593,84 @@ class DrivePilotApp:
         self.gps.push(lat, lon, speed, heading, accuracy)
         return True
 
+    def set_wake_mode(self, mode: str) -> bool:
+        """The page's wake-mode switch: "hey_drivepilot", "hey" or "none". False without voice input."""
+        if mode not in WAKE_MODES:
+            raise ValueError(f"unknown wake mode {mode!r}")
+        if self.voice is None:
+            return False
+        self.voice.set_mode(mode)
+        if self.recorder is not None:
+            self.recorder.event("wake_mode", t=self.media_time(), mode=mode)
+        self._publish_status()
+        return True
+
+    def set_alert(self, name: str, on: bool) -> None:
+        """The page's switch for one unrequested alert (answers/auto_alerts.py: AUTO_NAMES)."""
+        self.switches.set(name, on)
+        log.info("alert switch", alert=name, on=on)
+        if self.recorder is not None:
+            self.recorder.event("alert_switch", t=self.media_time(), alert=name, on=on)
+        self._publish_status()
+
+    def suggest_places(self, query: str) -> list[dict[str, Any]]:
+        """Places for the page's destination box as the driver types (best match first)."""
+        if self.nav is None:
+            return []
+        return [
+            {"name": p.name, "address": p.address, "lat": p.location[0], "lon": p.location[1], "kind": p.kind}
+            for p in self.nav.suggest(query)
+        ]
+
+    def set_destination(self, query: str, place: Place | None = None) -> bool:
+        """The page's destination box: navigate to what was typed (or the suggestion picked), answered aloud like
+        "I'm going to ..." (on its own thread: geocoding and routing take a moment). False without navigation."""
+        if self.nav is None:
+            return False
+        thread = threading.Thread(target=self._destination, args=(query, place), name="destination", daemon=True)
+        with self._lock:
+            self._answering.add(thread)
+        thread.start()
+        return True
+
+    def cancel_route(self) -> bool:
+        """The page's "End route" button."""
+        if self.nav is None:
+            return False
+        self._say_answer(self.nav.cancel())
+        self._publish_status()
+        return True
+
+    def _destination(self, query: str, place: Place | None) -> None:
+        text = f"Take me to {place.name if place is not None else query}"
+        qid = next(self._qids)
+        t = self.media_time()
+        record = QuestionRecord(qid, text, "page", t, route="destination/page", source="nav")
+        with self._lock:
+            self.questions[qid] = record
+        if self.hub is not None:
+            self.hub.publish("question", text=text, via="typed", t=round(t, 2))
+        if self.recorder is not None:
+            self.recorder.event("question", t=t, qid=qid, text=text, via="page")
+        start = time.perf_counter()
+        try:
+            nav = self.nav
+            answer = nav.set_destination(query, place) if nav is not None else "Navigation isn't available right now."
+        except Exception:
+            log.exception("destination failed", query=query)
+            answer = "Sorry, something went wrong setting the destination."
+        finally:
+            with self._lock:
+                self._answering.discard(threading.current_thread())
+        record.answer, record.answer_ms = answer, round((time.perf_counter() - start) * 1000.0, 1)
+        if self.recorder is not None:
+            self.recorder.event("answer", t=t, qid=qid, text=answer, route=record.route, source="nav")
+        self._say_answer(answer)
+        self._publish_status()
+
+    def _say_answer(self, text: str) -> None:
+        self.assistant.say(Utterance(text, "answer", Priority.ANSWER, t=self.media_time()))
+
     # ------------------------------------------------------------------------------- housekeeping
 
     def _housekeeping(self) -> None:
@@ -583,11 +684,44 @@ class DrivePilotApp:
                     self._feed_gps()
                     if self.location is not None:
                         self.location.update()
+                    self._auto_alerts()
+                    self._start_pending_destination()
                 if now >= next_status:
                     next_status = now + STATUS_INTERVAL_S
                     self._publish_status()
             except Exception:
                 log.exception("housekeeping failed")
+
+    def _auto_alerts(self) -> None:
+        """The wrong-lane and speeding watches (answers/auto_alerts.py), every GPS tick. They always follow the
+        state, so switching one on doesn't replay an old condition; only what is switched on is said."""
+        t = self.media_time()
+        fix = self.gps_fix()
+        nav = self.nav
+        progress = nav.progress if nav is not None and nav.route is not None and fix is not None else None
+        target = lane_target(self.lanes_view(t), progress)
+        step = progress.next_step.index if progress is not None and progress.next_step is not None else None
+        text = self.wrong_lane.update(t, target, step, progress.to_next_m if progress is not None else None)
+        if text is not None and self.switches.enabled("wrong_lane"):
+            self._say_auto("wrong_lane", text, Priority.REQUESTED)  # (guidance for the route the driver set)
+        signs = self.signs.snapshot()
+        text = self.speeding.update(t, fix.speed_mps if fix is not None else None, signs.limit, signs.limit_t)
+        if text is not None and self.switches.enabled("speeding"):
+            self._say_auto("speeding", text, Priority.INFO)
+
+    def _say_auto(self, kind: str, text: str, priority: Priority) -> None:
+        if priority < Priority.REQUESTED and self.assistant.alerts.quiet:
+            log.info("alert suppressed: quiet mode", kind=kind)
+            return
+        log.info("alert", kind=kind, text=text, priority=priority.name)
+        self.assistant.say(Utterance(text, "alert", priority, clip=kind, t=self.media_time()))
+
+    def _start_pending_destination(self) -> None:
+        """--destination: navigate there as soon as there's a GPS fix."""
+        if self.pending_destination is None or self.nav is None or self.gps_fix() is None:
+            return
+        query, self.pending_destination = self.pending_destination, None
+        self.set_destination(query)
 
     def _ask_scripted(self) -> None:
         if not self._scripted or self.worker is None or self.worker.processed == 0:
@@ -644,8 +778,26 @@ class DrivePilotApp:
             nav=self._nav_line(),
             quiet=self.assistant.alerts.quiet,
             hud=self._hud(),
+            wake_mode=self.voice.mode if self.voice is not None else None,
+            auto=self.switches.as_dict(),
+            route=self._route_status(),
             **self.status,
         )
+
+    def _route_status(self) -> dict[str, Any] | None:
+        """The page's destination box: where we're going and how far; None when not navigating, {"off": True}
+        when navigation isn't available (no Mapbox token)."""
+        nav = self.nav
+        if nav is None:
+            return {"off": True}
+        place, progress = nav.place, nav.progress
+        if nav.route is None or place is None:
+            return None
+        out: dict[str, Any] = {"name": place.name, "address": place.address}
+        if progress is not None:
+            out["minutes"] = max(1, round(progress.remaining_s / 60))
+            out["miles"] = round(progress.remaining_m / 1609.344, 1)
+        return out
 
     def highlight(self, track_id: int) -> None:
         """Pulse a tracked object on the page for `ui.highlight_s` (an answer is about it)."""
@@ -979,6 +1131,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ask", action="append", default=[], type=parse_ask, metavar="T=QUESTION")
     parser.add_argument("--exit-at-end", action="store_true", help="stop when the video file ends")
     parser.add_argument("--label", default=None, help="run folder label (default: the video name or 'camera')")
+    parser.add_argument(
+        "--wake",
+        choices=WAKE_MODES,
+        default=None,
+        help='wake word: "hey_drivepilot" (default), "hey", or "none" (voice.wake_mode)',
+    )
+    parser.add_argument("--destination", default=None, help="navigate here once there's a GPS fix")
     return parser
 
 
@@ -993,7 +1152,10 @@ def apply_cli(cfg: AppConfig, args: argparse.Namespace) -> AppConfig:
         video = video.model_copy(update={"file": file})
     if args.camera:
         video = video.model_copy(update={"source": "camera"})
-    return cfg.model_copy(update={"video": video})
+    update: dict[str, Any] = {"video": video}
+    if getattr(args, "wake", None) is not None:
+        update["voice"] = cfg.voice.model_copy(update={"wake_mode": args.wake})
+    return cfg.model_copy(update=update)
 
 
 def _source_factory(cfg: AppConfig, hold_at_end: bool = False) -> Callable[[], VideoSource]:
@@ -1160,7 +1322,15 @@ def make_voice_pipeline(app: DrivePilotApp, cfg: AppConfig) -> Any:
     stt = Transcriber(cfg.voice.stt, cfg.root)
     stt.warmup()
     wake = WakeWordDetector(cfg.voice.wakeword, cfg.root)
-    return VoicePipeline(cfg.voice, wake, stt, app.on_heard, on_wake=app.on_wake, on_nothing=app.on_nothing)
+    return VoicePipeline(
+        cfg.voice,
+        wake,
+        stt,
+        app.on_heard,
+        on_wake=app.on_wake,
+        on_nothing=app.on_nothing,
+        speaking=app.speaking,
+    )
 
 
 def _voice(app: DrivePilotApp, cfg: AppConfig, status: dict[str, str]) -> None:
@@ -1234,6 +1404,8 @@ def main(argv: list[str] | None = None) -> int:
     ) as recorder:
         setup_logging(cfg.logging.level, log_file=recorder.log_file, secrets=cfg.secrets.values())
         app = build_app(cfg, args, recorder)
+        if args.destination:
+            app.pending_destination = args.destination.strip() or None
         server = None
         if app.hub is not None:
             from ui.server import UiServer, allowed_hosts, create_server
@@ -1273,6 +1445,29 @@ class PageActions:
         self, lat: float, lon: float, speed: float | None, heading: float | None, accuracy: float | None
     ) -> bool:
         return self.app.gps_fix_from_phone(lat, lon, speed, heading, accuracy)
+
+    def set_wake_mode(self, mode: str) -> bool:
+        return self.app.set_wake_mode(mode)
+
+    def set_alert(self, name: str, on: bool) -> None:
+        self.app.set_alert(name, on)
+
+    def suggest_places(self, query: str) -> list[dict[str, Any]]:
+        return self.app.suggest_places(query)
+
+    def set_destination(self, query: str, place: dict[str, Any] | None) -> bool:
+        picked = None
+        if place is not None:
+            picked = Place(
+                str(place["name"]),
+                str(place.get("address") or place["name"]),
+                (float(place["lat"]), float(place["lon"])),
+                str(place.get("kind") or ""),
+            )
+        return self.app.set_destination(query, picked)
+
+    def cancel_route(self) -> bool:
+        return self.app.cancel_route()
 
 
 if __name__ == "__main__":
