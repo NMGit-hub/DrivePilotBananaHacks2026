@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
             "max": round(float(v.max()), 2),
         }
 
+    gpu_free, gpu_total = torch.cuda.mem_get_info(0)
     report: dict[str, Any] = {
         "clip": args.clip.name,
         "frames": len(timings),
@@ -101,7 +102,8 @@ def main(argv: list[str] | None = None) -> int:
         "signs_detected": n_signs,
         "devices": devices,
         "gpu": torch.cuda.get_device_name(0),
-        "gpu_mem_mb": round(torch.cuda.max_memory_allocated(0) / 1e6),
+        "torch_max_allocated_mb": round(torch.cuda.max_memory_allocated(0) / 1e6),  # misses TensorRT's own memory
+        "gpu_used_mb_whole_device": round((gpu_total - gpu_free) / 1e6),  # every process, TensorRT included
         "ms": {
             k: stat(k) for k in ("total", "detect_total", "inference", "preprocess", "postprocess", "classify_total")
         },

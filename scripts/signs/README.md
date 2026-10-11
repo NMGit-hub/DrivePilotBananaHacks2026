@@ -45,8 +45,10 @@ LISA (if a Roboflow export is placed in `data/signs/raw/lisa_yolo/{train,valid}/
 .venv/Scripts/python scripts/signs/label_bdd_signs.py --split valid --shards shard_000 --limit 9000 --env-file .env
 # Which ctacke crops are really readable (the dataset labels every frame of a sequence, even dark/blurred ones)
 .venv/Scripts/python scripts/signs/verify_ctacke.py --env-file .env
-# Held-out set (BDD valid) with the hand review in make_heldout.py -> eval/sign_labels_bdd.json (tracked)
-.venv/Scripts/python scripts/signs/make_heldout.py
+# Held-out sets (BDD valid) with the hand reviews in make_heldout.py (tracked):
+.venv/Scripts/python scripts/signs/make_heldout.py               # eval/sign_labels_bdd.json (original, seen in development)
+.venv/Scripts/python scripts/signs/label_bdd_signs.py --split valid --shards shard_000 shard_001 --min-h 12 --limit 9000 --model claude-opus-5-5 --workers 6 --max-usd 8 --out data/signs/bdd_labels/fresh_valid.jsonl --env-file .env
+.venv/Scripts/python scripts/signs/make_heldout.py --set fresh   # eval/sign_labels_bdd_fresh.json (headline; checked blind)
 # Contact sheets for checking labels by eye
 .venv/Scripts/python scripts/signs/review_sheet.py data/signs/bdd_labels/valid.jsonl --kind speed_limit
 ```
@@ -64,9 +66,17 @@ Hard negatives (both datasets pick them up when the files exist; rebuild after m
 # value classifier: non-speed BDD signs it reads as a number; check the sheet, keep the true negatives in
 # data/signs/hardneg_cls_curated.jsonl (one JSON line each, copied from hardneg_cls.jsonl)
 .venv/Scripts/python scripts/signs/mine_hard_negatives.py --weights models/signs/speed_value_cls.pt
-# detector: BDD frames with none of our signs where it still fires -> data/signs/hardneg_det.txt
+# detector: BDD frames with none of our labeled signs where it still fires -> data/signs/hardneg_det.txt;
+# most such hits are real signs BDD never boxed, so only the frames checked by eye are kept (curate_det_negatives.py)
 .venv/Scripts/python scripts/signs/mine_det_negatives.py --weights runs/signs/det/weights/best.pt
+.venv/Scripts/python scripts/signs/curate_det_negatives.py
+# unboxed real signs in the training frames (masked by prepare_data.py det, never background)
+.venv/Scripts/python scripts/signs/mine_unboxed.py --weights runs/signs/det/weights/best.pt
 ```
+
+Only the training fraction of BDD train is ever trained on (synthetic and classifier backgrounds included);
+each build records its training images in `data/signs/used_for_training_{det,cls}.txt`, and the tune set
+(`evaluate.py tune`) leaves out those and the first build's backgrounds.
 
 ## 4. Training (shared GPU: batch 8 keeps the detector at ~2.6 GB; don't export engines while training: RAM)
 
@@ -74,8 +84,9 @@ Hard negatives (both datasets pick them up when the files exist; rebuild after m
 .venv/Scripts/python scripts/signs/train.py det --epochs 40 --batch 8 --workers 4    # ~4 h; checkpoint every epoch
 .venv/Scripts/python scripts/signs/train.py det --resume                             # after a stop
 .venv/Scripts/python scripts/signs/train.py cls --epochs 20 --dropout 0.2            # ~10 min
-# fine-tune on the rebuilt dataset with hard negatives, from the first run's best weights
-.venv/Scripts/python scripts/signs/train.py det --name det_ft --base runs/signs/det/weights/best.pt --epochs 12 --lr0 0.002 --warmup-epochs 0 --batch 8
+# fine-tune on the rebuilt dataset with hard negatives, from the first run's best weights (name the optimizer:
+# ultralytics' "auto" ignores lr0 and picks its own learning rate)
+.venv/Scripts/python scripts/signs/train.py det --name det_ft --base runs/signs/det/weights/best.pt --epochs 12 --optimizer AdamW --lr0 0.0002 --warmup-epochs 0 --close-mosaic 4 --batch 8 --workers 3 --no-copy
 ```
 
 Best weights are copied to `models/signs/signs_yolo26s.pt` and `models/signs/speed_value_cls.pt` (pass
@@ -84,10 +95,17 @@ Best weights are copied to `models/signs/signs_yolo26s.pt` and `models/signs/spe
 ## 5. Evaluation
 
 ```bash
-.venv/Scripts/python scripts/signs/eval_values.py --write-metrics      # classifier alone; picks value_conf on validation
-.venv/Scripts/python scripts/signs/evaluate.py all --write-metrics     # detector + classifier as the app runs them
+.venv/Scripts/python scripts/signs/eval_values.py --write-metrics      # classifier alone; threshold from BDD validation
+.venv/Scripts/python scripts/signs/evaluate.py tune                    # end to end on the tune set (thresholds)
+.venv/Scripts/python scripts/signs/evaluate.py all --write-metrics     # fresh, bdd, bdd_noaudit, public, tune
+.venv/Scripts/python scripts/signs/evaluate.py tune --cached --set signs.value_conf=0.95   # re-score without the GPU
 .venv/Scripts/python scripts/signs/bench_signs.py                      # per-frame time on the GPU
 ```
+
+`evaluate.py` runs the detector once per frame (`raw_detections`) and applies the app's rules with the same
+`perception.signs.select()` the app uses. Every reported speed value is judged: right, wrong, or unverifiable
+(on a sign of unknown kind or an unreadable limit); `value_conf` = the larger of the lowest threshold with no
+wrong value on the classifier's BDD validation crops and on the tune set end to end.
 
 Metrics go to `models/signs/metrics.json` (tracked).
 

@@ -96,11 +96,14 @@ def export(python: Path, weights: Path, imgsz: tuple[int, int], half: bool, devi
     return engine
 
 
-def write_sidecar(engine: Path, weights: Path, imgsz: tuple[int, int], half: bool, version: str) -> None:
-    """Record what an engine was built from (perception/signs.py refuses an engine whose weights hash differs)."""
+def write_sidecar(engine: Path, weights: Path, sha256: str, imgsz: tuple[int, int], half: bool, version: str) -> None:
+    """Record what an engine was built from (perception/signs.py refuses an engine whose weights hash differs).
+
+    sha256 is the weights' hash taken BEFORE the export, so weights replaced during it can't be certified.
+    """
     data = {
         "weights": weights.name,
-        "weights_sha256": file_sha256(weights),
+        "weights_sha256": sha256,
         "imgsz": list(imgsz),
         "half": half,
         "tensorrt": version,
@@ -142,8 +145,9 @@ def main(argv: list[str] | None = None) -> int:
             if stale is None and sidecar_path(engine).exists() and not args.force:
                 print(f"engine already built from these weights: {engine}")
                 continue
+            sha = file_sha256(weights)
             export(python, weights, imgsz, s.half, s.device, 4.0)
-            write_sidecar(engine, weights, imgsz, s.half, version)
+            write_sidecar(engine, weights, sha, imgsz, s.half, version)
             print(f"done: {engine} ({engine.stat().st_size / 1e6:.1f} MB)")
         return 0
     args.deliver.mkdir(parents=True, exist_ok=True)
@@ -152,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         runtime = Path(sys.executable)
     for weights, imgsz in jobs:
         engine = engine_path(weights, imgsz, s.half)
-        if not sidecar_path(engine).exists() or engine_staleness(engine, weights) is not None:
+        if not engine.exists() or not sidecar_path(engine).exists() or engine_staleness(engine, weights) is not None:
             raise SystemExit(f"{engine.name} is missing, stale or has no sidecar: run export_engines.py first")
         for f in (weights, engine, sidecar_path(engine)):
             shutil.copy2(f, args.deliver / f.name)

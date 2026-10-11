@@ -11,6 +11,8 @@
    the larger of this and the lowest threshold with no wrong value end to end on the tune set (evaluate.py tune).
 2. Held-out: the hand-checked BDD100K speed limits (eval/sign_labels_bdd*.json) cropped from the full frame
    exactly as perception/signs.py crops a detection; right / wrong / withheld per threshold.
+The classifier runs as the app runs it: its FP16 TensorRT engine when one was built from these weights (else the
+weights in FP16 on the GPU), so the probabilities near the threshold are the app's.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +31,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from core.config import load_config  # noqa: E402
-from perception.signs import check_value_classes, crop_square, top_reading  # noqa: E402
+from perception.signs import (  # noqa: E402
+    check_value_classes,
+    crop_square,
+    engine_path,
+    engine_staleness,
+    sidecar_path,
+    top_reading,
+)
 
 BDD_IMAGES = REPO_ROOT / "data" / "signs" / "raw" / "bdd100k_det" / "data" / "images"
 CLS_VAL = REPO_ROOT / "data" / "signs" / "cls" / "val"
@@ -42,17 +52,18 @@ SELECTION_PREFIXES = ("bdd_", "bddother_", "hardneg_")  # real BDD crops used to
 REPORT_PREFIXES = ("ctacke_",)  # real but leaky: reported only
 
 
-def classify(model: Any, crops: list[np.ndarray], imgsz: int) -> list[tuple[int | None, float]]:
-    """Top-1 (value or None for the reject class, probability) per crop."""
+def classify(model: Any, crops: list[np.ndarray], imgsz: int, half: bool) -> list[tuple[int | None, float]]:
+    """Top-1 (value or None for the reject class, probability) per crop, in the app's precision."""
     names = dict(model.names)
+    quant: dict[str, Any] = {"quantize": 16} if half else {}
     out = []
     for c in crops:
-        r = model.predict(c, imgsz=imgsz, device=0, verbose=False)[0]
+        r = model.predict(c, imgsz=imgsz, device=0, verbose=False, **quant)[0]
         out.append(top_reading(r.probs.data.float().cpu().numpy(), names))
     return out
 
 
-def sweep(preds: list[tuple[int | None, float]], truth: list[int | None]) -> list[dict[str, Any]]:
+def sweep(preds: Sequence[tuple[int | None, float]], truth: Sequence[int | None]) -> list[dict[str, Any]]:
     """Right / wrong / withheld counts per threshold (truth None = not a speed sign: any value is wrong)."""
     rows = []
     for t in THRESHOLDS:
@@ -69,14 +80,22 @@ def sweep(preds: list[tuple[int | None, float]], truth: list[int | None]) -> lis
     return rows
 
 
-def lowest_safe(rows: list[dict[str, Any]]) -> float:
-    """The lowest threshold with no wrong value at it and at every higher threshold (max if none)."""
-    chosen = max(THRESHOLDS)
+def lowest_safe(rows: list[dict[str, Any]]) -> float | None:
+    """The lowest threshold with no wrong value at it and at every higher one; None if even the highest is unsafe."""
+    chosen: float | None = None
     for r in sorted(rows, key=lambda r: -r["threshold"]):
         if r["wrong"]:
             break
         chosen = r["threshold"]
     return chosen
+
+
+def resolve_classifier(weights: Path, imgsz: int, half: bool) -> Path:
+    """The classifier the app would run: its TensorRT engine when built from these weights, else the weights."""
+    engine = engine_path(weights, (imgsz, imgsz), half)
+    if engine.exists() and sidecar_path(engine).exists() and engine_staleness(engine, weights) is None:
+        return engine
+    return weights
 
 
 def crop_truth(path: Path) -> int | None:
@@ -125,29 +144,37 @@ def main(argv: list[str] | None = None) -> int:
     from ultralytics import YOLO
 
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--weights", type=Path, default=None, help="classifier .pt (default: config signs.classifier)")
+    p.add_argument("--weights", type=Path, default=None, help="classifier .pt (default: config); its engine if built")
     p.add_argument("--heldout", choices=["original", "fresh", "both", "none"], default="both")
     p.add_argument("--write-metrics", action="store_true")
     args = p.parse_args(argv)
     cfg = load_config()
     s = cfg.signs
     weights = args.weights or cfg.resolve_path(s.classifier_weights)
-    model = YOLO(str(weights), task="classify")
+    model_path = resolve_classifier(weights, s.classifier_imgsz, s.half)
+    model = YOLO(str(model_path), task="classify")
     check_value_classes(dict(model.names))
-    out: dict[str, Any] = {"weights": str(weights.name)}
+    out: dict[str, Any] = {"weights": weights.name, "model": model_path.name}
+    print(f"classifier: {model_path.name} ({'FP16' if s.half else 'FP32'})")
 
+    def run(crops: list[np.ndarray]) -> list[tuple[int | None, float]]:
+        return classify(model, crops, s.classifier_imgsz, s.half)
+
+    per_prefix = {pre: len(val_crops((pre,))[0]) for pre in SELECTION_PREFIXES}
     crops, truth = val_crops(SELECTION_PREFIXES)
-    rows = sweep(classify(model, crops, s.classifier_imgsz), truth)
-    chosen = lowest_safe(rows)
     n_speed = sum(t is not None for t in truth)
-    print(f"validation for the threshold (real BDD crops {len(crops)}, speed values {n_speed}):")
+    print(f"validation for the threshold: real BDD crops per prefix {per_prefix}, speed values {n_speed}")
+    if not per_prefix["bddother_"] or not n_speed:
+        raise SystemExit("cls/val has no real look-alikes or no speed limits: rebuild it (prepare_data.py cls)")
+    rows = sweep(run(crops), truth)
+    chosen = lowest_safe(rows)
     for r in rows:
         print(f"  {r}")
     print(f"lowest value threshold with 0 wrong on BDD validation: {chosen}")
-    out |= {"threshold_from_validation": chosen, "validation_sweep": rows, "validation_crops": len(crops)}
+    out |= {"threshold_from_validation": chosen, "validation_sweep": rows, "validation_crops": per_prefix}
     c_crops, c_truth = val_crops(REPORT_PREFIXES)
     if c_crops:
-        c_rows = sweep(classify(model, c_crops, s.classifier_imgsz), c_truth)
+        c_rows = sweep(run(c_crops), c_truth)
         print(f"ctacke val (reported only, leaks with ctacke train; {len(c_crops)} crops):")
         for r in c_rows:
             print(f"  {r}")
@@ -156,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     sets = ["original", "fresh"] if args.heldout == "both" else ([] if args.heldout == "none" else [args.heldout])
     for name in sets:
         h_crops, h_truth, h_readable = heldout_crops(HELDOUT[name], s.classifier_imgsz)
-        preds = classify(model, h_crops, s.classifier_imgsz)
+        preds = run(h_crops)
         r_idx = [i for i, ok in enumerate(h_readable) if ok]
         readable_rows = sweep([preds[i] for i in r_idx], [h_truth[i] for i in r_idx])
         all_rows = sweep(preds, h_truth)
@@ -177,6 +204,9 @@ def main(argv: list[str] | None = None) -> int:
         prev["value_classifier"] = out
         METRICS.parent.mkdir(parents=True, exist_ok=True)
         METRICS.write_text(json.dumps(prev, indent=2), encoding="utf-8")
+    if chosen is None:
+        print(f"NO safe threshold: wrong values even at {max(THRESHOLDS)} on BDD validation")
+        return 1
     return 0
 
 

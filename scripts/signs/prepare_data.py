@@ -112,14 +112,22 @@ def touches_any(box: tuple[float, ...], others: list[tuple[float, float, float, 
 
 
 def read_unboxed() -> dict[str, list[tuple[float, float, float, float]]]:
-    """image (repo-relative) -> unboxed real-sign detections to mask in training (empty if not mined)."""
+    """image (repo-relative) -> unboxed detections to mask in training (empty if not mined).
+
+    Speed-kind detections are never masked: about a third of the unboxed detections are look-alikes (route
+    shields, advisory plates, logos), and a number-bearing look-alike must stay a negative for the detector.
+    """
     if not UNBOXED.exists():
         return {}
     out: dict[str, list[tuple[float, float, float, float]]] = {}
     for line in UNBOXED.read_text(encoding="utf-8").splitlines():
         if line:
             r = json.loads(line)
-            out[r["image"]] = [tuple(b) for b in r["boxes"]]
+            if "kinds" not in r:
+                raise ValueError(f"{UNBOXED.name} lacks detection kinds: re-run scripts/signs/mine_unboxed.py")
+            boxes = [tuple(b) for b, k in zip(r["boxes"], r["kinds"], strict=True) if k not in VALUE_KINDS]
+            if boxes:
+                out[r["image"]] = boxes
     return out
 
 

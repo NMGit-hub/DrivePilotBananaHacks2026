@@ -59,7 +59,7 @@ def train_det(args: argparse.Namespace) -> Path:
             mosaic=1.0,
             close_mosaic=args.close_mosaic,
             cos_lr=True,
-            optimizer=args.optimizer,  # "auto" ignores lr0 (it picks SGD 0.01 for long runs): name one to fine-tune
+            optimizer=args.optimizer,  # "auto" ignores lr0 and picks its own (AdamW 0.000588 here): name one to set lr0
             lr0=args.lr0,
             warmup_epochs=args.warmup_epochs,
             plots=True,

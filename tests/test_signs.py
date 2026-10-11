@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from itertools import pairwise
 from pathlib import Path
@@ -472,7 +473,11 @@ _CFG = load_config()
 _DET_ENGINE = engine_path(_CFG.resolve_path(_CFG.signs.weights), _CFG.signs.imgsz, _CFG.signs.half)
 
 
-_SCHOOL_CLIP = Path("data/videos/dev/red_light_rain_school_zone__b61456bb-5bfb50ee.mov")
+# The dev clips live in the main checkout (data/videos/dev, gitignored); SIGNS_DEV_CLIPS points elsewhere.
+_SCHOOL_CLIP = (
+    Path(os.environ.get("SIGNS_DEV_CLIPS", str(_CFG.root / "data" / "videos" / "dev")))
+    / "red_light_rain_school_zone__b61456bb-5bfb50ee.mov"
+)
 
 
 @pytest.mark.gpu
@@ -759,11 +764,37 @@ def test_eval_raw_cache_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(ev, "RAW_CACHE", tmp_path)
     g = ev.Gt((0, 0, 10, 10), "stop", None, None)
     r = _res([g], [_sl((1.0, 2.0, 3.0, 4.0), 35, 0.9, conf=0.5)])
-    ev.save_raw("x", [r], {"frames": 1})
-    (back,), timing = ev.load_raw("x", [("img", Path("img.jpg"), [g], [])])
+    fp = {"detector_sha256": "a", "classifier_sha256": "b", "imgsz": [736, 1280]}
+    ev.save_raw("x", [r], {"frames": 1}, fp)
+    (back,), timing = ev.load_raw("x", [("img", Path("img.jpg"), [g], [])], fp)
     assert back.raw == r.raw and back.gts == [g] and timing == {"frames": 1}
     with pytest.raises(KeyError):
-        ev.load_raw("x", [("other", Path("o.jpg"), [], [])])
+        ev.load_raw("x", [("other", Path("o.jpg"), [], [])], fp)
+    with pytest.raises(ValueError, match="other models"):  # detections of another detector are never reused
+        ev.load_raw("x", [("img", Path("img.jpg"), [g], [])], {**fp, "detector_sha256": "c"})
+
+
+def test_eval_model_fingerprint_follows_the_weights(tmp_path: Path) -> None:
+    (tmp_path / "d.pt").write_bytes(b"one")
+    (tmp_path / "c.pt").write_bytes(b"cls")
+    cfg = SignsConfig(weights=tmp_path / "d.pt", classifier_weights=tmp_path / "c.pt")
+    a = ev.model_fingerprint(cfg)
+    (tmp_path / "d.pt").write_bytes(b"two")
+    assert ev.model_fingerprint(cfg) != a and ev.model_fingerprint(cfg)["classifier_sha256"] == a["classifier_sha256"]
+
+
+def test_eval_unverifiable_needs_a_real_overlap_and_counts_for_thresholds() -> None:
+    # A big box whose centre falls in a tiny unlabeled sign box is not excused: the value is wrong.
+    s = ev.summarize([_res([], [_sl((100, 100, 160, 180), 25)], ignore=[(128, 138, 134, 146)])], _cfg())
+    assert len(s["wrong_values"]) == 1 and not s["unverifiable_values"]
+    # Unverifiable values count in the sweep column used to choose thresholds.
+    unknown = ev.Gt((100, 100, 130, 140), "speed_limit", None, False)
+    school = ev.Gt((300, 100, 330, 140), "school_speed_limit", 20, True)
+    raw = [_sl((100, 100, 130, 140), 25, 0.95), RawSign("school_speed_limit", 0.9, (300, 100, 330, 140), 20, 0.99)]
+    by_t = {r["value_conf"]: r for r in ev.value_sweep([_res([unknown, school], raw)], _cfg())}
+    assert by_t[0.9]["wrong_total"] == 0 and by_t[0.9]["wrong_or_unverifiable"] == 1
+    assert by_t[0.97]["wrong_or_unverifiable"] == 0
+    assert by_t[0.9]["readable"] == 1 and by_t[0.9]["right_on_readable"] == 1  # school limits count on both sides
 
 
 def test_eval_refuses_missing_frames(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -821,6 +852,8 @@ def test_eval_values_threshold_rules(tmp_path: Path) -> None:
     assert at[0.7] == {"threshold": 0.7, "right": 1, "wrong": 2, "withheld": 1}
     assert at[0.85] == {"threshold": 0.85, "right": 1, "wrong": 0, "withheld": 3}
     assert evv.lowest_safe(rows) == 0.85
+    unsafe = evv.sweep([(40, 0.999)], [45])  # wrong even at the highest threshold: no safe threshold at all
+    assert evv.lowest_safe(unsafe) is None
     assert evv.crop_truth(tmp_path / "v30" / "bdd_000001.png") == 30
     assert evv.crop_truth(tmp_path / "none" / "bdd_000002_true25.png") == 25  # a real 25 trained as "none"
     assert evv.crop_truth(tmp_path / "none" / "bddother_000003.png") is None
@@ -1004,6 +1037,74 @@ def test_heldout_build_applies_the_review(monkeypatch: pytest.MonkeyPatch) -> No
         ("speed_limit", 40, True),
     ]
     assert im["ignore"] == [[60, 0, 70, 20], [90, 0, 96, 8]] and "audit" not in im and counts["readable_speed"] == 2
+
+
+def test_unboxed_speed_kind_detections_are_not_masked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / "unboxed.jsonl"
+    rec = {"image": "a.jpg", "boxes": [[0, 0, 10, 20], [30, 0, 40, 20]], "kinds": ["speed_limit", "one_way"]}
+    path.write_text(json.dumps(rec) + "\n")
+    monkeypatch.setattr(prep, "UNBOXED", path)
+    assert prep.read_unboxed() == {"a.jpg": [(30, 0, 40, 20)]}  # a look-alike "speed limit" stays a negative
+    path.write_text(json.dumps({"image": "a.jpg", "boxes": [[0, 0, 10, 20]]}) + "\n")  # old file without kinds
+    with pytest.raises(ValueError, match="kinds"):
+        prep.read_unboxed()
+
+
+def test_original_build_backgrounds_are_reproduced(monkeypatch: pytest.MonkeyPatch) -> None:
+    pos = [prep.Sample(Path(f"/x/p{i}.jpg"), [prep.Box((0.0, 0.0, 9.0, 9.0), "stop")], "bdd") for i in range(20)]
+    neg = [prep.Sample(Path(f"/x/n{i}.jpg"), [], "bdd") for i in range(5000)]
+    monkeypatch.setattr(prep, "bdd_samples", lambda split: (pos, neg))
+    # The first build, as it was written: one seed per positive, shuffle every negative, int(0.3 * pos) real
+    # negatives, the next 3,500 synthetic backgrounds; the classifier builds took neg[:400] unshuffled.
+    rng = random.Random(0)
+    for _ in pos:
+        rng.randrange(2**31)
+    shuffled = list(neg)
+    rng.shuffle(shuffled)
+    expected = {prep.rel_path(s.image) for s in shuffled[6:3506] + neg[:400]}
+    assert prep.original_build_images() == expected
+    assert not {prep.rel_path(s.image) for s in shuffled[:6]} - {prep.rel_path(s.image) for s in neg[:400]} & expected
+
+
+def test_bdd_other_records_split_by_fraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    recs = [
+        {"key": f"k{i}", "image": f"train/shard_000/img{i}.jpg", "box": [0, 0, 10, 20], "kind": "other", "value": None}
+        for i in range(300)
+    ]
+    recs.append(
+        {"key": "s", "image": "train/shard_000/small.jpg", "box": [0, 0, 10, 10], "kind": "other", "value": None}
+    )
+    monkeypatch.setattr(prep, "read_labels", lambda split: recs)
+    monkeypatch.setattr(prep, "dev_clip_ids", lambda: set())
+    val = prep.bdd_other_records("train", 10**6, 0, val=True)
+    train = prep.bdd_other_records("train", 10**6, 0, val=False)
+    assert val and all(prep.in_val(Path(r["image"])) for r in val)
+    assert not any(prep.in_val(Path(r["image"])) for r in train)
+    assert len(val) + len(train) == 300  # the 10 px box is too small for either
+
+
+def test_engine_layer_names_reads_the_inspector_json() -> None:
+    class _Inspector:
+        def get_engine_information(self, fmt: Any) -> str:
+            return json.dumps({"Layers": ["images_cast_to_fp16", {"Name": "/model.0/conv"}], "Bindings": ["images"]})
+
+    class _Engine:
+        def create_engine_inspector(self) -> _Inspector:
+            return _Inspector()
+
+    pytest.importorskip("tensorrt")
+    assert signs_mod.engine_layer_names(_Engine()) == ["images_cast_to_fp16", "/model.0/conv"]
+
+
+def test_malformed_sidecar_means_stale(tmp_path: Path) -> None:
+    w = tmp_path / "w.pt"
+    w.write_bytes(b"w")
+    e = engine_path(w, (96, 96), True)
+    e.write_bytes(b"e")
+    sidecar_path(e).write_text("[1, 2]")  # valid JSON, not an object
+    assert engine_staleness(e, w) is not None
+    sidecar_path(e).write_text("{not json")
+    assert "unreadable" in (engine_staleness(e, w) or "")
 
 
 def test_hard_negative_curation_blocks() -> None:

@@ -4,8 +4,10 @@
 
 Runs the detector (PyTorch, GPU) on every pseudo-labeled BDD100K train frame that holds none of our 13 kinds,
 outside the held-out val fraction (the tune set); frames with a detection above --conf that doesn't sit on an "unclear"
-(masked) sign are written to data/signs/hardneg_det.txt. prepare_data.py det adds them as negative frames (their
-"other" signs stay background, so route shields, advisory plates and look-alikes are learned as "not ours").
+(masked) sign are written to data/signs/hardneg_det_raw.txt. Most of those hits turned out to be real signs BDD
+never boxed, so they are NOT used as they are: dump_det_hits.py makes contact sheets of every hit and
+curate_det_negatives.py writes the frames checked by eye to data/signs/hardneg_det.txt, which prepare_data.py det
+adds as negative frames (route shields, advisory plates and look-alikes learned as "not ours").
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.signs.prepare_data import bdd_samples, in_val  # noqa: E402
 
-OUT = REPO_ROOT / "data" / "signs" / "hardneg_det.txt"
+OUT = REPO_ROOT / "data" / "signs" / "hardneg_det_raw.txt"  # unchecked: curate_det_negatives.py reads it
 
 
 def main(argv: list[str] | None = None) -> int:

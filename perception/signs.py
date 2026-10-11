@@ -227,9 +227,10 @@ def engine_staleness(engine: Path, weights: Path) -> str | None:
     side = sidecar_path(engine)
     if side.exists():
         try:
-            recorded = json.loads(side.read_text(encoding="utf-8")).get("weights_sha256")
+            data = json.loads(side.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
             return f"unreadable sidecar {side.name}: {e}"
+        recorded = data.get("weights_sha256") if isinstance(data, dict) else None
         if recorded != file_sha256(weights):
             return f"built from other weights than {weights.name} (sha256 differs)"
         return None

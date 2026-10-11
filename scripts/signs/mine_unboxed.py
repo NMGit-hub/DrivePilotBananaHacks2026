@@ -7,9 +7,10 @@ BDD100K boxes many but not all traffic signs: checking the mined hard negatives 
 showed most confident detections on sign-free frames were real, unboxed one-way, school-zone, stop and speed-limit
 signs. In training those are background. This runs the detector (PyTorch, GPU) on every BDD train frame outside
 the val fraction and writes each detection >= --conf that touches no human sign box to
-data/signs/unboxed_det.jsonl; prepare_data.py det paints them over (like signs of unknown kind) in training frames
-and synthetic backgrounds. The curated hard-negative frames are skipped: their detections were checked and must
-stay background. Evaluation labels (tune set, held-out sets) never use this file.
+data/signs/unboxed_det.jsonl (with kind and confidence); prepare_data.py det paints them over (like signs of unknown
+kind) in training frames and synthetic backgrounds, except speed-kind detections: about a third of these hits are
+look-alikes, and a route shield or advisory plate must stay a negative. The curated hard-negative frames are
+skipped: their detections were checked and must stay background. Evaluation labels never use this file.
 """
 
 from __future__ import annotations
@@ -54,11 +55,23 @@ def main(argv: list[str] | None = None) -> int:
     n_boxes = 0
     for n, s in enumerate(frames):
         human = list(meta.get(s.image.relative_to(BDD_IMAGES).as_posix(), {}).values())
-        res: Any = model.predict(str(s.image), imgsz=1280, conf=args.conf, device=0, verbose=False)[0]
-        boxes = [[round(v, 1) for v in xyxy] for xyxy in res.boxes.xyxy.tolist() if not touches_any(tuple(xyxy), human)]
-        if boxes:
-            out.append({"image": rel_path(s.image), "boxes": boxes})
-            n_boxes += len(boxes)
+        preds: Any = model.predict(str(s.image), imgsz=1280, conf=args.conf, device=0, verbose=False)
+        res = preds[0]
+        hits = [
+            ([round(v, 1) for v in xyxy], model.names[int(c)], round(float(p), 3))
+            for xyxy, c, p in zip(res.boxes.xyxy.tolist(), res.boxes.cls.tolist(), res.boxes.conf.tolist(), strict=True)
+            if not touches_any(tuple(xyxy), human)
+        ]
+        if hits:
+            out.append(
+                {
+                    "image": rel_path(s.image),
+                    "boxes": [h[0] for h in hits],
+                    "kinds": [h[1] for h in hits],
+                    "confs": [h[2] for h in hits],
+                }
+            )
+            n_boxes += len(hits)
         if n % 1000 == 0:
             print(f"{n}/{len(frames)} frames, {n_boxes} unboxed detections", flush=True)
     UNBOXED.write_text("\n".join(json.dumps(r) for r in out) + "\n", encoding="utf-8")

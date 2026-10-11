@@ -3,8 +3,8 @@
     .venv/Scripts/python scripts/signs/curate_det_negatives.py
 
 mine_det_negatives.py lists BDD train frames that hold none of our labeled kinds but where the detector still
-fires (data/signs/hardneg_det.txt). Checking every detection on contact sheets (review_sheet.py over
-data/signs/hardneg_det_dets.jsonl, 2026-10-10) showed that most of them are REAL signs that BDD's annotators
+fires (data/signs/hardneg_det_raw.txt). Checking every detection on contact sheets (dump_det_hits.py, then
+review_sheet.py, 2026-10-10) showed that most of them are REAL signs that BDD's annotators
 never boxed: nearly all one-way, school-zone, stop, yield and do-not-enter hits, and many speed limits (e.g. a
 clear SPEED LIMIT 30, two SCHOOL SPEED LIMIT signs). Training those frames as background would teach real signs
 as "nothing", so a frame is kept only if every detection in it is clearly not one of our kinds: yellow warning
@@ -14,13 +14,12 @@ Doubtful tiles (dark, blurred, too small to tell) count as possibly real: their 
 
 Indices below are tile numbers of the sheets: speed = review_sheet --kind speed_limit, school = --kind
 school_speed_limit, rest = data/signs/hardneg_det_rest.jsonl (every other kind, in file order).
-Writes data/signs/hardneg_det.txt (curated) and keeps the raw list as data/signs/hardneg_det_raw.txt.
+Reads data/signs/hardneg_det_raw.txt and data/signs/hardneg_det_dets.jsonl, writes data/signs/hardneg_det.txt.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 import sys
 from pathlib import Path
 
@@ -83,8 +82,6 @@ def main() -> int:
     dropped = {r["image"] for i, r in enumerate(speed) if i in SPEED_EXCLUDE}
     dropped |= {r["image"] for i, r in enumerate(school) if i in SCHOOL_EXCLUDE}
     dropped |= {r["image"] for i, r in enumerate(rest) if rest_excluded(i)}
-    if not RAW.exists():
-        shutil.copy2(OUT, RAW)
     raw_lines = [line for line in RAW.read_text(encoding="utf-8").splitlines() if line]
     kept = [line for line in raw_lines if line.split("\t")[0].removeprefix(BDD_PREFIX) not in dropped]
     OUT.write_text("\n".join(kept) + "\n", encoding="utf-8")

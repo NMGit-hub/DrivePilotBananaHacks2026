@@ -17,7 +17,8 @@ Detections on ignore regions (signs of unknown kind, too small to label) count n
 Speed values: every reported value is judged. It is matched to the labeled sign of ANY kind it overlaps most
 (IoU >= 0.5): right if that sign is a speed kind with the same value, unverifiable if it is a speed kind whose
 value nobody could read, WRONG otherwise (another value, or a sign that carries no speed). A value matching no
-labeled sign is unverifiable if it sits on an ignore region (listed: check those by eye) and WRONG elsewhere.
+labeled sign is unverifiable if it overlaps an ignore region (IoU >= 0.3) and WRONG elsewhere. Unverifiable values
+are listed and must be checked by eye; thresholds are chosen with wrong + unverifiable both at 0.
 """
 
 from __future__ import annotations
@@ -129,7 +130,8 @@ def judge_value(d: SignDetection, gts: list[Gt], ignore: list[BoxT]) -> tuple[st
         if best.value is None:
             return "unverifiable", None
         return ("right" if best.value == d.value else "wrong"), best.value
-    return ("unverifiable" if on_ignore(d.box, ignore) else "wrong"), None
+    # Only a real overlap with a region of unknown kind excuses a value (not a centre inside a tiny box).
+    return ("unverifiable" if any(iou(d.box, g) >= 0.3 for g in ignore) else "wrong"), None
 
 
 def average_precision(results: list[ImageResult], kind: str, cfg: SignsConfig) -> tuple[float, int]:
@@ -232,13 +234,30 @@ def value_sweep(results: list[ImageResult], cfg: SignsConfig) -> list[dict[str, 
         out.append(
             {
                 "value_conf": t,
-                "readable": s["readable_speed_limits"],
+                "readable": sum(v for k, v in sv.items() if k.split(":")[0] in VALUE_KINDS),  # both speed kinds
                 "right_on_readable": sv.get("speed_limit:right", 0) + sv.get("school_speed_limit:right", 0),
                 "wrong_total": len(s["wrong_values"]),
                 "unverifiable": len(s["unverifiable_values"]),
+                # a value that can't be checked may be wrong: thresholds are chosen on both together
+                "wrong_or_unverifiable": len(s["wrong_values"]) + len(s["unverifiable_values"]),
             }
         )
     return out
+
+
+def model_fingerprint(cfg: SignsConfig) -> dict[str, Any]:
+    """What raw detections depend on: the weights (sha256; an engine's sidecar ties it to them) and the input."""
+    from perception.signs import file_sha256
+
+    det_w, cls_w = (p if p.is_absolute() else REPO_ROOT / p for p in (cfg.weights, cfg.classifier_weights))
+    return {
+        "detector_sha256": file_sha256(det_w) if det_w.exists() else None,
+        "classifier_sha256": file_sha256(cls_w) if cls_w.exists() else None,
+        "imgsz": list(cfg.imgsz),
+        "classifier_imgsz": cfg.classifier_imgsz,
+        "half": cfg.half,
+        "engine": cfg.engine,
+    }
 
 
 def _raw_to_json(r: RawSign) -> dict[str, Any]:
@@ -246,7 +265,7 @@ def _raw_to_json(r: RawSign) -> dict[str, Any]:
 
 
 def _raw_from_json(d: dict[str, Any]) -> RawSign:
-    return RawSign(d["kind"], d["conf"], tuple(d["box"]), d["top_value"], d["top_prob"])  # type: ignore[arg-type]
+    return RawSign(d["kind"], d["conf"], tuple(d["box"]), d["top_value"], d["top_prob"])
 
 
 def run_detector(items: list[Item], cfg: SignsConfig) -> tuple[list[ImageResult], dict[str, Any]]:
@@ -270,19 +289,25 @@ def run_detector(items: list[Item], cfg: SignsConfig) -> tuple[list[ImageResult]
     return results, timing
 
 
-def save_raw(name: str, results: list[ImageResult], timing: dict[str, Any]) -> None:
-    """Cache raw detections of a set (so thresholds can be swept without the GPU)."""
+def save_raw(name: str, results: list[ImageResult], timing: dict[str, Any], fingerprint: dict[str, Any]) -> None:
+    """Cache raw detections of a set (so thresholds can be swept without the GPU), tagged with the models."""
     RAW_CACHE.mkdir(parents=True, exist_ok=True)
     data = {
+        "fingerprint": fingerprint,
         "timing": timing,
         "frames": {r.name: {"w": r.width, "h": r.height, "raw": [_raw_to_json(x) for x in r.raw]} for r in results},
     }
     (RAW_CACHE / f"{name}.json").write_text(json.dumps(data), encoding="utf-8")
 
 
-def load_raw(name: str, items: list[Item]) -> tuple[list[ImageResult], dict[str, Any]]:
-    """Raw detections from the cache, joined with the current labels (raises if a frame is missing)."""
+def load_raw(name: str, items: list[Item], fingerprint: dict[str, Any]) -> tuple[list[ImageResult], dict[str, Any]]:
+    """Raw detections from the cache, joined with the current labels.
+
+    Raises if the cache was made with other models or input settings, or lacks a frame.
+    """
     data = json.loads((RAW_CACHE / f"{name}.json").read_text(encoding="utf-8"))
+    if data.get("fingerprint") != fingerprint:
+        raise ValueError(f"cached raw detections of {name} come from other models/settings: re-run without --cached")
     frames = data["frames"]
     results = []
     for n, _path, gts, ignore in items:
@@ -361,21 +386,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-audit", action="store_true", help="'bdd' without the detection-triggered audit")
     p.add_argument("--cached", action="store_true", help="reuse data/signs/eval_raw/<set>.json (no GPU)")
     p.add_argument("--show", type=int, default=20, help="wrong/unverifiable values to print")
+    p.add_argument("--tag", default="", help="suffix of the raw-detection cache file (to compare models)")
     args = p.parse_args(argv)
     cfg = load_config(overrides=args.set).signs
     names = (
         list(SETS) if args.which == "all" else ["bdd_noaudit" if args.which == "bdd" and args.no_audit else args.which]
     )
-    out: dict[str, Any] = {"config": cfg.model_dump(mode="json")}
+    fingerprint = model_fingerprint(cfg)
+    out: dict[str, Any] = {"config": cfg.model_dump(mode="json"), "models": fingerprint}
     done: set[str] = set()  # sets whose frames already ran in this invocation (bdd and bdd_noaudit share frames)
     for name in names:
         cache_name, make = SETS[name]
+        cache_name += args.tag
         items = make()
         if args.cached or cache_name in done:
-            results, timing = load_raw(cache_name, items)
+            results, timing = load_raw(cache_name, items, fingerprint)
         else:
             results, timing = run_detector(items, cfg)
-            save_raw(cache_name, results, timing)
+            save_raw(cache_name, results, timing, fingerprint)
             done.add(cache_name)
         s = summarize(results, cfg)
         s["value_threshold_sweep"] = value_sweep(results, cfg)
@@ -390,6 +418,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  unverifiable values: {len(s['unverifiable_values'])} {s['unverifiable_values'][: args.show]}")
         for row in s["value_threshold_sweep"]:
             print(f"    {row}")
+        for key in ("wrong_total", "wrong_or_unverifiable"):
+            safe = [r["value_conf"] for r in s["value_threshold_sweep"] if r[key] == 0]
+            s[f"lowest_value_conf_without_{key}"] = min(safe) if safe else None
+            print(f"  lowest value_conf with 0 {key}: {s[f'lowest_value_conf_without_{key}']}")
     if args.write_metrics:
         METRICS.parent.mkdir(parents=True, exist_ok=True)
         prev = json.loads(METRICS.read_text(encoding="utf-8")) if METRICS.exists() else {}
