@@ -100,7 +100,7 @@ AUDIT_ADD: list[tuple[str, list[float], str, int | None, bool]] = [
 FRESH_REVIEW = {
     "not_clearly_readable": [
         "valid/3fda6604-b95df43c/6",  # 25 washed out by headlights
-        "valid/445e5094-8c851e5f/16",  # 30 cut by the top of the frame
+        "valid/445e5094-8c851e5f/16",  # PHOTO ENFORCED plate under a 30 sign: only the bottom of the digits
         "valid/47e0d7e0-2766582e/21",  # 25 cut by the top of the frame, 14 px
         "valid/53e212ea-860e34d7/0",  # very dark
         "valid/580262f8-6c09e809/0",  # washed out, low contrast

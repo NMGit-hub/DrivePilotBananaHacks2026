@@ -2136,5 +2136,2213 @@
         ]
       }
     }
+  },
+  "config": {
+    "weights": "models\\signs\\signs_yolo26s.pt",
+    "classifier_weights": "models\\signs\\speed_value_cls.pt",
+    "engine": "tensorrt",
+    "device": 0,
+    "half": true,
+    "imgsz": [
+      736,
+      1280
+    ],
+    "classifier_imgsz": 96,
+    "conf": 0.4,
+    "class_conf": {},
+    "iou": 0.6,
+    "value_conf": 0.9,
+    "value_min_px": 16.0,
+    "value_edge_px": 2.0,
+    "duplicate_iou": 0.6,
+    "value_views": 5
+  },
+  "models": {
+    "detector_sha256": "8db6751c2bd3019be3a1021cc6abfd1d426f401d4affce74aceb2c2ca7299c20",
+    "classifier_sha256": "0081abaf84aef9bc15c0c04a958a71a4f851a262ee1a3ba0060062d6e60dfcff",
+    "imgsz": [
+      736,
+      1280
+    ],
+    "classifier_imgsz": 96,
+    "half": true,
+    "engine": "tensorrt"
+  },
+  "fresh": {
+    "frames": 3175,
+    "per_kind": {
+      "speed_limit": {
+        "labeled": 94,
+        "tp": 83,
+        "fp": 32,
+        "fn": 11,
+        "precision": 0.722,
+        "recall": 0.883,
+        "ap50": 0.875
+      },
+      "school_speed_limit": {
+        "labeled": 1,
+        "tp": 1,
+        "fp": 6,
+        "fn": 0,
+        "precision": 0.143,
+        "recall": 1.0,
+        "ap50": 1.0
+      },
+      "stop": {
+        "labeled": 56,
+        "tp": 45,
+        "fp": 6,
+        "fn": 11,
+        "precision": 0.882,
+        "recall": 0.804,
+        "ap50": 0.789
+      },
+      "yield": {
+        "labeled": 22,
+        "tp": 20,
+        "fp": 8,
+        "fn": 2,
+        "precision": 0.714,
+        "recall": 0.909,
+        "ap50": 0.877
+      },
+      "do_not_enter": {
+        "labeled": 40,
+        "tp": 33,
+        "fp": 8,
+        "fn": 7,
+        "precision": 0.805,
+        "recall": 0.825,
+        "ap50": 0.811
+      },
+      "wrong_way": {
+        "labeled": 2,
+        "tp": 0,
+        "fp": 5,
+        "fn": 2,
+        "precision": 0.0,
+        "recall": 0.0,
+        "ap50": 0.1
+      },
+      "no_turn_on_red": {
+        "labeled": 4,
+        "tp": 2,
+        "fp": 5,
+        "fn": 2,
+        "precision": 0.286,
+        "recall": 0.5,
+        "ap50": 0.25
+      },
+      "one_way": {
+        "labeled": 501,
+        "tp": 428,
+        "fp": 112,
+        "fn": 73,
+        "precision": 0.793,
+        "recall": 0.854,
+        "ap50": 0.855
+      },
+      "no_left_turn": {
+        "labeled": 57,
+        "tp": 44,
+        "fp": 13,
+        "fn": 13,
+        "precision": 0.772,
+        "recall": 0.772,
+        "ap50": 0.75
+      },
+      "no_right_turn": {
+        "labeled": 10,
+        "tp": 5,
+        "fp": 6,
+        "fn": 5,
+        "precision": 0.455,
+        "recall": 0.5,
+        "ap50": 0.426
+      },
+      "no_u_turn": {
+        "labeled": 20,
+        "tp": 15,
+        "fp": 10,
+        "fn": 5,
+        "precision": 0.6,
+        "recall": 0.75,
+        "ap50": 0.716
+      },
+      "pedestrian_crossing": {
+        "labeled": 35,
+        "tp": 21,
+        "fp": 18,
+        "fn": 14,
+        "precision": 0.538,
+        "recall": 0.6,
+        "ap50": 0.562
+      },
+      "school_zone": {
+        "labeled": 172,
+        "tp": 153,
+        "fp": 37,
+        "fn": 19,
+        "precision": 0.805,
+        "recall": 0.89,
+        "ap50": 0.837
+      }
+    },
+    "speed_values": {
+      "speed_limit:right": 69,
+      "speed_limit:missed": 4,
+      "speed_limit:no_value": 4,
+      "school_speed_limit:right": 1
+    },
+    "readable_speed_limits": 77,
+    "readable_right_value_rate": 0.896,
+    "reported_values": {
+      "right": 74,
+      "wrong": 6,
+      "unverifiable": 8
+    },
+    "wrong_values": [
+      {
+        "image": "valid/shard_000/3b24ac1a-40377289.jpg",
+        "box": [
+          684,
+          309,
+          706,
+          339
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 1.0
+      },
+      {
+        "image": "valid/shard_000/3bab7f42-f0f0d166.jpg",
+        "box": [
+          713,
+          298,
+          728,
+          321
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 1.0
+      },
+      {
+        "image": "valid/shard_000/434d6930-c45b2577.jpg",
+        "box": [
+          501,
+          280,
+          520,
+          308
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.981
+      },
+      {
+        "image": "valid/shard_000/4ab8edc8-4bcfb5bb.jpg",
+        "box": [
+          358,
+          274,
+          372,
+          300
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.992
+      },
+      {
+        "image": "valid/shard_000/4eae0f39-a0e0b1e3.jpg",
+        "box": [
+          1182,
+          72,
+          1206,
+          116
+        ],
+        "kind": "speed_limit",
+        "said": 20,
+        "truth": null,
+        "p": 1.0
+      },
+      {
+        "image": "valid/shard_000/6616ca96-eb8bcc8f.jpg",
+        "box": [
+          721,
+          214,
+          739,
+          238
+        ],
+        "kind": "speed_limit",
+        "said": 50,
+        "truth": null,
+        "p": 0.906
+      }
+    ],
+    "unverifiable_values": [
+      {
+        "image": "valid/shard_000/3cdbef52-02968e10.jpg",
+        "box": [
+          458,
+          240,
+          472,
+          263
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/453dc5bc-70ad5ddf.jpg",
+        "box": [
+          537,
+          279,
+          553,
+          305
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/478adc9f-09ae47d1.jpg",
+        "box": [
+          549,
+          298,
+          565,
+          324
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/4b1d3edb-8d234df8.jpg",
+        "box": [
+          728,
+          231,
+          744,
+          255
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/55ffb1d2-ab324fe4.jpg",
+        "box": [
+          438,
+          126,
+          477,
+          188
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/5b5d5f54-dc775931.jpg",
+        "box": [
+          1016,
+          206,
+          1056,
+          265
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/5f88008b-dc412a15.jpg",
+        "box": [
+          492,
+          234,
+          512,
+          258
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/61fe889c-ac8a1af5.jpg",
+        "box": [
+          1018,
+          85,
+          1052,
+          137
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      }
+    ],
+    "value_threshold_sweep": [
+      {
+        "value_conf": 0.5,
+        "readable": 78,
+        "right_on_readable": 71,
+        "wrong_total": 6,
+        "unverifiable": 12,
+        "wrong_or_unverifiable": 18
+      },
+      {
+        "value_conf": 0.6,
+        "readable": 78,
+        "right_on_readable": 71,
+        "wrong_total": 6,
+        "unverifiable": 10,
+        "wrong_or_unverifiable": 16
+      },
+      {
+        "value_conf": 0.7,
+        "readable": 78,
+        "right_on_readable": 71,
+        "wrong_total": 6,
+        "unverifiable": 9,
+        "wrong_or_unverifiable": 15
+      },
+      {
+        "value_conf": 0.8,
+        "readable": 78,
+        "right_on_readable": 70,
+        "wrong_total": 6,
+        "unverifiable": 9,
+        "wrong_or_unverifiable": 15
+      },
+      {
+        "value_conf": 0.85,
+        "readable": 78,
+        "right_on_readable": 70,
+        "wrong_total": 6,
+        "unverifiable": 8,
+        "wrong_or_unverifiable": 14
+      },
+      {
+        "value_conf": 0.9,
+        "readable": 78,
+        "right_on_readable": 70,
+        "wrong_total": 6,
+        "unverifiable": 8,
+        "wrong_or_unverifiable": 14
+      },
+      {
+        "value_conf": 0.93,
+        "readable": 78,
+        "right_on_readable": 69,
+        "wrong_total": 5,
+        "unverifiable": 8,
+        "wrong_or_unverifiable": 13
+      },
+      {
+        "value_conf": 0.95,
+        "readable": 78,
+        "right_on_readable": 69,
+        "wrong_total": 5,
+        "unverifiable": 8,
+        "wrong_or_unverifiable": 13
+      },
+      {
+        "value_conf": 0.97,
+        "readable": 78,
+        "right_on_readable": 69,
+        "wrong_total": 5,
+        "unverifiable": 7,
+        "wrong_or_unverifiable": 12
+      },
+      {
+        "value_conf": 0.98,
+        "readable": 78,
+        "right_on_readable": 68,
+        "wrong_total": 5,
+        "unverifiable": 7,
+        "wrong_or_unverifiable": 12
+      },
+      {
+        "value_conf": 0.99,
+        "readable": 78,
+        "right_on_readable": 67,
+        "wrong_total": 4,
+        "unverifiable": 7,
+        "wrong_or_unverifiable": 11
+      },
+      {
+        "value_conf": 0.995,
+        "readable": 78,
+        "right_on_readable": 65,
+        "wrong_total": 3,
+        "unverifiable": 7,
+        "wrong_or_unverifiable": 10
+      },
+      {
+        "value_conf": 0.998,
+        "readable": 78,
+        "right_on_readable": 58,
+        "wrong_total": 3,
+        "unverifiable": 7,
+        "wrong_or_unverifiable": 10
+      }
+    ],
+    "timing_eval_loop": {
+      "frames": 3175,
+      "model": "signs_yolo26s_736x1280_fp16.engine",
+      "classifier": "speed_value_cls_96x96_fp16.engine",
+      "median_ms": 6.39,
+      "p95_ms": 9.84
+    },
+    "lowest_value_conf_without_wrong_total": null,
+    "lowest_value_conf_without_wrong_or_unverifiable": null
+  },
+  "bdd": {
+    "frames": 2623,
+    "per_kind": {
+      "speed_limit": {
+        "labeled": 90,
+        "tp": 81,
+        "fp": 18,
+        "fn": 9,
+        "precision": 0.818,
+        "recall": 0.9,
+        "ap50": 0.907
+      },
+      "school_speed_limit": {
+        "labeled": 4,
+        "tp": 4,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.8,
+        "recall": 1.0,
+        "ap50": 1.0
+      },
+      "stop": {
+        "labeled": 47,
+        "tp": 36,
+        "fp": 13,
+        "fn": 11,
+        "precision": 0.735,
+        "recall": 0.766,
+        "ap50": 0.748
+      },
+      "yield": {
+        "labeled": 25,
+        "tp": 20,
+        "fp": 12,
+        "fn": 5,
+        "precision": 0.625,
+        "recall": 0.8,
+        "ap50": 0.728
+      },
+      "do_not_enter": {
+        "labeled": 49,
+        "tp": 38,
+        "fp": 23,
+        "fn": 11,
+        "precision": 0.623,
+        "recall": 0.776,
+        "ap50": 0.741
+      },
+      "wrong_way": {
+        "labeled": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "ap50": 0.0
+      },
+      "no_turn_on_red": {
+        "labeled": 7,
+        "tp": 3,
+        "fp": 5,
+        "fn": 4,
+        "precision": 0.375,
+        "recall": 0.429,
+        "ap50": 0.528
+      },
+      "one_way": {
+        "labeled": 442,
+        "tp": 374,
+        "fp": 99,
+        "fn": 68,
+        "precision": 0.791,
+        "recall": 0.846,
+        "ap50": 0.826
+      },
+      "no_left_turn": {
+        "labeled": 62,
+        "tp": 52,
+        "fp": 13,
+        "fn": 10,
+        "precision": 0.8,
+        "recall": 0.839,
+        "ap50": 0.859
+      },
+      "no_right_turn": {
+        "labeled": 8,
+        "tp": 7,
+        "fp": 8,
+        "fn": 1,
+        "precision": 0.467,
+        "recall": 0.875,
+        "ap50": 0.573
+      },
+      "no_u_turn": {
+        "labeled": 27,
+        "tp": 22,
+        "fp": 7,
+        "fn": 5,
+        "precision": 0.759,
+        "recall": 0.815,
+        "ap50": 0.815
+      },
+      "pedestrian_crossing": {
+        "labeled": 41,
+        "tp": 31,
+        "fp": 12,
+        "fn": 10,
+        "precision": 0.721,
+        "recall": 0.756,
+        "ap50": 0.775
+      },
+      "school_zone": {
+        "labeled": 158,
+        "tp": 139,
+        "fp": 35,
+        "fn": 19,
+        "precision": 0.799,
+        "recall": 0.88,
+        "ap50": 0.833
+      }
+    },
+    "speed_values": {
+      "speed_limit:right": 69,
+      "speed_limit:missed": 6,
+      "school_speed_limit:right": 3,
+      "speed_limit:no_value": 3,
+      "school_speed_limit:no_value": 1
+    },
+    "readable_speed_limits": 78,
+    "readable_right_value_rate": 0.885,
+    "reported_values": {
+      "unverifiable": 7,
+      "wrong": 5,
+      "right": 77
+    },
+    "wrong_values": [
+      {
+        "image": "valid/shard_000/0049e5b8-afda7206.jpg",
+        "box": [
+          820,
+          384,
+          842,
+          409
+        ],
+        "kind": "speed_limit",
+        "said": 45,
+        "truth": null,
+        "p": 0.999
+      },
+      {
+        "image": "valid/shard_000/148b9b8a-2f680644.jpg",
+        "box": [
+          709,
+          105,
+          719,
+          126
+        ],
+        "kind": "school_speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.976
+      },
+      {
+        "image": "valid/shard_000/1a02dda3-53bd53b3.jpg",
+        "box": [
+          453,
+          246,
+          467,
+          289
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.92
+      },
+      {
+        "image": "valid/shard_000/20931284-08103a3f.jpg",
+        "box": [
+          69,
+          220,
+          112,
+          240
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.996
+      },
+      {
+        "image": "valid/shard_000/3290bd24-f20970e2.jpg",
+        "box": [
+          818,
+          152,
+          842,
+          194
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.966
+      }
+    ],
+    "unverifiable_values": [
+      {
+        "image": "valid/shard_000/000f157f-37797ff9.jpg",
+        "box": [
+          1026,
+          195,
+          1050,
+          232
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/032164cf-8ac0122d.jpg",
+        "box": [
+          648,
+          219,
+          664,
+          245
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/047cf4fc-34ad5b08.jpg",
+        "box": [
+          190,
+          330,
+          210,
+          369
+        ],
+        "kind": "speed_limit",
+        "said": 40
+      },
+      {
+        "image": "valid/shard_000/098c5600-052ad7a6.jpg",
+        "box": [
+          511,
+          158,
+          535,
+          192
+        ],
+        "kind": "speed_limit",
+        "said": 40
+      },
+      {
+        "image": "valid/shard_000/1572db6a-1bcc874c.jpg",
+        "box": [
+          734,
+          172,
+          749,
+          191
+        ],
+        "kind": "speed_limit",
+        "said": 40
+      },
+      {
+        "image": "valid/shard_000/29b74173-8e715c9f.jpg",
+        "box": [
+          668,
+          212,
+          694,
+          252
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/2eb8f860-fe862fa1.jpg",
+        "box": [
+          773,
+          238,
+          789,
+          262
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      }
+    ],
+    "value_threshold_sweep": [
+      {
+        "value_conf": 0.5,
+        "readable": 82,
+        "right_on_readable": 74,
+        "wrong_total": 7,
+        "unverifiable": 13,
+        "wrong_or_unverifiable": 20
+      },
+      {
+        "value_conf": 0.6,
+        "readable": 82,
+        "right_on_readable": 74,
+        "wrong_total": 6,
+        "unverifiable": 12,
+        "wrong_or_unverifiable": 18
+      },
+      {
+        "value_conf": 0.7,
+        "readable": 82,
+        "right_on_readable": 74,
+        "wrong_total": 5,
+        "unverifiable": 10,
+        "wrong_or_unverifiable": 15
+      },
+      {
+        "value_conf": 0.8,
+        "readable": 82,
+        "right_on_readable": 72,
+        "wrong_total": 5,
+        "unverifiable": 9,
+        "wrong_or_unverifiable": 14
+      },
+      {
+        "value_conf": 0.85,
+        "readable": 82,
+        "right_on_readable": 72,
+        "wrong_total": 5,
+        "unverifiable": 9,
+        "wrong_or_unverifiable": 14
+      },
+      {
+        "value_conf": 0.9,
+        "readable": 82,
+        "right_on_readable": 72,
+        "wrong_total": 5,
+        "unverifiable": 7,
+        "wrong_or_unverifiable": 12
+      },
+      {
+        "value_conf": 0.93,
+        "readable": 82,
+        "right_on_readable": 72,
+        "wrong_total": 4,
+        "unverifiable": 7,
+        "wrong_or_unverifiable": 11
+      },
+      {
+        "value_conf": 0.95,
+        "readable": 82,
+        "right_on_readable": 72,
+        "wrong_total": 4,
+        "unverifiable": 6,
+        "wrong_or_unverifiable": 10
+      },
+      {
+        "value_conf": 0.97,
+        "readable": 82,
+        "right_on_readable": 70,
+        "wrong_total": 3,
+        "unverifiable": 4,
+        "wrong_or_unverifiable": 7
+      },
+      {
+        "value_conf": 0.98,
+        "readable": 82,
+        "right_on_readable": 69,
+        "wrong_total": 2,
+        "unverifiable": 4,
+        "wrong_or_unverifiable": 6
+      },
+      {
+        "value_conf": 0.99,
+        "readable": 82,
+        "right_on_readable": 67,
+        "wrong_total": 2,
+        "unverifiable": 2,
+        "wrong_or_unverifiable": 4
+      },
+      {
+        "value_conf": 0.995,
+        "readable": 82,
+        "right_on_readable": 63,
+        "wrong_total": 2,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 3
+      },
+      {
+        "value_conf": 0.998,
+        "readable": 82,
+        "right_on_readable": 59,
+        "wrong_total": 1,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 2
+      }
+    ],
+    "timing_eval_loop": {
+      "frames": 2623,
+      "model": "signs_yolo26s_736x1280_fp16.engine",
+      "classifier": "speed_value_cls_96x96_fp16.engine",
+      "median_ms": 6.12,
+      "p95_ms": 9.24
+    },
+    "lowest_value_conf_without_wrong_total": null,
+    "lowest_value_conf_without_wrong_or_unverifiable": null
+  },
+  "bdd_noaudit": {
+    "frames": 2623,
+    "per_kind": {
+      "speed_limit": {
+        "labeled": 89,
+        "tp": 80,
+        "fp": 22,
+        "fn": 9,
+        "precision": 0.784,
+        "recall": 0.899,
+        "ap50": 0.894
+      },
+      "school_speed_limit": {
+        "labeled": 2,
+        "tp": 2,
+        "fp": 3,
+        "fn": 0,
+        "precision": 0.4,
+        "recall": 1.0,
+        "ap50": 0.5
+      },
+      "stop": {
+        "labeled": 47,
+        "tp": 36,
+        "fp": 13,
+        "fn": 11,
+        "precision": 0.735,
+        "recall": 0.766,
+        "ap50": 0.748
+      },
+      "yield": {
+        "labeled": 25,
+        "tp": 20,
+        "fp": 12,
+        "fn": 5,
+        "precision": 0.625,
+        "recall": 0.8,
+        "ap50": 0.728
+      },
+      "do_not_enter": {
+        "labeled": 49,
+        "tp": 38,
+        "fp": 23,
+        "fn": 11,
+        "precision": 0.623,
+        "recall": 0.776,
+        "ap50": 0.741
+      },
+      "wrong_way": {
+        "labeled": 1,
+        "tp": 0,
+        "fp": 1,
+        "fn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "ap50": 0.0
+      },
+      "no_turn_on_red": {
+        "labeled": 7,
+        "tp": 3,
+        "fp": 5,
+        "fn": 4,
+        "precision": 0.375,
+        "recall": 0.429,
+        "ap50": 0.528
+      },
+      "one_way": {
+        "labeled": 442,
+        "tp": 374,
+        "fp": 99,
+        "fn": 68,
+        "precision": 0.791,
+        "recall": 0.846,
+        "ap50": 0.826
+      },
+      "no_left_turn": {
+        "labeled": 62,
+        "tp": 52,
+        "fp": 13,
+        "fn": 10,
+        "precision": 0.8,
+        "recall": 0.839,
+        "ap50": 0.859
+      },
+      "no_right_turn": {
+        "labeled": 8,
+        "tp": 7,
+        "fp": 8,
+        "fn": 1,
+        "precision": 0.467,
+        "recall": 0.875,
+        "ap50": 0.573
+      },
+      "no_u_turn": {
+        "labeled": 27,
+        "tp": 22,
+        "fp": 7,
+        "fn": 5,
+        "precision": 0.759,
+        "recall": 0.815,
+        "ap50": 0.815
+      },
+      "pedestrian_crossing": {
+        "labeled": 41,
+        "tp": 31,
+        "fp": 12,
+        "fn": 10,
+        "precision": 0.721,
+        "recall": 0.756,
+        "ap50": 0.775
+      },
+      "school_zone": {
+        "labeled": 158,
+        "tp": 139,
+        "fp": 35,
+        "fn": 19,
+        "precision": 0.799,
+        "recall": 0.88,
+        "ap50": 0.833
+      }
+    },
+    "speed_values": {
+      "speed_limit:right": 69,
+      "speed_limit:missed": 6,
+      "school_speed_limit:right": 2,
+      "speed_limit:no_value": 3
+    },
+    "readable_speed_limits": 78,
+    "readable_right_value_rate": 0.885,
+    "reported_values": {
+      "unverifiable": 7,
+      "wrong": 7,
+      "right": 75
+    },
+    "wrong_values": [
+      {
+        "image": "valid/shard_000/0049e5b8-afda7206.jpg",
+        "box": [
+          820,
+          384,
+          842,
+          409
+        ],
+        "kind": "speed_limit",
+        "said": 45,
+        "truth": null,
+        "p": 0.999
+      },
+      {
+        "image": "valid/shard_000/10903606-c6c54402.jpg",
+        "box": [
+          634,
+          200,
+          648,
+          227
+        ],
+        "kind": "school_speed_limit",
+        "said": 20,
+        "truth": null,
+        "p": 1.0
+      },
+      {
+        "image": "valid/shard_000/148b9b8a-2f680644.jpg",
+        "box": [
+          709,
+          105,
+          719,
+          126
+        ],
+        "kind": "school_speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.976
+      },
+      {
+        "image": "valid/shard_000/1a02dda3-53bd53b3.jpg",
+        "box": [
+          453,
+          246,
+          467,
+          289
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.92
+      },
+      {
+        "image": "valid/shard_000/20931284-08103a3f.jpg",
+        "box": [
+          69,
+          220,
+          112,
+          240
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.996
+      },
+      {
+        "image": "valid/shard_000/28b3996a-d5e1d98d.jpg",
+        "box": [
+          822,
+          165,
+          852,
+          211
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 1.0
+      },
+      {
+        "image": "valid/shard_000/3290bd24-f20970e2.jpg",
+        "box": [
+          818,
+          152,
+          842,
+          194
+        ],
+        "kind": "speed_limit",
+        "said": 25,
+        "truth": null,
+        "p": 0.966
+      }
+    ],
+    "unverifiable_values": [
+      {
+        "image": "valid/shard_000/000f157f-37797ff9.jpg",
+        "box": [
+          1026,
+          195,
+          1050,
+          232
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/032164cf-8ac0122d.jpg",
+        "box": [
+          648,
+          219,
+          664,
+          245
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/047cf4fc-34ad5b08.jpg",
+        "box": [
+          190,
+          330,
+          210,
+          369
+        ],
+        "kind": "speed_limit",
+        "said": 40
+      },
+      {
+        "image": "valid/shard_000/098c5600-052ad7a6.jpg",
+        "box": [
+          511,
+          158,
+          535,
+          192
+        ],
+        "kind": "speed_limit",
+        "said": 40
+      },
+      {
+        "image": "valid/shard_000/1572db6a-1bcc874c.jpg",
+        "box": [
+          734,
+          172,
+          749,
+          191
+        ],
+        "kind": "speed_limit",
+        "said": 40
+      },
+      {
+        "image": "valid/shard_000/29b74173-8e715c9f.jpg",
+        "box": [
+          668,
+          212,
+          694,
+          252
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      },
+      {
+        "image": "valid/shard_000/2eb8f860-fe862fa1.jpg",
+        "box": [
+          773,
+          238,
+          789,
+          262
+        ],
+        "kind": "speed_limit",
+        "said": 25
+      }
+    ],
+    "value_threshold_sweep": [
+      {
+        "value_conf": 0.5,
+        "readable": 80,
+        "right_on_readable": 72,
+        "wrong_total": 11,
+        "unverifiable": 12,
+        "wrong_or_unverifiable": 23
+      },
+      {
+        "value_conf": 0.6,
+        "readable": 80,
+        "right_on_readable": 72,
+        "wrong_total": 10,
+        "unverifiable": 11,
+        "wrong_or_unverifiable": 21
+      },
+      {
+        "value_conf": 0.7,
+        "readable": 80,
+        "right_on_readable": 72,
+        "wrong_total": 9,
+        "unverifiable": 9,
+        "wrong_or_unverifiable": 18
+      },
+      {
+        "value_conf": 0.8,
+        "readable": 80,
+        "right_on_readable": 71,
+        "wrong_total": 8,
+        "unverifiable": 8,
+        "wrong_or_unverifiable": 16
+      },
+      {
+        "value_conf": 0.85,
+        "readable": 80,
+        "right_on_readable": 71,
+        "wrong_total": 8,
+        "unverifiable": 8,
+        "wrong_or_unverifiable": 16
+      },
+      {
+        "value_conf": 0.9,
+        "readable": 80,
+        "right_on_readable": 71,
+        "wrong_total": 7,
+        "unverifiable": 7,
+        "wrong_or_unverifiable": 14
+      },
+      {
+        "value_conf": 0.93,
+        "readable": 80,
+        "right_on_readable": 71,
+        "wrong_total": 6,
+        "unverifiable": 7,
+        "wrong_or_unverifiable": 13
+      },
+      {
+        "value_conf": 0.95,
+        "readable": 80,
+        "right_on_readable": 71,
+        "wrong_total": 6,
+        "unverifiable": 6,
+        "wrong_or_unverifiable": 12
+      },
+      {
+        "value_conf": 0.97,
+        "readable": 80,
+        "right_on_readable": 69,
+        "wrong_total": 5,
+        "unverifiable": 4,
+        "wrong_or_unverifiable": 9
+      },
+      {
+        "value_conf": 0.98,
+        "readable": 80,
+        "right_on_readable": 68,
+        "wrong_total": 4,
+        "unverifiable": 4,
+        "wrong_or_unverifiable": 8
+      },
+      {
+        "value_conf": 0.99,
+        "readable": 80,
+        "right_on_readable": 66,
+        "wrong_total": 4,
+        "unverifiable": 2,
+        "wrong_or_unverifiable": 6
+      },
+      {
+        "value_conf": 0.995,
+        "readable": 80,
+        "right_on_readable": 62,
+        "wrong_total": 4,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 5
+      },
+      {
+        "value_conf": 0.998,
+        "readable": 80,
+        "right_on_readable": 58,
+        "wrong_total": 3,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 4
+      }
+    ],
+    "timing_eval_loop": {
+      "frames": 2623,
+      "model": "signs_yolo26s_736x1280_fp16.engine",
+      "classifier": "speed_value_cls_96x96_fp16.engine",
+      "median_ms": 6.12,
+      "p95_ms": 9.24
+    },
+    "lowest_value_conf_without_wrong_total": null,
+    "lowest_value_conf_without_wrong_or_unverifiable": null
+  },
+  "public": {
+    "frames": 100,
+    "per_kind": {
+      "speed_limit": {
+        "labeled": 90,
+        "tp": 90,
+        "fp": 6,
+        "fn": 0,
+        "precision": 0.938,
+        "recall": 1.0,
+        "ap50": 0.99
+      },
+      "school_speed_limit": {
+        "labeled": 6,
+        "tp": 6,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "ap50": 1.0
+      }
+    },
+    "speed_values": {
+      "school_speed_limit:right": 5,
+      "school_speed_limit:no_value": 1,
+      "speed_limit:right": 80,
+      "speed_limit:no_value": 6
+    },
+    "readable_speed_limits": 86,
+    "readable_right_value_rate": 0.93,
+    "reported_values": {
+      "right": 85,
+      "wrong": 2
+    },
+    "wrong_values": [
+      {
+        "image": "mph50/mph50_004",
+        "box": [
+          610,
+          610,
+          644,
+          650
+        ],
+        "kind": "speed_limit",
+        "said": 50,
+        "truth": null,
+        "p": 0.999
+      },
+      {
+        "image": "mph50/mph50_009",
+        "box": [
+          461,
+          594,
+          504,
+          647
+        ],
+        "kind": "speed_limit",
+        "said": 50,
+        "truth": null,
+        "p": 0.999
+      }
+    ],
+    "unverifiable_values": [],
+    "value_threshold_sweep": [
+      {
+        "value_conf": 0.5,
+        "readable": 92,
+        "right_on_readable": 87,
+        "wrong_total": 3,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 3
+      },
+      {
+        "value_conf": 0.6,
+        "readable": 92,
+        "right_on_readable": 87,
+        "wrong_total": 3,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 3
+      },
+      {
+        "value_conf": 0.7,
+        "readable": 92,
+        "right_on_readable": 86,
+        "wrong_total": 3,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 3
+      },
+      {
+        "value_conf": 0.8,
+        "readable": 92,
+        "right_on_readable": 86,
+        "wrong_total": 3,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 3
+      },
+      {
+        "value_conf": 0.85,
+        "readable": 92,
+        "right_on_readable": 85,
+        "wrong_total": 2,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 2
+      },
+      {
+        "value_conf": 0.9,
+        "readable": 92,
+        "right_on_readable": 85,
+        "wrong_total": 2,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 2
+      },
+      {
+        "value_conf": 0.93,
+        "readable": 92,
+        "right_on_readable": 85,
+        "wrong_total": 2,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 2
+      },
+      {
+        "value_conf": 0.95,
+        "readable": 92,
+        "right_on_readable": 85,
+        "wrong_total": 2,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 2
+      },
+      {
+        "value_conf": 0.97,
+        "readable": 92,
+        "right_on_readable": 85,
+        "wrong_total": 2,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 2
+      },
+      {
+        "value_conf": 0.98,
+        "readable": 92,
+        "right_on_readable": 85,
+        "wrong_total": 2,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 2
+      },
+      {
+        "value_conf": 0.99,
+        "readable": 92,
+        "right_on_readable": 84,
+        "wrong_total": 2,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 2
+      },
+      {
+        "value_conf": 0.995,
+        "readable": 92,
+        "right_on_readable": 82,
+        "wrong_total": 2,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 2
+      },
+      {
+        "value_conf": 0.998,
+        "readable": 92,
+        "right_on_readable": 77,
+        "wrong_total": 2,
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 2
+      }
+    ],
+    "timing_eval_loop": {
+      "frames": 100,
+      "model": "signs_yolo26s_736x1280_fp16.engine",
+      "classifier": "speed_value_cls_96x96_fp16.engine",
+      "median_ms": 22.09,
+      "p95_ms": 27.77
+    },
+    "lowest_value_conf_without_wrong_total": null,
+    "lowest_value_conf_without_wrong_or_unverifiable": null
+  },
+  "tune": {
+    "frames": 516,
+    "per_kind": {
+      "speed_limit": {
+        "labeled": 31,
+        "tp": 25,
+        "fp": 3,
+        "fn": 6,
+        "precision": 0.893,
+        "recall": 0.806,
+        "ap50": 0.853
+      },
+      "school_speed_limit": {
+        "labeled": 0,
+        "tp": 0,
+        "fp": 4,
+        "fn": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "ap50": null
+      },
+      "stop": {
+        "labeled": 26,
+        "tp": 20,
+        "fp": 3,
+        "fn": 6,
+        "precision": 0.87,
+        "recall": 0.769,
+        "ap50": 0.797
+      },
+      "yield": {
+        "labeled": 7,
+        "tp": 5,
+        "fp": 3,
+        "fn": 2,
+        "precision": 0.625,
+        "recall": 0.714,
+        "ap50": 0.714
+      },
+      "do_not_enter": {
+        "labeled": 12,
+        "tp": 9,
+        "fp": 3,
+        "fn": 3,
+        "precision": 0.75,
+        "recall": 0.75,
+        "ap50": 0.688
+      },
+      "no_turn_on_red": {
+        "labeled": 1,
+        "tp": 1,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.5,
+        "recall": 1.0,
+        "ap50": 0.5
+      },
+      "one_way": {
+        "labeled": 117,
+        "tp": 103,
+        "fp": 27,
+        "fn": 14,
+        "precision": 0.792,
+        "recall": 0.88,
+        "ap50": 0.874
+      },
+      "no_left_turn": {
+        "labeled": 18,
+        "tp": 13,
+        "fp": 4,
+        "fn": 5,
+        "precision": 0.765,
+        "recall": 0.722,
+        "ap50": 0.751
+      },
+      "no_right_turn": {
+        "labeled": 7,
+        "tp": 7,
+        "fp": 1,
+        "fn": 0,
+        "precision": 0.875,
+        "recall": 1.0,
+        "ap50": 0.929
+      },
+      "no_u_turn": {
+        "labeled": 4,
+        "tp": 2,
+        "fp": 1,
+        "fn": 2,
+        "precision": 0.667,
+        "recall": 0.5,
+        "ap50": 0.5
+      },
+      "pedestrian_crossing": {
+        "labeled": 9,
+        "tp": 7,
+        "fp": 3,
+        "fn": 2,
+        "precision": 0.7,
+        "recall": 0.778,
+        "ap50": 0.806
+      },
+      "school_zone": {
+        "labeled": 49,
+        "tp": 46,
+        "fp": 4,
+        "fn": 3,
+        "precision": 0.92,
+        "recall": 0.939,
+        "ap50": 0.951
+      }
+    },
+    "speed_values": {
+      "speed_limit:right": 19,
+      "speed_limit:no_value": 6,
+      "speed_limit:missed": 4
+    },
+    "readable_speed_limits": 29,
+    "readable_right_value_rate": 0.655,
+    "reported_values": {
+      "right": 21,
+      "unverifiable": 1
+    },
+    "wrong_values": [],
+    "unverifiable_values": [
+      {
+        "image": "2db6f386-71e116f8.jpg",
+        "box": [
+          1248,
+          232,
+          1272,
+          270
+        ],
+        "kind": "speed_limit",
+        "said": 20
+      }
+    ],
+    "value_threshold_sweep": [
+      {
+        "value_conf": 0.5,
+        "readable": 29,
+        "right_on_readable": 19,
+        "wrong_total": 1,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 2
+      },
+      {
+        "value_conf": 0.6,
+        "readable": 29,
+        "right_on_readable": 19,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.7,
+        "readable": 29,
+        "right_on_readable": 19,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.8,
+        "readable": 29,
+        "right_on_readable": 19,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.85,
+        "readable": 29,
+        "right_on_readable": 19,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.9,
+        "readable": 29,
+        "right_on_readable": 19,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.93,
+        "readable": 29,
+        "right_on_readable": 18,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.95,
+        "readable": 29,
+        "right_on_readable": 18,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.97,
+        "readable": 29,
+        "right_on_readable": 18,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.98,
+        "readable": 29,
+        "right_on_readable": 18,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.99,
+        "readable": 29,
+        "right_on_readable": 18,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.995,
+        "readable": 29,
+        "right_on_readable": 18,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      },
+      {
+        "value_conf": 0.998,
+        "readable": 29,
+        "right_on_readable": 17,
+        "wrong_total": 0,
+        "unverifiable": 1,
+        "wrong_or_unverifiable": 1
+      }
+    ],
+    "timing_eval_loop": {
+      "frames": 516,
+      "model": "signs_yolo26s_736x1280_fp16.engine",
+      "classifier": "speed_value_cls_96x96_fp16.engine",
+      "median_ms": 6.16,
+      "p95_ms": 9.13
+    },
+    "lowest_value_conf_without_wrong_total": 0.6,
+    "lowest_value_conf_without_wrong_or_unverifiable": null
+  },
+  "value_classifier": {
+    "weights": "speed_value_cls.pt",
+    "model": "speed_value_cls_96x96_fp16.engine",
+    "configured_views": 5,
+    "validation_views5": {
+      "sweep": [
+        {
+          "threshold": 0.5,
+          "right": 24,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.6,
+          "right": 24,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.7,
+          "right": 24,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.8,
+          "right": 24,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.85,
+          "right": 23,
+          "wrong": 1,
+          "withheld": 1439
+        },
+        {
+          "threshold": 0.9,
+          "right": 23,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.93,
+          "right": 23,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.95,
+          "right": 23,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.97,
+          "right": 22,
+          "wrong": 0,
+          "withheld": 1441
+        },
+        {
+          "threshold": 0.98,
+          "right": 22,
+          "wrong": 0,
+          "withheld": 1441
+        },
+        {
+          "threshold": 0.99,
+          "right": 22,
+          "wrong": 0,
+          "withheld": 1441
+        },
+        {
+          "threshold": 0.995,
+          "right": 21,
+          "wrong": 0,
+          "withheld": 1442
+        },
+        {
+          "threshold": 0.998,
+          "right": 18,
+          "wrong": 0,
+          "withheld": 1445
+        }
+      ],
+      "lowest_safe": 0.9
+    },
+    "threshold_from_validation": 0.9,
+    "validation_boxes": {
+      "bdd": 280,
+      "bddother": 1180,
+      "hardneg": 3
+    },
+    "ctacke_val_sweep": [
+      {
+        "threshold": 0.5,
+        "right": 92,
+        "wrong": 0,
+        "withheld": 0
+      },
+      {
+        "threshold": 0.6,
+        "right": 91,
+        "wrong": 0,
+        "withheld": 1
+      },
+      {
+        "threshold": 0.7,
+        "right": 89,
+        "wrong": 0,
+        "withheld": 3
+      },
+      {
+        "threshold": 0.8,
+        "right": 89,
+        "wrong": 0,
+        "withheld": 3
+      },
+      {
+        "threshold": 0.85,
+        "right": 88,
+        "wrong": 0,
+        "withheld": 4
+      },
+      {
+        "threshold": 0.9,
+        "right": 88,
+        "wrong": 0,
+        "withheld": 4
+      },
+      {
+        "threshold": 0.93,
+        "right": 88,
+        "wrong": 0,
+        "withheld": 4
+      },
+      {
+        "threshold": 0.95,
+        "right": 88,
+        "wrong": 0,
+        "withheld": 4
+      },
+      {
+        "threshold": 0.97,
+        "right": 87,
+        "wrong": 0,
+        "withheld": 5
+      },
+      {
+        "threshold": 0.98,
+        "right": 87,
+        "wrong": 0,
+        "withheld": 5
+      },
+      {
+        "threshold": 0.99,
+        "right": 85,
+        "wrong": 0,
+        "withheld": 7
+      },
+      {
+        "threshold": 0.995,
+        "right": 84,
+        "wrong": 0,
+        "withheld": 8
+      },
+      {
+        "threshold": 0.998,
+        "right": 78,
+        "wrong": 0,
+        "withheld": 14
+      }
+    ],
+    "heldout_original": {
+      "readable_sweep": [
+        {
+          "threshold": 0.5,
+          "right": 74,
+          "wrong": 0,
+          "withheld": 6
+        },
+        {
+          "threshold": 0.6,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 8
+        },
+        {
+          "threshold": 0.7,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 8
+        },
+        {
+          "threshold": 0.8,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 8
+        },
+        {
+          "threshold": 0.85,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 8
+        },
+        {
+          "threshold": 0.9,
+          "right": 70,
+          "wrong": 0,
+          "withheld": 10
+        },
+        {
+          "threshold": 0.93,
+          "right": 70,
+          "wrong": 0,
+          "withheld": 10
+        },
+        {
+          "threshold": 0.95,
+          "right": 68,
+          "wrong": 0,
+          "withheld": 12
+        },
+        {
+          "threshold": 0.97,
+          "right": 68,
+          "wrong": 0,
+          "withheld": 12
+        },
+        {
+          "threshold": 0.98,
+          "right": 68,
+          "wrong": 0,
+          "withheld": 12
+        },
+        {
+          "threshold": 0.99,
+          "right": 68,
+          "wrong": 0,
+          "withheld": 12
+        },
+        {
+          "threshold": 0.995,
+          "right": 66,
+          "wrong": 0,
+          "withheld": 14
+        },
+        {
+          "threshold": 0.998,
+          "right": 58,
+          "wrong": 0,
+          "withheld": 22
+        }
+      ],
+      "all_sweep": [
+        {
+          "threshold": 0.5,
+          "right": 79,
+          "wrong": 0,
+          "withheld": 7
+        },
+        {
+          "threshold": 0.6,
+          "right": 77,
+          "wrong": 0,
+          "withheld": 9
+        },
+        {
+          "threshold": 0.7,
+          "right": 77,
+          "wrong": 0,
+          "withheld": 9
+        },
+        {
+          "threshold": 0.8,
+          "right": 76,
+          "wrong": 0,
+          "withheld": 10
+        },
+        {
+          "threshold": 0.85,
+          "right": 76,
+          "wrong": 0,
+          "withheld": 10
+        },
+        {
+          "threshold": 0.9,
+          "right": 74,
+          "wrong": 0,
+          "withheld": 12
+        },
+        {
+          "threshold": 0.93,
+          "right": 74,
+          "wrong": 0,
+          "withheld": 12
+        },
+        {
+          "threshold": 0.95,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 14
+        },
+        {
+          "threshold": 0.97,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 14
+        },
+        {
+          "threshold": 0.98,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 14
+        },
+        {
+          "threshold": 0.99,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 14
+        },
+        {
+          "threshold": 0.995,
+          "right": 70,
+          "wrong": 0,
+          "withheld": 16
+        },
+        {
+          "threshold": 0.998,
+          "right": 60,
+          "wrong": 0,
+          "withheld": 26
+        }
+      ],
+      "top1_mistakes": []
+    },
+    "heldout_fresh": {
+      "readable_sweep": [
+        {
+          "threshold": 0.5,
+          "right": 73,
+          "wrong": 0,
+          "withheld": 5
+        },
+        {
+          "threshold": 0.6,
+          "right": 73,
+          "wrong": 0,
+          "withheld": 5
+        },
+        {
+          "threshold": 0.7,
+          "right": 73,
+          "wrong": 0,
+          "withheld": 5
+        },
+        {
+          "threshold": 0.8,
+          "right": 73,
+          "wrong": 0,
+          "withheld": 5
+        },
+        {
+          "threshold": 0.85,
+          "right": 73,
+          "wrong": 0,
+          "withheld": 5
+        },
+        {
+          "threshold": 0.9,
+          "right": 73,
+          "wrong": 0,
+          "withheld": 5
+        },
+        {
+          "threshold": 0.93,
+          "right": 73,
+          "wrong": 0,
+          "withheld": 5
+        },
+        {
+          "threshold": 0.95,
+          "right": 73,
+          "wrong": 0,
+          "withheld": 5
+        },
+        {
+          "threshold": 0.97,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 6
+        },
+        {
+          "threshold": 0.98,
+          "right": 71,
+          "wrong": 0,
+          "withheld": 7
+        },
+        {
+          "threshold": 0.99,
+          "right": 68,
+          "wrong": 0,
+          "withheld": 10
+        },
+        {
+          "threshold": 0.995,
+          "right": 65,
+          "wrong": 0,
+          "withheld": 13
+        },
+        {
+          "threshold": 0.998,
+          "right": 63,
+          "wrong": 0,
+          "withheld": 15
+        }
+      ],
+      "all_sweep": [
+        {
+          "threshold": 0.5,
+          "right": 79,
+          "wrong": 1,
+          "withheld": 8
+        },
+        {
+          "threshold": 0.6,
+          "right": 79,
+          "wrong": 1,
+          "withheld": 8
+        },
+        {
+          "threshold": 0.7,
+          "right": 79,
+          "wrong": 1,
+          "withheld": 8
+        },
+        {
+          "threshold": 0.8,
+          "right": 78,
+          "wrong": 1,
+          "withheld": 9
+        },
+        {
+          "threshold": 0.85,
+          "right": 78,
+          "wrong": 1,
+          "withheld": 9
+        },
+        {
+          "threshold": 0.9,
+          "right": 78,
+          "wrong": 1,
+          "withheld": 9
+        },
+        {
+          "threshold": 0.93,
+          "right": 78,
+          "wrong": 1,
+          "withheld": 9
+        },
+        {
+          "threshold": 0.95,
+          "right": 78,
+          "wrong": 1,
+          "withheld": 9
+        },
+        {
+          "threshold": 0.97,
+          "right": 77,
+          "wrong": 1,
+          "withheld": 10
+        },
+        {
+          "threshold": 0.98,
+          "right": 76,
+          "wrong": 1,
+          "withheld": 11
+        },
+        {
+          "threshold": 0.99,
+          "right": 73,
+          "wrong": 1,
+          "withheld": 14
+        },
+        {
+          "threshold": 0.995,
+          "right": 70,
+          "wrong": 0,
+          "withheld": 18
+        },
+        {
+          "threshold": 0.998,
+          "right": 67,
+          "wrong": 0,
+          "withheld": 21
+        }
+      ],
+      "top1_mistakes": [
+        {
+          "truth": 30,
+          "said": 25,
+          "p": 0.994
+        }
+      ]
+    }
   }
 }

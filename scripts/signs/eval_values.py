@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     quant: dict[str, Any] = {"quantize": 16} if s.half else {}
 
     def classify(crops: list[np.ndarray]) -> list[tuple[int | None, float]]:
-        res = model.predict(crops, imgsz=s.classifier_imgsz, device=0, verbose=False, **quant)
+        res: Any = model.predict(crops, imgsz=s.classifier_imgsz, device=0, verbose=False, **quant)
         return [top_reading(r.probs.data.float().cpu().numpy(), names) for r in res]
 
     views_list = args.views or [s.value_views]

@@ -129,5 +129,6 @@ for d in signs.detect(frame):  # frame: core.types.Frame (1280x720 or 1920x1080)
 ```
 
 Call `SignDetector` from one thread (the one that constructed it, or call `warmup()` there first). A value is
-reported only when the classifier is at least `signs.value_conf` sure and the sign is at least `signs.value_min_px`
-tall (at 1280 px frame width). Announcing a new limit should still wait for two agreeing frames (V2_BUILD_PLAN).
+reported only when all `signs.value_views` crops of the sign (shifted/scaled) read the same number, each at least
+`signs.value_conf` sure, the sign is at least `signs.value_min_px` tall (at 1280 px frame width) and doesn't touch
+the frame border. Announcing a new limit should still wait for two agreeing frames (V2_BUILD_PLAN).
