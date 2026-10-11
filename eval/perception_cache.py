@@ -15,8 +15,9 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
+import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,8 +49,15 @@ def settings_key(cfg: AppConfig) -> str:
     return hashlib.sha1(json.dumps(data, sort_keys=True).encode()).hexdigest()[:12]
 
 
-def build_cache(cfg: AppConfig, clip: Path, out: Path) -> int:
-    """Run perception lock-step over the whole clip and write the cache; returns the number of frames."""
+def build_cache(
+    cfg: AppConfig,
+    clip: Path,
+    out: Path,
+    max_s: float | None = None,
+    progress: Callable[[float], None] | None = None,
+) -> int:
+    """Run perception lock-step over the clip (or its first `max_s` seconds: `scripts/align_gpx.py` on a long
+    drive) and write the cache; returns the number of frames. `progress(t)` is called every 10 s of video."""
     from capture.file_source import FileSource
     from perception.detector import Detector
     from perception.ego_motion import EgoMotionEstimator
@@ -59,8 +67,16 @@ def build_cache(cfg: AppConfig, clip: Path, out: Path) -> int:
     source = FileSource(clip, realtime=False)
     worker = PerceptionWorker(source, detector, EgoMotionEstimator(cfg.ego_motion))
     frames: list[CachedFrame] = []
+    enough = threading.Event()
+    reported = [0.0]
 
     def listener(result: PerceptionResult) -> None:
+        if max_s is not None and result.frame.t > max_s:
+            enough.set()
+            return
+        if progress is not None and result.frame.t - reported[0] >= 10.0:
+            reported[0] = result.frame.t
+            progress(result.frame.t)
         h = result.ego.homography
         frames.append(
             CachedFrame(
@@ -77,7 +93,7 @@ def build_cache(cfg: AppConfig, clip: Path, out: Path) -> int:
     worker.add_listener(listener)
     source.start()
     worker.start()
-    while worker.running:
+    while worker.running and not enough.is_set():
         time.sleep(0.05)
     worker.stop()
     source.stop()
@@ -85,6 +101,8 @@ def build_cache(cfg: AppConfig, clip: Path, out: Path) -> int:
         raise RuntimeError(f"perception failed on {clip}") from worker.error
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = {"version": CACHE_VERSION, "settings": settings_key(cfg), "clip": str(clip), "frames": frames}
+    if max_s is not None:
+        payload["max_s"] = max_s
     tmp = out.with_suffix(".tmp")
     with tmp.open("wb") as fh:
         pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)

@@ -101,6 +101,7 @@ truststore==0.10.4
 types-pyyaml==6.0.12.20260906
 typing-extensions==4.16.0
 typing-inspection==0.4.4
+tzdata==2026.5
 ultralytics==8.4.175
 ultralytics-platform==0.1.83
 ultralytics-thop==2.2.2

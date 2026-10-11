@@ -53,6 +53,42 @@
         "video.file.hfov_deg=60"
       ],
       "port": 8000
+    },
+    {
+      "name": "drivepilot-signs",
+      "runtimeExecutable": "C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": [
+        "-m",
+        "app",
+        "--video",
+        "data/videos/dev/ego_holdout_long_stop__b5aa77fa-b1916843.mov",
+        "--gpx",
+        "data/gps/b5aa77fa-b1916843.gpx",
+        "--no-voice",
+        "--no-audio",
+        "--set",
+        "video.file.hfov_deg=60"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "drivepilot-green",
+      "runtimeExecutable": "C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": [
+        "-m",
+        "app",
+        "--video",
+        "data/videos/dev/red_light_turns_green_sf__b97b9ee8-612c36ef.mov",
+        "--gpx",
+        "data/gps/b97b9ee8-612c36ef.gpx",
+        "--no-voice",
+        "--no-audio",
+        "--set",
+        "video.file.hfov_deg=60",
+        "--ask",
+        "28=tell me when it's green"
+      ],
+      "port": 8000
     }
   ]
 }

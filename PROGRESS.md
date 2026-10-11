@@ -5,6 +5,38 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 ## Done
 
 ### V2 (in progress, 2026-10-10): V2-M0..M6 built (M1 parking below the bar; M5 drift below its bars); M8 partly
+- **`scripts/align_gpx.py` for our own drives** (2026-10-11, by an agent, reviewed and refactored here;
+  `nav/align.py`, 44 tests): phone video (`VID_YYYYMMDD_HHMMSS`, Pacific time, DST-aware; `tzdata` added for
+  Windows) + GPSLogger GPX (1.0, or 1.1 with speed in extensions, or no speed) -> a copy of the GPX with the
+  `video_start` waypoint. The start comes from the file name (default) and the MP4 `creation_time` via PyAV (start
+  or end of the recording decided from name + duration; a warning when they disagree by > 2 s), then is refined by
+  the first clean pull-away from a stop: ego motion "stopped -> moving" vs the GPS speed rising, checked against
+  the same stop's arrival ("high") and the stopped/moving agreement over the overlap; only "high" matches are
+  applied by default, else the timestamp start is kept and the summary says so. **Validation** (the agent's, on
+  BDD100K clips with a known `video_start` shifted by -9..+8 s, cached ego motion): 6 of 70 clips had a usable stop
+  and pull-away, and the start came back within 0.32 s on 53 of 54 tries (the 54th: -1.15 s, an ambiguous first
+  stop skipped); the other 64 clips correctly report "no refinement"; "medium" matches (parked at the start) were
+  off by up to 13 s, so they're opt-in. Re-checked here end to end on the GPU (592aaebe, start 2 s late): -0.23 s.
+  `eval.perception_cache.build_cache` takes `max_s` now (the tool caches only the first `--search-s` seconds).
+- **Test sheet, all 45 rows** (`eval/run_sheet.py`, lanes + signs + parking watch in lock-step, judge Claude Haiku,
+  `runs/20261010-233000_sheet`): **32 right, 8 partly, 5 wrong** (71 % right). The 29 original rows: 21 / 6 / 2
+  (before: 22 / 3 / 4: rows flip both ways run to run; the model and the judge vary). The 16 new V2 rows: 11 / 2 / 3:
+  lanes 4/5 (+ row 30 after the fix below), memory 2/3, signs 36 right (30 mph), road/safety 38-39 right/partly,
+  parking 40-42 right, 43 wrong (deflected to the stop sign), 44 partly (can't read the time limit). **Fixed from
+  it** (re-run of the changed rows, `runs/20261010-234026_sheet` and the next one): "which lane am I in?" was routed
+  to lane *guidance* and said "There's no destination set" without a route (now the camera answers it: row 30 wrong
+  -> right, "the middle lane"); a hidden `[ref N]` tag left "green,." / "30 mph,." (punctuation cleaned up); a
+  model answer saying our light is green now ends with "Check the intersection before you go." like the local
+  light answers (row 8 partly -> right); sign questions also get close-ups of the signs the detectors saw in the
+  last 5 s (`vision.sign_closeups`, labeled with the detector's guess); memory questions about signs send their
+  frames at the kept 960 px instead of 640 (row 35, a night exit sign: the model had invented "Washington St / San
+  Bruno Exwy / 170 St"; now "Cross Bronx Expwy" and "178 St" are right, the rest still wrong). Not fixed: row 14
+  (two DO NOT ENTER signs 28 px tall in the rain: the detector sees them, the close-up is too blurry, and the model
+  rightly won't name a sign it can't read: the detector's kind is 62-81 % precise per box on BDD, too unsure to
+  speak), row 10 (a street name it can't read), row 25 (invented a DO NOT ENTER sign for "can I park here?").
+- **README screenshots** of the V2 page (`docs/screenshots/`, taken in the browser pane on 4 replays: highway
+  lanes + "which lane am I in?", the speed-limit alert and badge, a pedestrian pulsing at a red light, "tell me when
+  it's green"). Found while taking them: the two answer bugs above. `DEMO.md`: a 7-replay demo plan.
 - **Full app with everything on (lanes + signs), `scripts/bench_app.py --silent`, GPU free** (2026-10-10 23:27):
   **every target met, twice** (`runs/20261010-232722_bench_app`, `runs/20261010-232825_bench_app`): local answers
   0.58 / 0.62 s and 0.57 / 0.73 s (median / p90, target 1.0), model answers 1.32 / 1.37 s and 1.55 / 1.59 s (2.5),
@@ -539,6 +571,11 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
+- **`align_gpx.py` is untested on a real OnePlus + GPSLogger pair** (none exists yet): whether OnePlus writes
+  `creation_time` at the start or the end is detected, not known; GPSLogger's speed field placement is handled in
+  every form seen in GPX files; the 0.25 s pull-away bias and the thresholds come from BDD100K's iPhone data. A drive
+  needs a full stop + pull-away in its first `--search-s` (180 s) for the refinement, else the timestamp start
+  (±1 s) is used. Speed from positions (no speed in the GPX) is less precise (one clip -1.65 s).
 - **The sign detector takes a hi-vis vest for a school sign** (school-zone dev clip, 12.2-12.5 s, conf 0.72, two
   frames): inside a zone that's quiet now, but on its own it would say "School zone ahead." once. Not tuned away
   (one case; raising `signs.class_conf.school_zone` would cost real distant signs, which score 0.66-0.9).

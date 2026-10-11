@@ -38,6 +38,7 @@ httpx==0.28.1
 google-genai==2.29.0
 anthropic==1.13.0
 gpxpy==1.6.2
+tzdata==2026.5             # time-zone database for zoneinfo (Windows has none): scripts/align_gpx.py
 
 # GPU monitoring
 nvidia-ml-py==13.615.71

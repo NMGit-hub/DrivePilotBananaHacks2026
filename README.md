@@ -9,15 +9,28 @@ to be in, which roundabout exit, what a sign means, whether you can park here.
 - **Model only when needed:** sign, parking, traffic-light, lane and road questions go to a vision-language
   model (Claude Haiku by default; Gemini Flash or a local Ollama model via `config.yaml`) with the latest frames.
 - **Navigation:** Mapbox route + phone GPS for lane guidance, roundabout exits and route questions.
-- **V2 (in progress):** an overlay screen (car badges for the 4-way stop, the light's state, pedestrians, the
-  navigation banner with lanes, speed and speed limit, our lane), "what was that sign?" with the frame it answered
-  from, the object an answer is about pulsing on screen, "find me a parking spot", pedestrian and cyclist warnings
-  ("Pedestrian stepping into the road on your right."), YOLOPv2 lane detection (which lane we're in, for lane
-  guidance) with a drift warning ("Careful, you're drifting right." above 25 mph), and the fine-tuned US sign
-  detector ("Speed limit is now 35.").
+- **V2:** an overlay screen (car badges for the 4-way stop, the light's state, pedestrians, the navigation banner
+  with lanes, speed and speed limit, our lane), "what was that sign?" with the frame it answered from, the object
+  an answer is about pulsing on screen, "find me a parking spot", pedestrian and cyclist warnings ("Pedestrian
+  stepping into the road on your right."), YOLOPv2 lane detection (which lane we're in, for lane guidance) with a
+  drift warning ("Careful, you're drifting right." above 25 mph), and a fine-tuned US sign detector ("Speed limit
+  is now 35.", "School zone ahead."). All of it runs at once on the laptop GPU within the latency targets
+  (PROGRESS.md). Parking spots and drift warnings are below their accuracy bars on public footage and need our own
+  drives to tune (PROGRESS.md "Known issues").
 
 See [PLAN.md](PLAN.md) for the full design, [V2_BUILD_PLAN.md](V2_BUILD_PLAN.md) for V2 and
 [PROGRESS.md](PROGRESS.md) for current status, measurements and known limits.
+
+## Screenshots
+
+The V2 screen on public BDD100K replays (the video with its overlays on the left, the conversation on the right):
+
+| | |
+| --- | --- |
+| ![Highway: our lane's lines from YOLOPv2, tracked cars, GPS speed, "which lane am I in?"](docs/screenshots/v2_lanes_highway.jpg) | ![The sign detector's "Speed limit is now 30." alert, the speed-limit badge and a typed question](docs/screenshots/v2_speed_limit.jpg) |
+| Highway: our lane (YOLOPv2), tracked cars, speed from GPS, "which lane am I in?" | A SPEED LIMIT 30 sign: the alert, the limit badge, and the answer |
+| ![Stopped at a red light: the pedestrian crossing in front, outlined in amber and pulsing because the answer is about her](docs/screenshots/v2_pedestrian_red_light.jpg) | !["Tell me when it's green", then "Light's green, check the intersection and go."](docs/screenshots/v2_light_green.jpg) |
+| At a red light: the person crossing pulses because the answer is about her | "Tell me when it's green" and the alert when it turns |
 
 ## Requirements
 
@@ -88,6 +101,35 @@ adb reverse tcp:8000 tcp:8000
 
 For drives: plug the laptop into its own charger and set Windows to **Best performance** power mode.
 
+### Record your own drive (video + GPS) and replay it
+
+1. **Video:** the phone's camera app (OnePlus 12: 0.6x ultrawide, 1080p 30 fps), phone mounted on the
+   windshield. Keep the file name (`VID_YYYYMMDD_HHMMSS.mp4`): it holds the start time.
+2. **GPS:** the GPSLogger app (Android): log to GPX (1.0 or 1.1), logging interval 1 second, distance filter 0,
+   no accuracy filter. Start logging before you press record and stop it after.
+3. Drive through at least one full stop (a red light or a stop sign) in the first 3 minutes: that is what the
+   timing is matched on (a pull-away from a parking space isn't trusted).
+4. Copy the video to `data/videos/own/` and the GPX to `data/gps/`, then run:
+
+   ```powershell
+   .venv/Scripts/python scripts/align_gpx.py data/videos/own/VID_20261011_143022.mp4 data/gps/20261011.gpx
+   ```
+
+   It prints the start time from the file name (Pacific time; `--tz` to change it) and from the video's
+   `creation_time` (and warns if they disagree by more than 2 s), then refines it by matching the first pull-away
+   from a stop in the video (ego motion; it builds the perception cache for the first 3 minutes on the GPU) with
+   the GPS speed rising, with a confidence. If nothing matches it says so and keeps the timestamp start (±1 s).
+   It writes `data/gps/20261011.aligned.gpx` (the original GPX is never changed) and prints the replay command:
+
+   ```powershell
+   .venv/Scripts/python -m app --video data/videos/own/VID_20261011_143022.mp4 --gpx data/gps/20261011.aligned.gpx --set video.file.hfov_deg=null
+   ```
+
+   `hfov_deg=null` uses the phone's 114° field of view instead of BDD100K's 60°. Options: `--no-refine`
+   (timestamps only, no GPU), `--start 2026-10-11T14:30:22.4` (a renamed file), `--search-s 600` (no stop early
+   on). On BDD100K clips with a known start, shifted by -9..+8 s, it recovered the start within 0.32 s on 53 of 54
+   tries (nav/align.py has the method).
+
 ## Tools
 
 ```powershell
@@ -108,6 +150,7 @@ For drives: plug the laptop into its own charger and set Windows to **Best perfo
 .venv/Scripts/python scripts/eval_lanes.py drift       # drift warnings on the highway clips (GPS speed)
 .venv/Scripts/python scripts/eval_lanes.py virtual --clip data/videos/highway/<id>.mov   # a warped slow drift
 .venv/Scripts/python scripts/find_bdd_clips.py --scene "parking lot" --min-crawl-s 15 --max-mph 15 --fetch 10
+.venv/Scripts/python scripts/align_gpx.py data/videos/own/VID_<...>.mp4 data/gps/<track>.gpx   # own drive + GPX: video_start
 ```
 
 ## Configuration
