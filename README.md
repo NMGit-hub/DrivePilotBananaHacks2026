@@ -98,9 +98,10 @@ adb reverse tcp:8000 tcp:8000
 - **Destination:** type it in the **Where to?** box on the page (suggestions as you type, recent places as
   chips, **End route** to stop), say "I'm going to ...", or start with `--destination "Costco"` (set as soon
   as there's a GPS fix).
-- **Said without asking** (`alerts.auto`, each switchable under Settings on the page): "Light's green." when
-  our light changes while we wait ("Light's green. Check before you go."), "The car ahead is moving." (never at a red light), turn-by-turn ("In half a
-  mile, turn right onto Main Street."), "You're in the wrong lane for your turn. Move one lane left.",
+- **Said without asking** (`alerts.auto`, each switchable under Settings on the page): "Light's green. Check
+  before you go." when our light changes while we wait, "The car ahead is moving." (never at a red light),
+  turn-by-turn ("In half a mile, turn right onto Main Street."), "You're in the wrong lane for your turn. Move
+  one lane left.",
   "You're over the limit. It's 30 here.", "Stop sign ahead." Pedestrian, cyclist and drift warnings are always
   on. Quiet mode mutes all but the turn-by-turn and wrong-lane guidance.
 - On the phone, open <http://localhost:8000/gps> and tap Start: it sends the location once a second.
