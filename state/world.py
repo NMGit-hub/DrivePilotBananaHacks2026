@@ -28,6 +28,7 @@ from perception.detector import VEHICLE_CLASSES, Track
 from perception.pipeline import PerceptionResult
 from state.approach import LEAD, classify_approach, front_of_approach, is_clipped
 from state.colors import color_name, frame_gains
+from state.heads_up import CarAheadWatch, StopSignWatch
 from state.parking import EMPTY as EMPTY_PARKING
 from state.parking import ParkingEvent, ParkingSnapshot, ParkingTracker
 from state.pedestrians import EMPTY as EMPTY_PEDESTRIANS
@@ -120,6 +121,8 @@ class WorldState:
         self.lights = TrafficLightTracker(cfg.traffic_light)
         self.parking = ParkingTracker(cfg.parking, cfg.effective_hfov_deg)
         self.pedestrians = PedestrianTracker(cfg.pedestrians, cfg.effective_hfov_deg, cfg.parking.camera_height_m)
+        self.car_ahead = CarAheadWatch(cfg.alerts.auto)  # "The car ahead is moving." (state/heads_up.py)
+        self.stop_signs = StopSignWatch(cfg.alerts.auto)  # "Stop sign ahead."
         self._parking_mode: str | None = None  # a mode change asked by the parking watch (applied on the next frame)
         self._colors: dict[int, tuple[float, str]] = {}  # track id -> (when named, color)
         self._frames: deque[Frame] = deque()  # guarded by _lock
@@ -139,6 +142,8 @@ class WorldState:
         self.lights.reset()
         self.parking.reset()
         self.pedestrians.reset()
+        self.car_ahead.reset()
+        self.stop_signs.reset()
         self._colors.clear()
         with self._lock:
             self._frames.clear()
@@ -223,10 +228,18 @@ class WorldState:
         if turned_green:
             events.append(WorldEvent("light_green", t, {"ego_stopped": ego.stopped}))
 
+        lead_box = (lead.track_id, lead.box[3] - lead.box[1]) if lead is not None else None
+        if self.car_ahead.update(t, ego.stopped, ego.stopped_since, ego.confident, lead_box):
+            events.append(WorldEvent("car_ahead_moving", t, {"track": lead_box[0] if lead_box else None}))
+
         mode, self._parking_mode = self._parking_mode, None
         if mode is not None:
             self.parking.set_mode(mode)
         gps_speed = self._gps_speed(t)
+        moving = not ego.stopped and ego.confident
+        sign_id = self.stop_signs.update(t, moving, gps_speed, signs, frame.width, frame.height)
+        if sign_id is not None:
+            events.append(WorldEvent("stop_sign_ahead", t, {"track": sign_id}))
         for pe in self.parking.update(
             t, frame.width, frame.height, result.tracks, ego.stopped, ego.homography, gps_speed
         ):

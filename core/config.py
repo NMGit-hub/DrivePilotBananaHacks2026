@@ -161,6 +161,10 @@ class NavConfig(_Strict):
     lane_reminders_m: Annotated[tuple[float, ...], Strict(False)] = Field(  # YAML gives a list
         (1609.0, 402.0), description="PLAN.md: lane reminders about 1 mile and 0.25 mile before a junction."
     )
+    turn_prompts_m: Annotated[tuple[float, ...], Strict(False)] = Field(  # YAML gives a list
+        (800.0, 150.0),
+        description="Turn-by-turn (alerts.auto.turns): each maneuver is announced when we come within these distances.",
+    )
 
 
 # --------------------------------------------------------------------------------------- perception
@@ -349,6 +353,59 @@ class TrafficLightConfig(_Strict):
 # ------------------------------------------------------------------------------------------- answers
 
 
+class AutoAlertsConfig(_Strict):
+    """What DrivePilot says on its own, without being asked (answers/auto_alerts.py). Each one can also be switched
+    on and off on the page while running. Safety warnings (pedestrians, drift) are always on."""
+
+    light_green: bool = Field(True, description="\"Light's green.\" when our light turns green while we wait at it.")
+    car_ahead: bool = Field(
+        True, description='"The car ahead is moving." stopped behind a car that pulls away while we stay put.'
+    )
+    turns: bool = Field(True, description='Turn-by-turn while navigating: "In half a mile, turn right onto Main St."')
+    wrong_lane: bool = Field(
+        True, description="Navigating: \"You're in the wrong lane for your turn. Move one lane left.\" (lane detection)"
+    )
+    speeding: bool = Field(True, description="\"You're over the limit. It's 30 here.\" (sign detector + GPS speed)")
+    stop_sign: bool = Field(True, description='"Stop sign ahead." while driving toward one.')
+    car_ahead_wait_s: float = Field(
+        2.0, ge=0.0, description="We must have been stopped this long behind the car before it pulls away..."
+    )
+    car_ahead_delay_s: float = Field(
+        1.5, ge=0.0, description="...and still be stopped this long after it started moving (no nagging)."
+    )
+    car_ahead_shrink: float = Field(
+        0.15, gt=0.0, lt=1.0, description="The car ahead counts as pulling away once its box is this much smaller."
+    )
+    wrong_lane_within_m: float = Field(800.0, gt=0.0, description="Wrong-lane warnings within this far of the turn...")
+    wrong_lane_hold_s: float = Field(
+        2.0, ge=0.0, description="...once lane detection has put us in a wrong lane this long (not mid lane change)."
+    )
+    wrong_lane_repeat_m: float = Field(
+        250.0, ge=0.0, description="Still in a wrong lane this close to the turn: said once more (0 = never)."
+    )
+    speeding_margin_mph: float = Field(5.0, ge=0.0, description="Over the posted limit by more than this...")
+    speeding_hold_s: float = Field(4.0, ge=0.0, description="...for this long.")
+    speeding_repeat_s: float = Field(
+        120.0, gt=0.0, description="Not said again for the same limit until this long after we slowed down."
+    )
+    speeding_limit_max_age_s: float = Field(
+        600.0,
+        gt=0.0,
+        description="A limit read longer ago than this isn't used (we may be on another road). School limits are "
+        "never used: they depend on the hours.",
+    )
+    stop_sign_min_speed_mps: float = Field(
+        4.0, ge=0.0, description="Only while driving at least this fast (GPS; without GPS: ego motion moving)."
+    )
+    stop_sign_min_height: float = Field(
+        0.025, gt=0.0, lt=1.0, description="The sign's box must be this tall (share of the frame): close, not far off."
+    )
+    stop_sign_min_x: float = Field(
+        0.35, ge=0.0, le=1.0, description="...and centered right of this share of the width (US signs are on the right)."
+    )
+    stop_sign_repeat_s: float = Field(20.0, ge=0.0, description="Another stop sign this soon is not announced.")
+
+
 class AlertsConfig(_Strict):
     """Spoken alerts (answers/alerts.py)."""
 
@@ -367,6 +424,7 @@ class AlertsConfig(_Strict):
         "ahead: a group crossing) is not said again; a different kind or the other side is. Each person is warned "
         "about once anyway.",
     )
+    auto: AutoAlertsConfig = AutoAlertsConfig()
 
 
 class PedestriansConfig(_Strict):
@@ -881,12 +939,40 @@ class TtsConfig(_Strict):
     listen_chime: bool = Field(True, description="A short tone when the wake word is heard.")
 
 
+class OpenMicConfig(_Strict):
+    """Listening without the full wake word (`voice.wake_mode` "hey" or "none", voice/pipeline.py): speech itself
+    starts a question, and Whisper's transcript decides whether it was meant for us."""
+
+    onset_s: float = Field(0.15, gt=0.0, description="This much speech in a row (VAD) starts collecting a question.")
+    pre_roll_s: float = Field(0.4, ge=0.0, description="Audio kept from before the speech started.")
+    echo_tail_s: float = Field(
+        0.6,
+        ge=0.0,
+        description="Speech this soon after DrivePilot stops talking is ignored (its own voice in the microphone).",
+    )
+    only_questions: bool = Field(
+        True,
+        description='wake_mode "none": only questions and commands are answered, not every remark in the car '
+        "(voice/router.py: `meant_for_us`).",
+    )
+
+
+WakeMode = Literal["hey_drivepilot", "hey", "none"]
+WAKE_MODES: tuple[str, ...] = ("hey_drivepilot", "hey", "none")
+
+
 class VoiceConfig(_Strict):
     """Microphone in, speech out."""
 
     input_device: str | int | None = Field(None, description="sounddevice name/index; null = system default.")
     output_device: str | int | None = None
     output_volume: float = Field(1.0, gt=0.0, le=1.0, description="Speech and alert volume (1 = full).")
+    wake_mode: WakeMode = Field(
+        "hey_drivepilot",
+        description='"hey_drivepilot": questions start with "Hey DrivePilot"; "hey": with just "hey"; "none": no '
+        'wake word, any question is answered. "Hey DrivePilot" (and "Hey DrivePilot, stop") works in every mode.',
+    )
+    open_mic: OpenMicConfig = OpenMicConfig()
     wakeword: WakeWordConfig = WakeWordConfig()
     endpoint: EndpointConfig = EndpointConfig()
     stt: SttConfig = SttConfig()

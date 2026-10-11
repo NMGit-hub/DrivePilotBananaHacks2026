@@ -178,6 +178,11 @@ class AudioSpeaker:
             self._state.alerts.append(_Item(cue, time.perf_counter(), self._listen))
             self._cond.notify_all()
 
+    def speaking(self) -> bool:
+        """Something is playing or about to (queued): the microphone hears our own voice now (open-mic modes)."""
+        with self._cond:
+            return bool(self._state.alerts or self._state.answers or self._state.playing is not None)
+
     def wait_idle(self, timeout: float = 30.0) -> bool:
         """Block until nothing is queued or playing (tests, benchmarks)."""
         deadline = time.perf_counter() + timeout

@@ -625,3 +625,42 @@ def _route_once(text: str) -> Route:
     if _MEMORY.search(norm):
         return make(RouteKind.MODEL, "memory")
     return make(RouteKind.MODEL, "scene")
+
+
+# ------------------------------------------------------------------------------- without the wake word
+
+# `voice.wake_mode: hey`: the question starts with "hey" (Whisper also writes it "Hay", "Hey there", "Heya").
+_HEY = re.compile(r"^\W*(?:hey|hay|heya|hey there|hey hey)\b[\s,.!?:;-]*", re.IGNORECASE)
+# `voice.wake_mode: none`: a question or a request, not a remark ("we're almost there", "I love this song").
+_QUESTION_START = re.compile(
+    r"^(?:what|which|who|whose|where|when|why|how|is|are|am|was|were|can|could|should|shall|would|will|do|does|did|"
+    r"have|has|may|might|must|any|tell me|tell us|describe|read|look|check|show me|explain|help|find|let me know|"
+    r"remind me|keep an eye)\b"
+)
+# Control words that a passenger says to anyone ("what?", "huh?", "sorry?"): with no wake word, not a "repeat that".
+_VAGUE_CONTROLS = re.compile(r"^(?:what|huh|sorry(?: what)?|pardon(?: me)?|come again)$")
+
+
+def strip_hey(text: str) -> str | None:
+    """`wake_mode: hey`: the text after a leading "hey" (and the rest of a "Hey DrivePilot"), "" if it was only
+    "hey", or None if it doesn't start with "hey" (not meant for us)."""
+    match = _HEY.match(text.replace("’", "'"))
+    if match is None:
+        return None
+    rest = text[match.end() :].strip()
+    return rest if strip_wake_word(rest) else ""
+
+
+def meant_for_us(text: str) -> bool:
+    """`wake_mode: none`: was this (heard without any wake word) said to DrivePilot? Commands count (controls
+    except a bare "what?", destinations, watches, parking); anything else must be phrased as a question or a
+    request ("what does that sign say?", "tell me about the road ahead"), so remarks between passengers ("we're
+    almost there") aren't answered."""
+    result = route(text)
+    if result.kind is RouteKind.EMPTY:
+        return False
+    if result.kind is RouteKind.CONTROL:
+        return not _VAGUE_CONTROLS.match(result.text)
+    if result.kind in (RouteKind.DESTINATION, RouteKind.WATCH, RouteKind.PARKING):
+        return True
+    return text.rstrip().endswith("?") or bool(_QUESTION_START.match(result.text))

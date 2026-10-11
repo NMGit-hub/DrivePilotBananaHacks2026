@@ -96,6 +96,12 @@ class Endpointer:
         self._vad_t = self._t0 + (len(pre_roll) // 512) * 512 / SAMPLE_RATE
         self.active = True
 
+    def start_open(self, pre_roll: np.ndarray, t: float) -> None:
+        """Speech started at stream time `t` without the full wake word (`voice.wake_mode` "hey" / "none"):
+        everything said is the question (no wake-phrase tail to wait out), and it ends after `end_silence_s`."""
+        self.start(pre_roll, t)
+        self._in_wake_tail = False
+
     def resume(self, t: float, wake_t: float, timeout_s: float | None = None) -> None:
         """Listen again from stream time `t`: what ended before was only the wake phrase (its transcript was empty),
         or DrivePilot asked a yes/no question and waits for the reply (no wake word).
