@@ -462,6 +462,21 @@ def test_real_claude_client_sends_temperature_in_the_body_and_streams() -> None:
     assert model.complete(VisionRequest(system="s", text="q", temperature=0.0)) == "It's red."
     assert model.complete(VisionRequest(system="s", text="q")) == "It's red."
     assert sent[0]["temperature"] == 0.0 and "temperature" not in sent[1]
+    assert all("thinking" not in body and "output_config" not in body for body in sent)  # (Haiku 4.5 takes neither)
+    # Claude Haiku 5.5: thinking off and a low effort for speed, no temperature (it rejects non-default sampling).
+    sent.clear()
+    model = ClaudeVision(
+        "sk-ant-test",
+        "claude-haiku-5-5",
+        total_s=5.0,
+        read_s=3.0,
+        http_client=http,
+        thinking="disabled",
+        effort="low",
+    )
+    assert model.complete(VisionRequest(system="s", text="q")) == "It's red."
+    assert sent[0]["model"] == "claude-haiku-5-5" and sent[0]["thinking"] == {"type": "disabled"}
+    assert sent[0]["output_config"] == {"effort": "low"} and "temperature" not in sent[0]
 
 
 @pytest.mark.parametrize("question", ["Can I pull forward a little?", "Can I inch forward?", "Can I creep up a bit?"])

@@ -182,12 +182,23 @@ class ClaudeVision(VisionModel):
     name = "claude"
 
     def __init__(
-        self, api_key: str, model: str, total_s: float, read_s: float, max_retries: int = 0, http_client: Any = None
+        self,
+        api_key: str,
+        model: str,
+        total_s: float,
+        read_s: float,
+        max_retries: int = 0,
+        http_client: Any = None,
+        thinking: str = "default",
+        effort: str | None = None,
     ) -> None:
+        """`thinking`: "default" (send nothing), "disabled" or "adaptive"; `effort`: output_config.effort or None."""
         import anthropic  # deferred: only the selected provider's SDK is imported
 
         self._anthropic = anthropic
         self.model = model
+        self.thinking = thinking
+        self.effort = effort
         self._client = anthropic.Anthropic(
             api_key=api_key,
             timeout=anthropic.Timeout(total_s, read=read_s, connect=3.0),
@@ -218,10 +229,16 @@ class ClaudeVision(VisionModel):
         """Stream text deltas from the Messages API."""
         content = self.content(request)
         # The 1.x SDK has no sampling parameters; Haiku 4.5 still honours `temperature` in the request body
-        # (newer Claude models reject it: set vision.temperature to null for them).
-        extra: dict[str, Any] = (
-            {} if request.temperature is None else {"extra_body": {"temperature": request.temperature}}
-        )
+        # (newer Claude models reject it: set vision.temperature to null for them). Thinking and effort go in the
+        # body too, and only when configured (Haiku 4.5 rejects effort).
+        body: dict[str, Any] = {}
+        if request.temperature is not None:
+            body["temperature"] = request.temperature
+        if self.thinking != "default":
+            body["thinking"] = {"type": self.thinking}
+        if self.effort is not None:
+            body["output_config"] = {"effort": self.effort}
+        extra: dict[str, Any] = {"extra_body": body} if body else {}
         try:
             with self._client.messages.stream(
                 model=self.model,
@@ -407,6 +424,28 @@ class MockVision(VisionModel):
 # ------------------------------------------------------------------------------------------ factory
 
 
+def create_reading_model(cfg: AppConfig) -> VisionModel | None:
+    """The second Claude model for sign, parking and scene-description questions (`vision.reading`), or None when it
+    isn't configured or the provider isn't Claude. Raises VisionError if it can't be set up."""
+    reading, v = cfg.vision.reading, cfg.vision
+    if reading.model is None or cfg.vision_model != "claude":
+        return None
+    if cfg.secrets.anthropic_api_key is None:
+        raise VisionError("claude: ANTHROPIC_API_KEY is not set (.env)")
+    try:
+        return ClaudeVision(
+            cfg.secrets.anthropic_api_key.get_secret_value(),
+            reading.model,
+            v.total_timeout_s,
+            v.first_token_timeout_s,
+            v.claude.max_retries,
+            thinking=reading.thinking,
+            effort=reading.effort,
+        )
+    except ImportError as exc:
+        raise VisionError(f"claude: SDK not installed ({exc})") from exc
+
+
 def create_vision_model(cfg: AppConfig, name: str | None = None) -> VisionModel:
     """The provider selected by `vision_model` (or `name`). Raises VisionError if it can't be set up."""
     name = name or cfg.vision_model
@@ -422,6 +461,8 @@ def create_vision_model(cfg: AppConfig, name: str | None = None) -> VisionModel:
                 v.total_timeout_s,
                 v.first_token_timeout_s,
                 c.max_retries,
+                thinking=c.thinking,
+                effort=c.effort,
             )
         if name == "gemini":
             if secrets.gemini_api_key is None:

@@ -379,3 +379,43 @@ def test_splitter_emits_as_soon_as_a_sentence_is_complete() -> None:
     assert splitter.feed("The road is closed ahead") == []
     assert splitter.feed(". Use the left ") == ["The road is closed ahead."]
     assert splitter.flush() == "Use the left"
+
+
+# ------------------------------------------------------------------------------------------- reading model
+
+
+@pytest.mark.parametrize(
+    ("question", "reading"),
+    [
+        ("what does that sign say?", True),
+        ("can I park here?", True),
+        ("is there a fire hydrant here?", True),
+        ("what's going on ahead?", True),
+        ("what do those red signs ahead say?", True),  # (a color, but about signs)
+        ("what color is the light?", False),  # lights, lanes, memory and go questions stay with the main model
+        ("is it green yet?", False),
+        ("which lane am I in?", False),
+        ("how many lanes are to my left?", False),
+        ("what was that sign we just passed?", False),
+        ("can I pull out now?", False),
+        ("is it safe to turn left?", False),
+    ],
+)
+def test_which_questions_the_reading_model_answers(question: str, reading: bool) -> None:
+    from answers.scene import uses_reading_model
+
+    assert uses_reading_model(route(question)) is reading
+
+
+def test_the_reading_model_answers_sign_questions_without_a_temperature() -> None:
+    """vision.reading (Claude Haiku 5.5 rejects temperature): sign/parking/scene questions go to it, light questions
+    to the main model with its temperature."""
+    main, reading = MockVision("The light is red."), MockVision("It says ONE WAY.")
+    c = cfg()
+    h = SceneHandler(c, main, lambda n, s: [frame(20.0)], now=lambda: SATURDAY_540PM, reading_model=reading)
+    assert list(h.answer(route("what does that sign say?"), snapshot())) == ["It says ONE WAY."]
+    assert list(h.answer(route("what color is the light?"), snapshot())) == ["The light is red."]
+    assert len(reading.requests) == 1 and len(main.requests) == 1
+    assert reading.requests[0].temperature is None and main.requests[0].temperature == c.vision.temperature
+    plain = SceneHandler(c, main, lambda n, s: [frame(20.0)], now=lambda: SATURDAY_540PM)  # no reading model
+    assert list(plain.answer(route("what does that sign say?"), snapshot())) == ["The light is red."]

@@ -5,6 +5,34 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 ## Done
 
 ### V2 (2026-10-10/11): V2-M0..M6 and M8 done (M1 parking and M5 drift below their accuracy bars on public footage; M7 RF-DETR cut)
+- **Vision answers improved without training (2026-10-11, the user's go-ahead):** a second ("reading") model, the
+  place from GPS, and parking guidance in the prompt. (1) `vision.reading`: Claude Haiku 5.5 (thinking off, effort
+  low) answers sign, parking and scene-description questions; Claude Haiku 4.5 keeps lights, lanes, memory and go
+  questions (`answers/scene.py: uses_reading_model`). (2) `nav/location.py`: "Location (from GPS): Bayside,
+  Queens, New York City, New York." from Mapbox reverse geocoding, looked up in the background (never delays an
+  answer), plus a prompt line that local rules follow it (with NYC's no right on red). (3) Parking guidance in the
+  system prompt (stall markings, curb paint, hydrants... decide parking; STOP / DO NOT ENTER / ONE WAY don't) and
+  answers capped at ~30 words. Also: the test sheet now replays each clip's GPX (speed, location, the world's GPS
+  speed, as in the app) and judges with a fixed model (`--judge-model`, Haiku 4.5 at temperature 0, as before).
+  **Measured** (`eval/run_sheet.py`, judge fixed; a **held-out sheet** `eval/test_sheet_heldout.csv`: 27 new
+  questions, 12 parking + 7 signs + 2 memory + 6 lights/road/safety, labeled on full-resolution crops by an agent
+  that never saw an answer):
+
+  | Answers by | Tuning sheet (45) right/partly/wrong | Held-out (27) right/partly/wrong |
+  | --- | --- | --- |
+  | before (Haiku 4.5, old prompt, no location) | 33 / 6 / 6 | 9 / 11 / 7 (33 %) |
+  | Haiku 4.5 + location + prompt | 34 / 8 / 3 | 11 / 10 / 6 (41 %) |
+  | Haiku 5.5 (thinking off) + location + prompt | 36 / 4 / 5 | 15 / 7 / 5 (56 %) |
+  | Haiku 5.5, adaptive thinking (effort low) | 26 / 5 / 14 (slower, often cut off) | (not run) |
+  | **split: Haiku 4.5 + Haiku 5.5 for reading (shipped)** | **36 / 6 / 3** | **18 / 5 / 4 (67 %)** |
+
+  Why the split: Haiku 5.5 reads far more (the night exit sign, "2 HOUR", DO NOT ENTER, "31st", the NYPD traffic
+  stop) but invents text on unreadable message boards, over-counts lanes, misnamed passed signs, and once called a
+  red light yellow; Haiku 4.5 was right on those. The held-out set was looked at to choose the split, so it isn't
+  blind any more: a second blind set is being labeled for a final check. Answer times unchanged (model rows ~1.0-1.3
+  s median to the first sentence; reading questions 1.1-1.3 s). Checked in the real app: both models start, the
+  location resolves ("Bayside, Queens, New York City, New York"), a sign question goes to Haiku 5.5 (30 mph, 1.17 s),
+  a light question to Haiku 4.5 (red, 0.74 s).
 - **V2-M8 done (2026-10-11 ~00:40).** Independent review of everything since the last push (7 bugs + 3 risks + 7
   nits, each with a reproducer; all fixed with regression tests except 2 cosmetic nits): **safety**: the new "Check
   the intersection before you go." was added to any model answer containing "green" ("It's about to turn green",
