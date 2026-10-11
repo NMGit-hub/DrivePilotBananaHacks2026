@@ -338,15 +338,16 @@ class LaneTracker:
         self.cfg = cfg
         self.hfov_deg = hfov_deg
         self._lock = threading.Lock()
+        # The camera's horizon and the metric scale belong to the mount, not the moment: reset() keeps them.
+        self._horizon = cfg.horizon_prior
+        self._horizon_n = 0
+        self._widths: deque[float] = deque(maxlen=cfg.scale_window)
+        self.lane_changes: deque[tuple[float, int]] = deque(maxlen=64)  # (t, +1 right / -1 left), for logs
         self.reset()
 
     def reset(self) -> None:
-        """Forget everything (a seek, a new segment). The horizon and scale estimates are kept."""
+        """Forget the tracked position, votes and drift state (a seek, a new segment)."""
         with self._lock:
-            if not hasattr(self, "_horizon"):
-                self._horizon = self.cfg.horizon_prior
-                self._horizon_n = 0
-                self._widths: deque[float] = deque(maxlen=self.cfg.scale_window)
             self._last_t: float | None = None
             self._last_valid_t: float | None = None
             self._k = 0  # lanes moved since tracking began (unwrapping across lane changes)
