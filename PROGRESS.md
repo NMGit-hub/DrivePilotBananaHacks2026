@@ -92,7 +92,14 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   Why the split: Haiku 5.5 reads far more (the night exit sign, "2 HOUR", DO NOT ENTER, "31st", the NYPD traffic
   stop) but invents text on unreadable message boards, over-counts lanes, misnamed passed signs, and once called a
   red light yellow; Haiku 4.5 was right on those. The held-out set was looked at to choose the split, so it isn't
-  blind any more: a second blind set is being labeled for a final check. Answer times unchanged (model rows ~1.0-1.3
+  blind any more. **Final blind check** (`eval/test_sheet_heldout2.csv`: 18 more questions labeled by the same agent,
+  never looked at before this one run; the morning's code `0ab318b` run from a separate worktree, same judge):
+  **before 8 / 7 / 3, shipped 10 / 5 / 3** (`runs/20261011-105719_sheet_baseline0ab318b`, `runs/20261011-105738_sheet`):
+  better on parking (2 -> 3 right, 2 partly -> right, 1 right -> wrong: it hedged on a hatched call-box island) and
+  "what's going on" (0 -> 1 of 2), the same on signs (2/4), lights (3/3), memory and safety. So the honest size of
+  the gain is about +2 of 18 on unseen questions, smaller than on the set used to choose it. **Bench** with the
+  reading model (`runs/20261011-110450_bench_app`, `runs/20261011-110607_bench_app`): every target met; model answers 1.84 / 2.11 s and
+  1.55 / 1.66 s (median / p90, target 2.5; before 1.3-1.5 s): Haiku 5.5's first sentences are longer. Answer times unchanged (model rows ~1.0-1.3
   s median to the first sentence; reading questions 1.1-1.3 s). Checked in the real app: both models start, the
   location resolves ("Bayside, Queens, New York City, New York"), a sign question goes to Haiku 5.5 (30 mph, 1.17 s),
   a light question to Haiku 4.5 (red, 0.74 s).
@@ -708,6 +715,11 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   limit changes without a sign isn't noticed); "Stop sign ahead." needs a visible red face, so a sign in deep shadow
   at night may not count, and backs in warm evening light are rejected by hue only in theory (no golden-hour
   footage).
+- **The reading model (Claude Haiku 5.5) sometimes names a sign it can't read** ("looks like a round red-and-white
+  stop sign, but it's too blurry to read" where there was only a small street-name sign; "likely a stop sign" for a
+  street blade; text invented on an unreadable LED message board), although it says it can't read it. Not tuned
+  further: both question sets used for tuning are spent, and the blind set showed the honest gain is small. Model
+  answers also got ~0.3 s slower (still within the 2.5 s target).
 - **`align_gpx.py` is untested on a real OnePlus + GPSLogger pair** (none exists yet): whether OnePlus writes
   `creation_time` at the start or the end is detected, not known; GPSLogger's speed field placement is handled in
   every form seen in GPX files; the 0.25 s pull-away bias and the thresholds come from BDD100K's iPhone data. A drive
