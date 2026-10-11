@@ -1,0 +1,524 @@
+# Hand labels for the "find me a parking spot" feature on the user's own Mercedes dashcam clips (category parking_lot in
+# data/videos/own/selection.csv). Videos: data/videos/own/<id>.mp4 (1920x1280, 25 fps, ~96 deg wide, pitched up),
+# GPS: data/gps/<id>.gpx (read from the dashcam's burned-in overlay; scripts/dashcam_gpx.py).
+# Labeled 2026-10-11 by one Claude subagent from 1-2 s contact sheets (lower part of the frame, GPX speed stamped on
+# each tile; 4-6 s through stretches outside lots) + full-resolution crops (PyAV seek); the first five clips were
+# re-checked once by the same labeler. NOT yet spot-checked by a second person/pass. Times are video seconds.
+# 13 clips (all 13 parking_lot rows of selection.csv as of 13:30): 19 open spots (12 clear, 7 ambiguous; in the 12 usable clips 16: 10 clear, 6 ambiguous).
+# Schema: exactly eval/parking_labels.yaml's:
+#   scene: lot_aisles | lot_other | street | garage | other;  usable: false = night/glare/rain, don't score
+#   in_lot: [[t0, t1]]; parked_at: when our car comes to rest in a space (or null)
+#   open_spots: the row next to our path, <= ~6 stalls ahead: side, kind (stall|curb), t_visible (first clearly
+#     visible AND empty), t_pass (leaves the frame; null = never), restriction (none|handicap|ev|reserved|compact|
+#     fire_lane|no_parking|unknown), neighbor_before, stalls (adjacent run), certainty (clear|ambiguous)
+#   look_alikes: things that must NOT be called open spots (false-alarm tests); pulling_out: other cars backing out
+# Labeler's notes: the wide lens makes stalls ahead visible for a long time, so t_pass is often null (still in frame
+# when we stop/park); times +-0.5-1 s; stall counts on runs +-1-2. Ignore the date/GPS text bar at the bottom.
+# Unusable: dm_20260925_142925 (rain on the windshield; readable, a possible hard case). Best positives:
+# dm_20260917_172351 (near-empty strip-mall lot, at 15-20 mph), dm_20261004_135013, dm_20260928_183141,
+# dm_20261005_175210. Clean negatives (driven through a lot without passing an empty adjacent stall):
+# dm_20260926_142055 (unmarked gravel lot), dm_20260927_154030 and dm_20260925_133641 (shopping-center internal roads),
+# dm_20261003_173624 (garage, a hard case for lighting). The user's own car parks in dm_20260925_134241 (55.5 s) and
+# dm_20261004_135013 (64 s); dm_20261005_175210 and dm_20260930_152951 end waiting in an aisle (parked_at null).
+clips:
+- id: dm_20261005_175210
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 120.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 12.0
+    t_pass: 19.0
+    restriction: none
+    neighbor_before: blue SUV
+    stalls: 2
+    certainty: clear
+    note: marked stalls at the end of the '4/4 business' frontage row, between a blue Nissan Kicks and the building
+      corner (row before it red sedan, Honda CR-V, Kicks, no gaps); ahead-right while we creep and stop (12-17 s); count
+      1-2
+  - side: right
+    kind: stall
+    t_visible: 20.0
+    t_pass: null
+    restriction: none
+    neighbor_before: blue sedan
+    stalls: 1
+    certainty: clear
+    note: single marked stall (a shrub on the island beyond it) between a blue Honda Civic and a dark blue Honda Accord in
+      the row we face after the right turn; stays straight ahead while we wait to the end of the clip
+  look_alikes:
+  - side: right
+    t_start: 20.0
+    t_end: 38.0
+    what: shrub on the landscaped island beyond the empty stall between the Civic and the Accord (the island itself is not
+      a stall)
+  pulling_out: []
+  notes: Sunny late afternoon (low sun), shopping-center lot. 0-3 s turning past a red pickup and a gray Tacoma; 4-16 s
+    creeping (2-7 mph) along an aisle toward a business building with the frontage row on our right; stopped
+    14-17 s; 17-24 s turns right; creeps 0-2 mph to ~38 s, then stopped to the end (GPX 0 mph from ~38.5 s) behind a row
+    of cars parked nose-away (Civic, Accord, gray sedan), i.e. probably waiting in the aisle rather than parked in a
+    stall (a person walks up to the car at ~118 s; probably a pickup at the music school), so parked_at is left null
+    (selection.csv says it pulls into a stall; not confirmed from the hood view). If you count an 80-s stop as parked,
+    use 38.5.
+- id: dm_20260928_183141
+  scene: lot_aisles
+  light: dusk
+  usable: true
+  in_lot:
+  - - 0.0
+    - 35.0
+  parked_at: null
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 0.0
+    t_pass: 14.5
+    restriction: none
+    neighbor_before: red sedan
+    stalls: 1
+    certainty: clear
+    note: single marked stall in the business frontage row between a red Chevy Cruze and a red BMW, straight ahead
+      while we sit parked facing the row (0-12 s), then on our left as we pull out to the right; row after it (BMW, blue
+      Subaru, CR-V, black Audi SUV, white Escalade, red Tesla Model X) has no gaps
+  - side: left
+    kind: stall
+    t_visible: 25.0
+    t_pass: 30.5
+    restriction: none
+    neighbor_before: red SUV
+    stalls: 2
+    certainty: clear
+    note: two marked stalls on the left between the red Tesla Model X and a gray Honda Accord near the end of the aisle
+  look_alikes:
+  - side: left
+    t_start: 30.0
+    t_end: 33.0
+    what: open two-way drive lane with painted arrows past the end of the left row (not stalls)
+  - side: right
+    t_start: 28.0
+    t_end: 33.0
+    what: brick enclosure / landscaped end of the right row past the red sedan (not a stall)
+  pulling_out: []
+  notes: Overcast dusk, same shopping center as dm_20261005_175210. 0-12 s parked facing the business row; 12-19 s
+    backs/turns out to the right past the frontage row (on our left); 19-30 s drives one aisle at 2-4 mph (left row white
+    Escalade, red Tesla X, then 2 empty stalls, gray Accord; right row silver Chevy pickup, blue Nissan, red Camry, brick
+    enclosure); 30-35 s aisle end, crosswalk and STOP; 35-67 s internal shopping-center road past cafe (not a lot
+    aisle), stop sign 53-67 s, right turn onto the street at ~68 s, queued at a light from ~82 s.
+- id: dm_20260930_152951
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 86.0
+    - 120.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 106.0
+    t_pass: 110.0
+    restriction: none
+    neighbor_before: null
+    stalls: 1
+    certainty: clear
+    note: empty yellow-striped stall(s) at the start of the right row, between the planted island and a blue-gray Cadillac
+      XT4; count 1-2
+  look_alikes:
+  - side: right
+    t_start: 104.0
+    t_end: 107.0
+    what: planted island with tall grass at the start of the right row (not a stall)
+  - side: right
+    t_start: 111.0
+    t_end: 113.5
+    what: red-and-blue shopping-cart corral in the middle of the lot next to a dark blue SUV (not a stall)
+  pulling_out: []
+  notes: Sunny, low sun with glare streaks on the windshield. 0-46 s queued behind an SUV at a signal on a street; 48-86
+    s city streets (to 18 mph); turns into the grocery store / pet store shopping-center lot at ~86 s and crawls the
+    aisles (2-9 mph). The right row at 94-99 s is full; 99-105 s landscaped islands; a black Jeep crosses in front at
+    88-92 s and a silver minivan at 102-104 s. Stops at 116 s right behind a white Honda CR-V in the next row (probably
+    waiting in the aisle, not parked) to the end of the clip.
+- id: dm_20261008_170856
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 26.0
+  parked_at: null
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 0.0
+    t_pass: 2.5
+    restriction: unknown
+    neighbor_before: null
+    stalls: 1
+    certainty: ambiguous
+    note: stall-sized empty space in front of the store entrance between a grass planter and a black Honda Accord
+      Crosstour, straight ahead at the start and then on our left as we turn right; no stall lines visible (faded lot),
+      may be a walkway / no-parking area in front of the door
+  look_alikes:
+  - side: left
+    t_start: 0.0
+    t_end: 3.0
+    what: raised grass/shrub planters in the store-frontage row next to the red Jeep (not stalls)
+  - side: left
+    t_start: 5.0
+    t_end: 9.0
+    what: shrub planters in the frontage row past the white Lexus GX (not stalls)
+  pulling_out: []
+  notes: Sunny late afternoon, small strip-mall lot with heavily faded stall lines. 0-4 s creeping (2-3 mph) facing the
+    store row and turning right (red Jeep Grand Cherokee, planter, black Accord Crosstour, blue Hyundai Sonata, white Lexus
+    GX); 5-15 s drives across the lot (5-9 mph) with the frontage row on the left and a row of cars past a grass island
+    on the right; 16-26 s exit drive past a white Ford van, onto the street at ~26 s (crosswalk with green bike
+    markings), stopped at a light from ~30 s. No unambiguous empty marked stall next to our path.
+- id: dm_20260926_142055
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 2.0
+    - 120.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: left
+    t_start: 2.0
+    t_end: 6.0
+    what: open gravel area with orange cones and an orange fence at the lot entrance (not parking)
+  - side: left
+    t_start: 36.0
+    t_end: 50.0
+    what: open gravel area ahead-left at the exit with portable toilets and yellow concrete barriers (not stalls)
+  pulling_out: []
+  notes: Sunny, busy unmarked gravel trailhead lot in a valley (windshield glare streaks). 0-2 s on the road at 12 mph,
+    turns right into the lot at ~2 s past cones and a white work pickup; 2-36 s crawls (4-7 mph) the single long aisle
+    with cars parked nose-in tight on both sides (vans, an old RV, SUVs; no car-sized gaps seen) and hikers walking in
+    the aisle (3 s, 15-18 s, a person at an open trunk 17-18 s); 36-66 s creeps toward the exit by the portable toilets;
+    from ~70 s waits at the lot exit facing the road (ONE WAY sign) to the end of the clip. Unmarked lot, so no stalls to
+    label as open.
+- id: dm_20260925_134241
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 65.0
+  parked_at: 55.5
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 41.0
+    t_pass: 45.0
+    restriction: none
+    neighbor_before: dark SUV
+    stalls: 1
+    certainty: ambiguous
+    note: probably the stall the white Honda Accord backed out of (27-40 s), between a dark Lexus SUV and a silver Hyundai
+      sedan; seen only past the departing Accord, row view partly blocked, so not certain it is a full empty stall
+  - side: left
+    kind: stall
+    t_visible: 50.0
+    t_pass: null
+    restriction: none
+    neighbor_before: null
+    stalls: 1
+    certainty: ambiguous
+    note: the yellow-lined stall we turn left into and park in (52-56 s), facing a black Toyota RAV4 nose to nose; only
+      seen during the turn
+  look_alikes:
+  - side: left
+    t_start: 5.0
+    t_end: 7.5
+    what: yellow-hatched crosswalk / no-parking area by the store entrance with bikes (not a stall)
+  - side: right
+    t_start: 9.0
+    t_end: 11.0
+    what: landscaped island at the end of a row (not a stall)
+  pulling_out:
+  - t: 27.0
+    side: right
+    note: white Honda Accord backs out of a right-row stall ahead and then drives off ahead of us (39-46 s) while we wait
+      (0 mph at 28-29, 32-33, 36-41 s)
+  notes: Overcast midday, big shopping-center lot (grocery store / pet store). 0-22 s drives the storefront lane at 8-13 mph
+    (pharmacy etc.; right-side rows full, pedestrian crossing at 16 s, USPS truck at 18-22 s); turns into a row aisle
+    at ~23 s; waits 27-41 s for the white Accord backing out; follows it at 2-4 mph, turns left at ~49-51 s and parks in a
+    stall facing a black RAV4 / white Nissan Xterra / gray Toyota Yaris (stopped from 55.5 s to the end).
+- id: dm_20260925_142925
+  scene: lot_aisles
+  light: day
+  usable: false
+  in_lot:
+  - - 0.0
+    - 46.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 25.0
+    t_pass: 30.0
+    restriction: reserved
+    neighbor_before: null
+    stalls: 3
+    certainty: clear
+    note: empty 'Online Orders' pickup stalls (pickup-car symbols, red-painted ends, numbered signs) near the grocery store
+      entrance, ahead while we turn left and then on our right; count 2-4
+  - side: left
+    kind: stall
+    t_visible: 28.0
+    t_pass: 31.0
+    restriction: handicap
+    neighbor_before: null
+    stalls: 1
+    certainty: ambiguous
+    note: empty handicap stall (blue wheelchair symbol) between a white-hatched access aisle and the online-order stalls,
+      nearly straight ahead during the left turn (28-30 s); which side it passes on is unclear from the turning view
+  - side: right
+    kind: stall
+    t_visible: 32.0
+    t_pass: 34.5
+    restriction: handicap
+    neighbor_before: null
+    stalls: 1
+    certainty: clear
+    note: empty handicap stall (blue wheelchair symbol) in the storefront row right after a shrub planter, before a gray
+      Ford Focus
+  look_alikes:
+  - side: left
+    t_start: 28.0
+    t_end: 31.0
+    what: white-hatched handicap access aisle next to the empty handicap stall (not a stall)
+  - side: left
+    t_start: 36.0
+    t_end: 42.5
+    what: large white-hatched no-parking zone along the grocery store storefront (diagonal stripes, not stalls)
+  pulling_out: []
+  notes: Rain (raindrops on the windshield, wipers at 18 s and 30 s, wet pavement), so usable false per the schema, though
+    the scene stays readable and could serve as a hard case. 0-16 s parked facing a beige Hyundai Santa Fe; 16-23 s
+    backs out and turns (1-2 mph); 24-30 s turns left past the online-order pickup stalls and the handicap stalls at the
+    entrance; 31-43 s drives the storefront lane (3-14 mph; pedestrian with bags at 40-42 s); exits onto the street at
+    ~46 s.
+- id: dm_20260919_103324
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 87.0
+  - - 105.0
+    - 120.0
+  parked_at: null
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 115.0
+    t_pass: null
+    restriction: unknown
+    neighbor_before: blue sedan
+    stalls: 1
+    certainty: ambiguous
+    note: marked stall (wheel stop) against the store Cafe wall between a blue Dodge Charger and a white-hatched access
+      aisle next to a black Cadillac Escalade, which we pull into at the end of the clip (115-120 s); a handicap sign on
+      the wall above the aisle makes the restriction unclear
+  look_alikes:
+  - side: right
+    t_start: 115.0
+    t_end: 118.5
+    what: white-hatched handicap access aisle next to the Escalade (not a stall)
+  pulling_out: []
+  notes: Overcast morning, lots beside an elevated highway (store Cafe). 0-38 s crawls (1-5 mph) a mostly unmarked /
+    faded-line lot. A full row ahead (0-7 s), along the cafe building (8-18 s), a full row by the cafe (Kia Soul, Cadillac
+    SRX, Impala; 18-29 s), then an aisle with full rows on both sides (30-37 s); stopped 38-62 s in the aisle; 63-73 s
+    creeps out past a blue Volvo sedan and a white Ford pickup to the lot exit and waits there for traffic (74-87 s);
+    88-104 s on the street under the highway (light at 100-102 s); 105-120 s turns into the cafe's other lot (full row of
+    cars on the left by an ivy wall) and pulls into a stall at the building, still creeping when the clip ends.
+- id: dm_20261004_135013
+  scene: lot_aisles
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 120.0
+  parked_at: 64.0
+  open_spots:
+  - side: right
+    kind: stall
+    t_visible: 30.0
+    t_pass: 48.0
+    restriction: handicap
+    neighbor_before: null
+    stalls: 2
+    certainty: clear
+    note: empty handicap stalls (blue wheelchair symbols, white-hatched access aisles, signs) at the end of the lot by the
+      trees; ahead while we creep and turn around (30-40 s), then right next to us (42-47 s); count 2-3
+  - side: left
+    kind: stall
+    t_visible: 52.0
+    t_pass: null
+    restriction: none
+    neighbor_before: dark sedan
+    stalls: 1
+    certainty: clear
+    note: stall between a dark sedan and a light-blue Ford Mustang Mach-E in the row under the trees (lines visible in
+      front of the Mach-E from ~52 s); we turn left into it and stop there (64-82 s), then back out
+  - side: left
+    kind: stall
+    t_visible: 117.0
+    t_pass: null
+    restriction: none
+    neighbor_before: black SUV
+    stalls: 1
+    certainty: ambiguous
+    note: marked stall next to a black Mercedes GLC that a white Volvo XC60 has just pulled out of (the Volvo is still in
+      front of it, coming toward us, when the clip ends)
+  look_alikes:
+  - side: right
+    t_start: 30.0
+    t_end: 48.0
+    what: white-hatched handicap access aisles between the handicap stalls (not stalls)
+  - side: right
+    t_start: 46.0
+    t_end: 50.0
+    what: curbed concrete island at the end of the aisle (not a stall)
+  pulling_out:
+  - t: 116.5
+    side: left
+    note: white Volvo XC60 pulls forward out of a left-row stall ahead and drives toward us in the aisle
+  notes: Sunny park lot among tall trees, dappled shade and strong sun glare on the windshield (worst 56-92 s). 0-4 s
+    stopped at the lot entrance; 6-14 s drives in (9-11 mph) past full rows; 16-48 s creeps and turns around near the
+    handicap stalls at the far end (pedestrians ahead at ~43 s); 48-56 s along a full row of white SUVs/Teslas on the
+    left; 56-64 s turns left into a stall beside the blue Mach-E and stops (64-82 s); backs out ~82-90 s and drives to the
+    second section of the lot (92-120 s, full rows past a red work truck and a white BMW X5), where the Volvo pulls out
+    at the end.
+- id: dm_20260927_154030
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 24.0
+    - 46.0
+  - - 112.0
+    - 120.0
+  parked_at: null
+  open_spots: []
+  look_alikes: []
+  pulling_out: []
+  notes: Sunny afternoon, large shopping center driven on its internal roads at 6-17 mph, never along a stall row. 0-14 s
+    ring road to a STOP by a restaurant building; 14-24 s along a storefront (red fire-lane curbs, pedestrians);
+    24-46 s main two-lane drive through the parking field (lots on both sides behind landscaped curbs, rows perpendicular
+    to the drive and not adjacent to our path; labeled in-lot); 46-62 s storefront lane with crosswalks (store);
+    62-90 s behind the buildings (loading doors) and past Michaels; 90-110 s ring road and crosswalks; 112-120 s creeps
+    (2-4 mph) toward the Joy Box strip lot (labeled in-lot from here). No open stall next to our path.
+- id: dm_20260917_172351
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 16.0
+    - 70.0
+  parked_at: null
+  open_spots:
+  - side: left
+    kind: stall
+    t_visible: 17.5
+    t_pass: 20.5
+    restriction: none
+    neighbor_before: null
+    stalls: 6
+    certainty: clear
+    note: whole empty row of marked stalls along the planted strip on the left of a nearly empty strip-mall lot; we pass
+      it at 15-19 mph; count approximate (5-8)
+  - side: right
+    kind: stall
+    t_visible: 18.0
+    t_pass: 21.0
+    restriction: none
+    neighbor_before: null
+    stalls: 5
+    certainty: clear
+    note: empty marked stalls along the storefront on the right (low sun from the left); count approximate (4-7)
+  - side: right
+    kind: stall
+    t_visible: 21.0
+    t_pass: 23.0
+    restriction: handicap
+    neighbor_before: null
+    stalls: 1
+    certainty: clear
+    note: empty handicap stall (blue wheelchair symbol) with a hatched access aisle at the building corner
+  - side: right
+    kind: stall
+    t_visible: 55.0
+    t_pass: null
+    restriction: none
+    neighbor_before: red SUV
+    stalls: 2
+    certainty: ambiguous
+    note: storefront space between a red Jeep Grand Cherokee and a silver BMW i4, straight ahead while we creep and stop;
+      stall lines very faint, so not sure these are marked stalls
+  look_alikes:
+  - side: right
+    t_start: 21.0
+    t_end: 23.0
+    what: hatched access aisle next to the handicap stall (not a stall)
+  - side: right
+    t_start: 37.0
+    t_end: 41.0
+    what: planters with ornamental grass between storefront stalls (not stalls)
+  pulling_out: []
+  notes: Sunny evening, low sun (glare at 12-17 s and 30-32 s). 0-15 s on a road along office buildings (11-19 mph);
+    16-30 s drives straight through a nearly empty strip-mall lot at 15-20 mph (empty marked rows on both sides); 30-35
+    s through a driveway past a white Ford van (pedestrian at 34-35 s); 35-47 s storefront lane of a second strip mall
+    with mostly full stalls (Subaru Crosstrek, white BMW, red Jeep Compass); 48-69 s creeps (1-2 mph) and stops facing a
+    storefront (white RAV4, red Jeep Grand Cherokee, silver BMW i4, blue Subaru); a pedestrian walks in front 63-68 s.
+- id: dm_20261003_173624
+  scene: garage
+  light: day
+  usable: true
+  in_lot:
+  - - 0.0
+    - 15.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: left
+    t_start: 0.0
+    t_end: 9.0
+    what: white-hatched no-parking areas beside the pillars on the left of the garage aisle (not stalls)
+  - side: right
+    t_start: 11.0
+    t_end: 15.0
+    what: hatched area and sign stand at the garage exit lane (not a stall)
+  pulling_out: []
+  notes: Early evening, covered parking garage (artificial light, bright exit opening ahead; a hard case). 0-15 s creeps
+    (1-4 mph) along the garage aisle toward the exit with a full row of nose-in cars on the right (RAV4s, Subaru, gray
+    sedans, red SUV, white sedan) and a few cars on the left; pedestrian crosses ahead at 6-10 s; speed limit 10 signs;
+    exits the garage at ~15 s past a STOP and a crosswalk with pedestrians (16-24 s), then a campus road to a traffic
+    light (stopped from 42 s to the end). No empty stall seen next to our path.
+- id: dm_20260925_133641
+  scene: lot_other
+  light: day
+  usable: true
+  in_lot:
+  - - 58.0
+    - 100.0
+  parked_at: null
+  open_spots: []
+  look_alikes:
+  - side: left
+    t_start: 34.0
+    t_end: 42.0
+    what: yellow-hatched no-parking / loading zone along the building on the left (not stalls)
+  pulling_out: []
+  notes: Overcast, wet pavement, same shopping center as dm_20260927_154030, driven on its internal roads at 4-17 mph and
+    never along a stall row. 0-30 s storefront lane past Michaels (red fire-lane curbs, crosswalks, pedestrians); 30-56
+    s behind/along buildings and past store; 58-100 s drive between storefronts and the main parking field (rows on the
+    right behind red-curbed landscaped islands, perpendicular to our path, so no adjacent stalls; labeled in-lot);
+    100-120 s storefront lanes of the next block (outdoor-mall street). Rain mostly stopped; a few drops on the
+    windshield. No open stall next to our path.
