@@ -189,7 +189,7 @@ signs:                      # V2-M6 fine-tuned US sign detector (perception/sign
   conf: 0.4                 # minimum detection confidence (per-kind overrides in class_conf)
   class_conf: {}
   iou: 0.6
-  value_conf: 0.9           # a speed value is reported only above this classifier probability (chosen on validation),
+  value_conf: 0.995         # a speed value is reported only above this classifier probability (validation + tune),
   value_min_px: 16.0        # only for signs at least this tall (pixels at 1280 px frame width)
   value_edge_px: 2.0        # and not for signs touching the frame border (the number may be cut off)
   duplicate_iou: 0.6        # one sign reported as two kinds (speed_limit + school_speed_limit): keep the surer one

@@ -343,10 +343,10 @@ def _frame(w: int = 1280, h: int = 720) -> Frame:
 
 def test_detector_reads_a_confident_speed_value(fake_detector: Any) -> None:
     _FakeYOLO.det_rows = [(600, 200, 630, 240, 0.9, KIND_INDEX["speed_limit"]), (100, 100, 140, 140, 0.8, 2)]
-    _FakeYOLO.probs = [0.005, 0.005, 0.99]
+    _FakeYOLO.probs = [0.0005, 0.0005, 0.999]
     dets = fake_detector().detect(_frame())
     assert [d.kind for d in dets] == ["speed_limit", "stop"]
-    assert dets[0].value == 35 and dets[0].value_conf == pytest.approx(0.99)
+    assert dets[0].value == 35 and dets[0].value_conf == pytest.approx(0.999)
     assert dets[1].value is None and dets[1].value_conf is None
     assert dets[0].box == (600.0, 200.0, 630.0, 240.0)
     assert isinstance(dets[0], SignDetection) and dets[0].to_record()["value"] == 35
@@ -379,7 +379,7 @@ def test_value_min_px_is_measured_at_1280_width(fake_detector: Any) -> None:
 
 def test_school_speed_limit_also_gets_a_value(fake_detector: Any) -> None:
     _FakeYOLO.det_rows = [(600, 200, 625, 250, 0.7, KIND_INDEX["school_speed_limit"])]
-    _FakeYOLO.probs = [0.0, 0.99, 0.01]
+    _FakeYOLO.probs = [0.0, 0.999, 0.001]
     (det,) = fake_detector().detect(_frame())
     assert det.kind == "school_speed_limit" and det.value == 25
 
