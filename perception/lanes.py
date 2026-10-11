@@ -21,8 +21,10 @@ detector. Like the detector, it refuses the CPU: the weights must end up on CUDA
 Wide cameras. YOLOPv2 is trained on BDD100K (~60° dashcams) and the lane tracker's flat-road geometry assumes a
 pinhole view; the phone's 114° ultrawide shows lanes small and bent near the edges. So a camera wider than
 `lanes.max_view_deg` gives the lane model only its center, cropped to that field of view (V2_BUILD_PLAN M5's
-"center-crop fallback"; no checkerboard calibration has been done). `LaneMasks.view` says where the crop sits in the
-frame; the tracker maps everything it reports back to frame coordinates.
+"center-crop fallback"; no checkerboard calibration has been done), centered across and around `lanes.view_center_y`
+down (the user's car dashcam is pitched up: its horizon is ~70 % down the frame, so a crop around the middle would be
+mostly sky). `LaneMasks.view` says where the crop sits in the frame; the tracker maps everything it reports back to
+frame coordinates.
 
 `LaneWorker` runs the model on its own thread on the newest frame only, at most `lanes.fps` times a second
 (perception/frame_worker.py); the model is built on that thread.
@@ -82,14 +84,19 @@ class LaneMasks:
         return int(self.lines.shape[0]), int(self.lines.shape[1])
 
 
-def lane_view(hfov_deg: float, max_view_deg: float | None) -> tuple[tuple[float, float, float, float], float]:
-    """The centered crop (x0, y0, x1, y1 as frame shares, same aspect ratio) the lane model sees, and its
-    horizontal field of view: the whole frame unless the camera is wider than `max_view_deg` (pinhole model)."""
+def lane_view(
+    hfov_deg: float, max_view_deg: float | None, center_y: float = 0.5
+) -> tuple[tuple[float, float, float, float], float]:
+    """The crop (x0, y0, x1, y1 as frame shares, same aspect ratio) the lane model sees, and its horizontal field of
+    view: the whole frame unless the camera is wider than `max_view_deg` (pinhole model). The crop is centered across
+    and around `center_y` down (kept inside the frame): a camera pitched up, with the road low in the frame, wants it
+    below the middle."""
     if max_view_deg is None or hfov_deg <= max_view_deg:
         return (0.0, 0.0, 1.0, 1.0), hfov_deg
     share = math.tan(math.radians(max_view_deg) / 2.0) / math.tan(math.radians(hfov_deg) / 2.0)
     lo, hi = 0.5 - share / 2.0, 0.5 + share / 2.0
-    return (lo, lo, hi, hi), max_view_deg
+    top = min(max(center_y - share / 2.0, 0.0), 1.0 - share)
+    return (lo, top, hi, top + share), max_view_deg
 
 
 def crop_view(image: np.ndarray, view: tuple[float, float, float, float]) -> np.ndarray:
@@ -133,7 +140,8 @@ class LaneModel:
         weights = cfg.weights if cfg.weights.is_absolute() else root / cfg.weights
         if not weights.is_file():
             raise FileNotFoundError(f"YOLOPv2 weights not found: {weights} (github.com/CAIC-AD/YOLOPv2 releases)")
-        self.view = lane_view(hfov_deg, cfg.max_view_deg)[0] if hfov_deg is not None else (0.0, 0.0, 1.0, 1.0)
+        full = (0.0, 0.0, 1.0, 1.0)
+        self.view = lane_view(hfov_deg, cfg.max_view_deg, cfg.view_center_y)[0] if hfov_deg is not None else full
         self.device = torch.device(f"cuda:{cfg.device}")
         self.dtype = torch.float16 if cfg.half else torch.float32
         started = time.perf_counter()

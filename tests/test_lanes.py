@@ -770,6 +770,19 @@ def test_a_wide_camera_gives_the_lane_model_its_center() -> None:
     assert crop_view(image, view).shape == (rows, cols, 3)
 
 
+def test_the_lane_crop_can_sit_lower_for_a_camera_pitched_up() -> None:
+    from perception.lanes import lane_view
+
+    centered, _ = lane_view(96.0, 70.0)
+    low, hfov = lane_view(96.0, 70.0, center_y=0.65)
+    share = centered[3] - centered[1]
+    assert hfov == 70.0 and low[0] == centered[0] and low[2] == centered[2]  # same across
+    assert low[1] == pytest.approx(0.65 - share / 2) and low[3] - low[1] == pytest.approx(share)
+    bottom, _ = lane_view(96.0, 70.0, center_y=0.95)  # kept inside the frame
+    assert bottom[3] == pytest.approx(1.0) and bottom[1] == pytest.approx(1.0 - share)
+    assert lane_view(60.0, 70.0, center_y=0.65)[0] == (0.0, 0.0, 1.0, 1.0)  # not cropped: the whole frame
+
+
 def test_lanes_seen_in_a_crop_are_reported_in_frame_coordinates() -> None:
     """The tracker measures in the crop (its own field of view) and reports points in the whole frame."""
     view = (0.25, 0.25, 0.75, 0.75)

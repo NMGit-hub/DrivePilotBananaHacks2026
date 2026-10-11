@@ -13,7 +13,9 @@ video:
     loop: false             # play the clip again and again; the clock runs on across passes, so a GPX longer
                             #   than the clip (a simulated drive, scripts/route_to_gpx.py) plays to its end
     hfov_deg: 60.0          # the recorded camera's field of view: BDD100K dashcams ~60° (parking and pedestrian
-                            #   geometry); null = the phone's (intersection.camera_hfov_deg) for our own drives
+                            #   geometry); null = the phone's (intersection.camera_hfov_deg) for our own drives;
+                            #   Mercedes dashcam (own footage): ~96°, median of 18 turns, IQR 92-103°
+                            #   (scripts/dashcam_calibrate.py, runs/fov_calibration_20turns.txt)
   camera:
     scrcpy_dir: null        # folder with adb.exe + scrcpy-server; null = auto-detect the winget install
     camera_id: 3            # OnePlus 12: 3 = the physical ultrawide (same view as logical camera 0 at zoom 0.6,
@@ -181,6 +183,7 @@ lanes:                      # V2 YOLOPv2 lanes (perception/lanes.py) + lane trac
   half: true
   cuda_graph: true          # replay the forward pass as a CUDA graph (eager TorchScript is launch-bound here)
   max_view_deg: 70.0        # a wider camera (the phone's 114°) gives the lane model its center, cropped to 70°
+  view_center_y: 0.5        # ...centered this far down the frame (the Mercedes dashcam, pitched up: 0.65)
   camera_height_m: 1.3      # only a prior: our own lane's measured width sets the metric scale
   camera_offset_m: 0.0      # camera right of the car's center line (left: negative)
   horizon_prior: 0.5        # horizon row / frame height until measured from the lines' vanishing point

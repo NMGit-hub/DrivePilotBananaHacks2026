@@ -45,17 +45,22 @@ def _config(args: argparse.Namespace) -> AppConfig:
 def cmd_cache(args: argparse.Namespace) -> int:
     """Run the lane model over clips and cache the masks."""
     from eval.lanes_eval import build_mask_cache
-    from perception.lanes import LaneModel
+    from perception.lanes import LaneModel, crop_view, lane_view
 
     cfg = _config(args)
     model = LaneModel(cfg.lanes, cfg.root)
+    view = (0.0, 0.0, 1.0, 1.0)
+    if args.hfov is not None:  # a wide camera: the model sees the app's crop (lanes.max_view_deg, view_center_y)
+        view = lane_view(args.hfov, cfg.lanes.max_view_deg, cfg.lanes.view_center_y)[0]
+        print(f"lane model crop {tuple(round(v, 3) for v in view)} of each frame")
+    transform = None if view == (0.0, 0.0, 1.0, 1.0) else (lambda _t, image: crop_view(image, view))
     for clip in args.clip:
         out = cache_path(clip)
         if out.exists() and not args.force:
             print(f"cached   {clip.name}")
             continue
         started = time.perf_counter()
-        n = build_mask_cache(model.infer, clip, out, args.fps or cfg.lanes.fps)
+        n = build_mask_cache(model.infer, clip, out, args.fps or cfg.lanes.fps, transform)
         elapsed = time.perf_counter() - started
         print(f"built    {clip.name}: {n} frames in {elapsed:.0f} s", flush=True)
     return 0
@@ -104,6 +109,14 @@ def cmd_frames(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tracker_hfov(args: argparse.Namespace, lc: LanesConfig) -> float:
+    """The lane tracker's field of view: the clips' own, or the crop's for a camera wider than lanes.max_view_deg
+    (as the app's: masks cached with `cache --hfov` are of that crop)."""
+    from perception.lanes import lane_view
+
+    return lane_view(args.hfov, lc.max_view_deg)[1]
+
+
 def _data_root(args: argparse.Namespace) -> Path:
     return Path(args.data_root) if args.data_root is not None else REPO_ROOT
 
@@ -125,7 +138,10 @@ def cmd_index(args: argparse.Namespace) -> int:
             print(f"no cache for {video.name}: run `cache` first")
             return 1
         steps = replay(
-            cfg.lanes, load_mask_cache(cache), args.hfov, speed_from_gpx(root / "data" / "gps" / f"{clip['id']}.gpx")
+            cfg.lanes,
+            load_mask_cache(cache),
+            _tracker_hfov(args, cfg.lanes),
+            speed_from_gpx(root / "data" / "gps" / f"{clip['id']}.gpx"),
         )
         for frame in clip["frames"]:
             score.add(clip["id"], frame["t"], frame, at_time(steps, frame["t"]).snapshot)
@@ -183,8 +199,9 @@ def cmd_drift(args: argparse.Namespace) -> int:
             return 1
         masks = load_mask_cache(cache)
         speed_at = speed_from_gpx(root / "data" / "gps" / f"{_clip_id(video)}.gpx")
-        tracker = LaneTracker(cfg.lanes, args.hfov)
-        steps = replay(cfg.lanes, masks, args.hfov, speed_at, tracker)
+        hfov = _tracker_hfov(args, cfg.lanes)
+        tracker = LaneTracker(cfg.lanes, hfov)
+        steps = replay(cfg.lanes, masks, hfov, speed_at, tracker)
         valid = sum(1 for s in steps if s.snapshot.valid)
         dt = [b.t - a.t for a, b in itertools.pairwise(steps)]
         fast = sum(
@@ -317,6 +334,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--clip", type=Path, action="append", required=True)
     p.add_argument("--fps", type=float, help="Sampling rate (default lanes.fps).")
     p.add_argument("--force", action="store_true")
+    p.add_argument(
+        "--hfov", type=float, help="The clips' field of view: wider than lanes.max_view_deg = the app's crop."
+    )
     p.set_defaults(func=cmd_cache)
     p = sub.add_parser("frames", help="Save frames as JPEGs (runs/lane_frames) for hand-labeling.")
     p.add_argument("--clip", type=Path, action="append", required=True)

@@ -8,6 +8,11 @@ come from the app's own ego-motion estimator (perception/ego_motion.py); the hea
 GPS (scripts/dashcam_gpx.py scan), measured over the straight stretches before and after the turn (the positions
 are quantized to an arc-second, so long baselines). f = summed travel / heading change; hfov = 2 atan(W / 2f). The
 median over several turns is reported (forward motion adds parallax that averages out over left and right turns).
+
+A frame whose homography is missing (too few tracked points, RANSAC failed) or implausible (non-finite, or the centre
+jumping more than MAX_FRAME_SWING_PX in one frame) adds nothing to the sum, so a turn with many such frames
+under-reads the swing (f too small, hfov too wide). Turns whose failed fraction exceeds --max-missing (default
+MAX_MISSING_FRACTION) are reported but left out of the median.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ import json
 import math
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,11 +32,17 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from core.config import load_config  # noqa: E402
+from core.logging_setup import get_logger, setup_logging  # noqa: E402
 from core.types import Frame  # noqa: E402
 from nav.dashcam_overlay import FRAME_W, TrackSample, smooth_track  # noqa: E402
 
 CACHE = REPO_ROOT / "data" / "cache" / "dashcam"
 MPH = 0.44704
+MAX_MISSING_FRACTION = 0.10  # skip a turn when more than this fraction of its frames has no usable homography
+MAX_FRAME_SWING_PX = 150.0  # a centre jump beyond this in one frame (25 fps) is a bad homography, not a turn
+MIN_USED_FRAMES = 10  # fewer usable frames than this: no measurement at all
+
+log = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,15 +115,78 @@ def _wrap(deg: float) -> float:
     return (deg + 180.0) % 360.0 - 180.0
 
 
-def image_swing_px(path: Path, t0: float, t1: float) -> float | None:
-    """Summed sideways travel (px, + = scene moves left = we turn right) of the image centre between t0 and t1."""
+@dataclass(frozen=True, slots=True)
+class Swing:
+    """The image centre's summed sideways travel over a turn, and how many frames contributed to it."""
+
+    total_px: float  # + = scene moves left = we turn right
+    frames: int  # frames inside the turn window
+    used: int  # frames with a usable homography
+
+    @property
+    def missing(self) -> int:
+        """Frames whose homography was missing or rejected."""
+        return self.frames - self.used
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of the turn's frames that contributed (0 for an empty window)."""
+        return self.used / self.frames if self.frames else 0.0
+
+    def rejection(self, max_missing: float = MAX_MISSING_FRACTION) -> str | None:
+        """Why this swing can't be trusted (None if it can)."""
+        if self.used < MIN_USED_FRAMES:
+            return f"only {self.used} usable frames"
+        if self.missing > max_missing * self.frames:
+            return f"homography missing on {self.missing}/{self.frames} frames (> {max_missing:.0%})"
+        return None
+
+
+def frame_swing_px(homography: np.ndarray | None, cx: float, cy: float) -> float | None:
+    """Sideways travel of the point (cx, cy) under one frame-to-frame homography (None if missing or implausible)."""
+    if homography is None or not np.all(np.isfinite(homography)):
+        return None
+    p = homography @ np.array([cx, cy, 1.0])
+    if abs(p[2]) < 1e-9:
+        return None
+    dx = float(cx - p[0] / p[2])
+    if not math.isfinite(dx) or abs(dx) > MAX_FRAME_SWING_PX:
+        return None
+    return dx
+
+
+def sum_swing(homographies: Iterable[np.ndarray | None], cx: float, cy: float) -> Swing:
+    """Sum the centre's sideways travel over a turn's frame-to-frame homographies, counting the failed ones."""
+    total, frames, used = 0.0, 0, 0
+    for h in homographies:
+        frames += 1
+        dx = frame_swing_px(h, cx, cy)
+        if dx is not None:
+            total += dx
+            used += 1
+    return Swing(total, frames, used)
+
+
+def focal_px(swing_px: float, heading_change_deg: float) -> float:
+    """Focal length from the summed swing and the GPS heading change (<= 0 when their signs disagree)."""
+    return swing_px / math.radians(heading_change_deg)
+
+
+def hfov_deg(f_px: float, width: int = FRAME_W) -> float:
+    """Horizontal field of view (degrees) of a pinhole camera with focal length f_px and image width `width`."""
+    return math.degrees(2 * math.atan(width / (2 * f_px)))
+
+
+def image_swing_px(path: Path, t0: float, t1: float) -> Swing:
+    """The image centre's sideways travel between t0 and t1, from the app's ego-motion homographies."""
     import av
 
     from perception.ego_motion import EgoMotionEstimator
 
     cfg = load_config()
     ego = EgoMotionEstimator(cfg.ego_motion)
-    total, used = 0.0, 0
+    homographies: list[np.ndarray | None] = []
+    cx, cy = FRAME_W / 2.0, 0.0
     with av.open(str(path)) as container:
         stream = container.streams.video[0]
         stream.thread_type = "AUTO"
@@ -128,52 +203,70 @@ def image_swing_px(path: Path, t0: float, t1: float) -> float | None:
             image = frame.to_ndarray(format="bgr24")
             result = ego.update(Frame(image, t, index, time.perf_counter()))
             index += 1
-            if t >= t0 and result.homography is not None:
-                h = result.homography
+            if t >= t0:
                 cx, cy = image.shape[1] / 2.0, image.shape[0] / 2.0
-                p = h @ np.array([cx, cy, 1.0])
-                total += cx - p[0] / p[2]
-                used += 1
-    return total if used > 10 else None
+                homographies.append(result.homography)
+    swing = sum_swing(homographies, cx, cy)
+    log.info(
+        "turn swing",
+        clip=path.stem,
+        t0=round(t0, 1),
+        t1=round(t1, 1),
+        swing_px=round(swing.total_px, 1),
+        frames=swing.frames,
+        used=swing.used,
+        coverage=round(swing.coverage, 3),
+    )
+    return swing
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("folder", type=Path)
     parser.add_argument("--turns", type=int, default=12, help="Measure this many turns (from different clips).")
+    parser.add_argument(
+        "--max-missing",
+        type=float,
+        default=MAX_MISSING_FRACTION,
+        help="Skip a turn when more than this fraction of its frames has no usable homography.",
+    )
     args = parser.parse_args(argv)
+    setup_logging("WARNING")
     clips = sorted(p.stem for p in CACHE.glob("dm_*.json"))
     turns: list[Turn] = []
     for clip in clips:
         found = find_turns(clip)
         if found:
             turns.append(max(found, key=lambda x: abs(x.heading_change_deg)))
-    print(f"{len(turns)} clips with a clean turn; measuring {min(args.turns, len(turns))}")
+    print(f"{len(turns)} clips with a clean turn; measuring {min(args.turns, len(turns))}", flush=True)
     step = max(1, len(turns) // max(1, args.turns))
-    results = []
+    print(f"{'clip':<22} {'window s':>11} {'turn deg':>9} {'swing px':>9} {'f px':>6} {'hfov':>6} {'cover':>6}  status")
+    accepted: list[float] = []
+    rejected = 0
     for turn in turns[::step][: args.turns]:
         swing = image_swing_px(args.folder / f"{turn.clip}.mp4", turn.t0, turn.t1)
-        if swing is None:
-            continue
-        f = swing / math.radians(turn.heading_change_deg)
-        if f <= 0:
-            print(
-                f"  {turn.clip} {turn.t0:.0f}-{turn.t1:.0f} s: turn {turn.heading_change_deg:+.0f} deg, swing "
-                f"{swing:+.0f} px: opposite signs, skipped"
-            )
-            continue
-        hfov = math.degrees(2 * math.atan(FRAME_W / (2 * f)))
-        results.append((f, hfov))
+        f = focal_px(swing.total_px, turn.heading_change_deg)
+        reason = swing.rejection(args.max_missing)
+        if reason is None and f <= 0:
+            reason = "swing and turn have opposite signs"
+        f_txt, hfov_txt = (f"{f:6.0f}", f"{hfov_deg(f):6.1f}") if f > 0 else (f"{'-':>6}", f"{'-':>6}")
         print(
-            f"  {turn.clip} {turn.t0:.0f}-{turn.t1:.0f} s: turn {turn.heading_change_deg:+.0f} deg, image swing "
-            f"{swing:+.0f} px -> f {f:.0f} px, hfov {hfov:.1f} deg"
+            f"{turn.clip:<22} {turn.t0:5.0f}-{turn.t1:<5.0f} {turn.heading_change_deg:+9.0f} {swing.total_px:+9.0f} "
+            f"{f_txt} {hfov_txt} {swing.coverage:6.1%}  {'ok' if reason is None else 'SKIPPED: ' + reason}",
+            flush=True,
         )
-    if results:
-        fs = np.array([r[0] for r in results])
+        if reason is None:
+            accepted.append(f)
+        else:
+            rejected += 1
+    print(f"{len(accepted)} turns accepted, {rejected} rejected (max missing {args.max_missing:.0%})")
+    if accepted:
+        fs = np.array(accepted)
         f_med = float(np.median(fs))
+        q25, q75 = float(np.percentile(fs, 25)), float(np.percentile(fs, 75))
         print(
-            f"median f {f_med:.0f} px (IQR {np.percentile(fs, 25):.0f}-{np.percentile(fs, 75):.0f}): "
-            f"hfov {math.degrees(2 * math.atan(FRAME_W / (2 * f_med))):.1f} deg over {len(results)} turns"
+            f"median f {f_med:.0f} px (IQR {q25:.0f}-{q75:.0f}): hfov {hfov_deg(f_med):.1f} deg "
+            f"(IQR {hfov_deg(q75):.1f}-{hfov_deg(q25):.1f}) over {len(accepted)} turns"
         )
     return 0
 

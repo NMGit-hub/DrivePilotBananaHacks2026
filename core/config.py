@@ -725,6 +725,13 @@ class LanesConfig(_Strict):
         description="A wider camera (the phone's 114° ultrawide) gives the lane model its center cropped to this field "
         "of view (YOLOPv2 and the tracker are tuned on ~60° dashcams); null: the whole frame.",
     )
+    view_center_y: float = Field(
+        0.5,
+        gt=0.0,
+        lt=1.0,
+        description="Where that crop is centered down the frame (share of its height; kept inside the frame): a "
+        "camera pitched up, with the road low in the frame, wants it lower (the user's car dashcam: 0.65).",
+    )
     # Geometry (a flat road seen by a pinhole camera; lateral positions need only the height and the horizon).
     camera_height_m: float = Field(1.3, gt=0.0, description="Camera above the road (only a prior: see lane_width_m).")
     camera_offset_m: float = Field(0.0, description="Camera right of the car's center line (left: negative).")
