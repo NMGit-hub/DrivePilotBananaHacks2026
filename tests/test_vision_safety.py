@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from answers.assistant import Assistant
-from answers.scene import NO_VOUCH, PERMISSION, VOUCHING, SceneHandler, describe_world
+from answers.scene import GREEN_CHECK, NO_VOUCH, PERMISSION, VOUCHING, SceneHandler, describe_world
 from answers.sentences import sentences
 from answers.speech import TextSpeaker
 from answers.vision import (
@@ -79,6 +79,26 @@ def test_permission_is_removed_whatever_the_question(reply: str) -> None:
 def test_descriptions_with_clear_are_fine_when_not_about_going() -> None:
     reply = "The road ahead is clear of construction; the right lane reopens after the bridge."
     assert spoken_by_assistant(reply, "Is the road closed ahead?", ego_stopped=False) == [reply]
+
+
+@pytest.mark.parametrize(
+    ("question", "reply", "reminded"),
+    [
+        ("Is the light green?", "The light facing us is green, [ref 4].", True),  # test sheet row 8
+        ("What color is the light?", "It just turned green.", True),
+        ("Is the light green?", "No, the light is red.", False),
+        ("Is the arrow green?", "The left arrow is green, but our light is red.", False),
+        ("Is the light green?", "It's green, so check the intersection first.", False),  # already reminds
+        ("Is the light green?", "It isn't green yet.", False),
+        ("What did that green sign say?", "The green sign said Exit 15.", False),  # not about a light
+    ],
+)
+def test_a_model_answer_that_says_our_light_is_green_reminds_to_check(
+    question: str, reply: str, reminded: bool
+) -> None:
+    said = spoken_by_assistant(reply, question, ego_stopped=True, ego_stopped_since=10.0)
+    assert (said[-1] == GREEN_CHECK) is reminded, said
+    assert said[0].endswith(".") and ",." not in said[0]
 
 
 def test_negated_safety_words_are_not_vouching() -> None:

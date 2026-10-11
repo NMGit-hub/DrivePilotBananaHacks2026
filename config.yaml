@@ -191,6 +191,8 @@ vision:
   frames: 3                 # latest frame at full width + 2 earlier, smaller ones (motion, things just passed)
   frame_spacing_s: 0.7
   sign_frame_spacing_s: 1.2 # "what did that sign say?": reach further back, at full width
+  sign_closeups: 3          # sign questions also get close-ups of the signs the detectors saw in the last...
+  sign_closeup_window_s: 5.0  # ...5 s (a 25 px DO NOT ENTER sign in the frame is unreadable; its close-up isn't)
   latest_width: 1280
   older_width: 640
   jpeg_quality: 80

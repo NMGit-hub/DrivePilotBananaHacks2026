@@ -121,6 +121,19 @@ OBJECT_NUMBER = re.compile(
 MARK_COLORS = {"vehicle": (255, 220, 60), "person": (40, 190, 255), "light": (200, 200, 200), "sign": (90, 90, 255)}
 
 NO_VOUCH = "I can't judge moving traffic, so check both ways yourself before you go."
+GREEN_CHECK = "Check the intersection before you go."
+LIGHT_NAMED = re.compile(r"\b(?:light|lights|signal|signals|arrow|arrows)\b", re.IGNORECASE)
+_GREEN = re.compile(r"\bgreen\b", re.IGNORECASE)
+_NOT_JUST_GREEN = re.compile(r"\b(?:red|yellow|amber|not|no|never)\b|n't\b|\bcheck\b", re.IGNORECASE)
+
+
+def says_green(spoken: Sequence[str]) -> bool:
+    """The answer says a light is green, and nothing red, yellow, negated or already a reminder to check: "The light
+    facing us is green." (test sheet row 8) yes; "No, it's still red." / "The arrow is green, ours is red." no."""
+    text = " ".join(spoken)
+    return bool(_GREEN.search(text)) and not _NOT_JUST_GREEN.search(text)
+
+
 FALLBACK_TIMEOUT = "Sorry, I couldn't get a clear answer in time."
 FALLBACK_ERROR = "Sorry, I can't reach the vision model right now."
 FALLBACK_EMPTY = "Sorry, I didn't get an answer to that."
@@ -191,6 +204,22 @@ def light_crop(image: np.ndarray, box: tuple[float, float, float, float], height
     crop = image[cy1:cy2, cx1:cx2]
     scale = height / crop.shape[0]
     return cv2.resize(crop, (max(1, round(crop.shape[1] * scale)), height), interpolation=cv2.INTER_CUBIC)
+
+
+def sign_closeups(memory: SceneMemory, now: float, window_s: float, count: int) -> list[ImagePart]:
+    """Close-ups of the signs the detectors saw in the last `window_s` (their best view so far), for a sign
+    question: a sign 25 px tall in the frame can't be read, its close-up can (the test sheet's DO NOT ENTER signs).
+    Labeled with what the detector took it for, as a hint, never as the answer."""
+    parts = []
+    for sign in memory.signs(window_s, count, now):
+        where = "ahead" if sign.side == "ahead" else f"on the {sign.side}"
+        read = f", read as {sign.text}" if sign.text else ""
+        label = (
+            f"Close-up of a sign {where}, {max(0.0, now - sign.t):.0f} s ago "
+            f"(the sign detector took it for: {sign.kind.replace('_', ' ')}{read})"
+        )
+        parts.append(ImagePart(encode_jpeg(sign.image, 512, 90), label))
+    return parts
 
 
 @dataclass(frozen=True, slots=True)
@@ -521,6 +550,8 @@ class SceneHandler:
                     if crop is not None:
                         label = f"Close-up of the traffic light {_side(box, latest.image.shape[1])}"
                         images.append(ImagePart(encode_jpeg(crop, 512, 92), label))
+            if about_sign and self.memory is not None and vcfg.sign_closeups > 0:
+                images += sign_closeups(self.memory, latest.t, vcfg.sign_closeup_window_s, vcfg.sign_closeups)
         when = vcfg.time_override or spoken_time(self._now())
         context = [f"Local time: {when}.", *describe_world(snapshot)]
         if self._extra is not None:
@@ -556,6 +587,9 @@ class SceneHandler:
         signs = self.memory.signs(mcfg.sign_window_s, mcfg.signs, now)
         if not frames and not signs:
             return None
+        # A sign we passed: its frames as kept (memory.width), not shrunk to older_width (at 640 px a night exit sign's
+        # text was invented: test sheet row 35).
+        width = mcfg.width if SIGN_WORDS.search(question) else vcfg.older_width
         images: list[ImagePart] = []
         numbered: dict[int, Frame] = {}
         number = 0
@@ -570,13 +604,11 @@ class SceneHandler:
             number += 1
             numbered[number] = frame
             label = f"Image {number}: {now - frame.t:.0f} s ago"
-            images.append(ImagePart(encode_jpeg(frame.image, vcfg.older_width, vcfg.jpeg_quality), label))
+            images.append(ImagePart(encode_jpeg(frame.image, width, vcfg.jpeg_quality), label))
         if latest is not None:
             number += 1
             numbered[number] = latest
-            images.append(
-                ImagePart(encode_jpeg(latest.image, vcfg.older_width, vcfg.jpeg_quality), f"Image {number}: now")
-            )
+            images.append(ImagePart(encode_jpeg(latest.image, width, vcfg.jpeg_quality), f"Image {number}: now"))
         when = vcfg.time_override or spoken_time(self._now())
         context = [f"Local time: {when}.", *describe_world(snapshot)]
         if self._extra is not None:
@@ -605,7 +637,14 @@ class SceneHandler:
         vcfg = self.cfg.vision
         pieces = guarded_stream(self.model, planned.request, vcfg.first_token_timeout_s, vcfg.total_timeout_s, cancel)
         passing = bool(PASS_QUESTION.search(route.text))
-        return self._safe(sentences(pieces), strict=is_go_question(route), passing=passing, planned=planned)
+        light_question = bool(LIGHT_NAMED.search(route.text))  # (not "what did that green sign say?")
+        return self._safe(
+            sentences(pieces),
+            strict=is_go_question(route),
+            passing=passing,
+            planned=planned,
+            light_question=light_question,
+        )
 
     def _show_image(self, number: int, planned: RequestPlan) -> None:
         """A memory answer's "[image k]": show that remembered frame."""
@@ -630,9 +669,15 @@ class SceneHandler:
             log.exception("highlight failed")
 
     def _safe(
-        self, stream: Iterator[str], strict: bool, passing: bool = False, planned: RequestPlan | None = None
+        self,
+        stream: Iterator[str],
+        strict: bool,
+        passing: bool = False,
+        planned: RequestPlan | None = None,
+        light_question: bool = False,
     ) -> Iterator[str]:
-        """Safety nets on every sentence, hidden tags taken out, and spoken fallbacks for failures."""
+        """Safety nets on every sentence, hidden tags taken out, and spoken fallbacks for failures (`light_question`:
+        an answer that says our light is green ends with a reminder to check the intersection)."""
         said = False
         no_vouch_said = False
         replaced = False  # a safety net changed the answer: it no longer points at what the model named
@@ -686,3 +731,5 @@ class SceneHandler:
             return
         if strict and not no_vouch_said:
             yield NO_VOUCH
+        elif light_question and says_green(spoken):
+            yield GREEN_CHECK  # like the local light answers: never a bare "it's green"

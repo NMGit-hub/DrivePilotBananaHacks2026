@@ -783,6 +783,10 @@ class VisionConfig(_Strict):
     frames: int = Field(3, ge=1, le=6, description="Recent frames sent with each question (latest last).")
     frame_spacing_s: float = Field(0.7, gt=0.0, description="Time between the frames sent.")
     sign_frame_spacing_s: float = Field(1.2, gt=0.0, description="...for questions about a sign just passed.")
+    sign_closeups: int = Field(
+        3, ge=0, le=6, description="Sign questions also get close-ups of this many signs seen (V2 sign detector)..."
+    )
+    sign_closeup_window_s: float = Field(5.0, gt=0.0, description="...in the last this many seconds.")
     latest_width: int = Field(1280, ge=320, description="The latest frame is sent at up to this width...")
     older_width: int = Field(640, ge=160, description="...earlier frames smaller (motion, things just passed).")
     jpeg_quality: int = Field(80, ge=30, le=100)

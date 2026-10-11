@@ -224,6 +224,32 @@ def test_a_memory_question_gets_the_remembered_frames_and_signs_and_shows_the_fr
     assert shown[0].image.shape[1] == 960
 
 
+def test_a_sign_question_gets_close_ups_of_the_signs_in_view() -> None:
+    """Test sheet row 14 (2026-10-10): the sign detector saw two DO NOT ENTER signs ~25 px tall, and the model said
+    they were too small to read; their close-ups go with sign questions now, labeled with the detector's guess."""
+    c = cfg()
+    memory = SceneMemory(c.memory)
+    old, latest = frame(10.0), frame(20.0)
+    memory.add_sign(old, 3, "speed_limit", (900.0, 250.0, 930.0, 290.0), text="35 mph")  # 10 s ago: not in view
+    memory.add_sign(latest, 7, "do_not_enter", (370.0, 340.0, 400.0, 370.0))
+    memory.add_sign(latest, 8, "do_not_enter", (710.0, 395.0, 740.0, 423.0))
+    snap = replace(empty_snapshot(20.0), frame=latest)
+    model = MockVision("Both say DO NOT ENTER.")
+    handler = scene(model, c, snap, [], memory=memory)
+    assert list(handler.answer(route("what do those red signs ahead say?"), snap)) == ["Both say DO NOT ENTER."]
+    labels = [image.label for image in model.requests[0].images]
+    closeups = [label for label in labels if label.startswith("Close-up of a sign")]
+    assert len(closeups) == 2 and all("do not enter" in label for label in closeups)
+    assert any("on the left" in label for label in closeups) and any("ahead" in label for label in closeups)
+    model = MockVision("A white car.")  # not a sign question: no close-ups
+    list(scene(model, c, snap, [], memory=memory).answer(route("what color is the car ahead?"), snap))
+    assert not any(image.label.startswith("Close-up of a sign") for image in model.requests[0].images)
+    model = MockVision("A sign.")  # switched off
+    off = cfg("vision.sign_closeups=0")
+    list(scene(model, off, snap, [], memory=memory).answer(route("what does that sign say?"), snap))
+    assert not any(image.label.startswith("Close-up of a sign") for image in model.requests[0].images)
+
+
 def test_a_memory_question_without_memory_is_an_ordinary_scene_question() -> None:
     c = cfg()
     snap = replace(empty_snapshot(20.0), frame=frame(20.0))
