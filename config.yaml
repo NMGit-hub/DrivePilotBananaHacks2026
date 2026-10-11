@@ -284,5 +284,6 @@ sign_alerts:                # what the sign detector's readings turn into (state
   keep_s: 60.0
   agree_frames: 2           # frames that must agree on a limit (or see a school-zone sign) before it is said...
   agree_window_s: 2.0       # ...within this long (one frame can be a look-alike)
-  repeat_s: 300.0           # school zone: once until this long without a school-zone sign; same school limit: quiet
+  repeat_s: 300.0           # the same school limit again within this long: quiet
+  zone_gap_s: 120.0         # "School zone ahead." once per zone: a zone ends after 2 min without a school sign
   recent: 6

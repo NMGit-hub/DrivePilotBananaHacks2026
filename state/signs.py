@@ -10,7 +10,8 @@ box, confidence and, for speed limits, a value only when it is sure. This tracke
 - does the same for school speed limits ("School speed limit 20.") and announces a school zone once per zone
   ("School zone ahead."): a zone often has a sign on each side of the road, and one sign can be lost and found
   again as a new sighting (its plaque detected apart, a gap of a few frames), so a confirmed school-zone sign
-  starts a zone only after `repeat_s` without any school-zone sign; every one seen meanwhile extends the zone;
+  starts a zone only after `zone_gap_s` without a confirmed school sign (school zone or school speed limit: both
+  extend the zone; a one-frame look-alike does neither);
 - keeps the current limit (for the page's badge and the vision model's context) and the recent sightings.
 Detections are duck-typed (`SignLike`: kind, value, conf, box) so this module doesn't need the GPU stack.
 Called from the sign thread only (`update`); `snapshot` is safe from any thread.
@@ -189,15 +190,18 @@ class SignTracker:
     def _decide(self, s: Sighting, t: float) -> list[SignEvent]:
         """An alert for this sighting, if it has earned one (caller holds the lock)."""
         cfg = self.cfg
-        if s.kind == "school_zone":
-            in_zone = self._zone_t is not None and t - self._zone_t <= cfg.repeat_s
-            if in_zone:
-                self._zone_t = t  # any school-zone sign extends the zone we are in (even one seen once)
-            if s.announced or s.frames < cfg.agree_frames:
-                return []
-            s.announced = True  # (confirmed: said, or quiet because its zone was said)
+        if s.kind in ("school_zone", "school_speed_limit") and s.frames >= cfg.agree_frames:
+            # A confirmed school sign of either kind: are we already in a school zone? Then it extends the zone
+            # (a one-frame look-alike neither starts nor extends one).
+            in_zone = self._zone_t is not None and t - self._zone_t <= cfg.zone_gap_s
             self._zone_t = t
-            return [] if in_zone else [SignEvent("school_zone", t, SCHOOL_ZONE_TEXT, None, s.id, s.box)]
+            if s.kind == "school_zone":
+                if s.announced:
+                    return []
+                s.announced = True  # (said, or quiet because its zone was said)
+                return [] if in_zone else [SignEvent("school_zone", t, SCHOOL_ZONE_TEXT, None, s.id, s.box)]
+        if s.kind == "school_zone":
+            return []
         if s.announced:
             return []
         if s.kind not in VALUE_KINDS:

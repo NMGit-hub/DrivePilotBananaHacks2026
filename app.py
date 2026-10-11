@@ -741,10 +741,12 @@ class DrivePilotApp:
                 self.assistant.say(Utterance(event.text, "alert", Priority.INFO, t=event.t))
 
     @staticmethod
-    def _await_model(worker: FrameWorker[Any] | None) -> None:
-        """Wait until a model thread has built its model (or failed to)."""
+    def _await_model(worker: FrameWorker[Any] | None) -> bool:
+        """Wait until a model thread has built its model (or failed to); False if it is still building."""
         if worker is not None and not worker.ready.wait(MODEL_START_TIMEOUT_S):
             log.warning("model still starting; the app goes on anyway", worker=worker.name)
+            return False
+        return True
 
     def start(self) -> None:
         """Start every thread."""
@@ -756,9 +758,12 @@ class DrivePilotApp:
         # (seen in the bench: built side by side, both models failed to start). The first seconds of a drive
         # shouldn't lose frames to model warm-ups either. Nothing reloads an engine after this (checked).
         self._start_lanes()
-        self._await_model(self.lane_worker)
-        self._start_signs()
-        self._await_model(self.sign_worker)
+        if self._await_model(self.lane_worker):
+            self._start_signs()
+            self._await_model(self.sign_worker)
+        elif self._sign_model is not None:  # building it now would break the lane model's capture (and its own)
+            log.warning("sign detector not started: the lane model is still loading")
+            self.status["signs"] = "off (lane model still loading)"
         self._world_thread.start()
         self.source.start()
         self.worker = self._make_worker()

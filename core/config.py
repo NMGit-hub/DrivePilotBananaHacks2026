@@ -625,11 +625,12 @@ class SignAlertsConfig(_Strict):
     keep_s: float = Field(60.0, gt=0.0, description="Sightings are remembered this long.")
     agree_frames: int = Field(2, ge=1, description="Frames that must agree on a limit before it is announced.")
     agree_window_s: float = Field(2.0, gt=0.0, description="...within this long (one frame can be a look-alike).")
-    repeat_s: float = Field(
-        300.0,
+    repeat_s: float = Field(300.0, gt=0.0, description="The same school limit again within this long: quiet.")
+    zone_gap_s: float = Field(
+        120.0,
         gt=0.0,
-        description="A school zone is said once until this long passes without a school-zone sign; the same school "
-        "limit again within this long: quiet.",
+        description="A school zone is said once; it ends after this long without a confirmed school sign (school "
+        "zone or school speed limit), and the next one is a new zone.",
     )
     recent: int = Field(6, ge=1, description="Recent sightings kept for the page and answers.")
 

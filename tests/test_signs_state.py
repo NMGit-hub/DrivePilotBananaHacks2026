@@ -7,6 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -115,8 +116,8 @@ def test_a_school_zone_is_said_once_per_zone() -> None:
     assert len({v.id for v in tracker.snapshot().recent}) >= 3  # (several sightings, one zone)
 
 
-def test_a_new_school_zone_after_repeat_s_without_one_is_said_again() -> None:
-    cfg = SignAlertsConfig(repeat_s=60.0)
+def test_a_new_school_zone_after_zone_gap_s_without_a_school_sign_is_said_again() -> None:
+    cfg = SignAlertsConfig(zone_gap_s=60.0)
     tracker = SignTracker(cfg)
     said = run(tracker, approach("school_zone", [None, None, None]))
     said += run(tracker, approach("school_zone", [None, None], start=50.0))  # the same zone: 40 s since the last one
@@ -124,15 +125,33 @@ def test_a_new_school_zone_after_repeat_s_without_one_is_said_again() -> None:
     assert said == [SCHOOL_ZONE_TEXT]
     said += run(tracker, approach("school_zone", [None, None], start=170.0))  # 65 s without one: a new zone
     assert said == [SCHOOL_ZONE_TEXT, SCHOOL_ZONE_TEXT]
-    # One-frame look-alikes keep an announced zone alive but never start one.
-    tracker = SignTracker(cfg)
-    assert run(tracker, approach("school_zone", [None], start=0.0)) == []
-    assert run(tracker, approach("school_zone", [None, None], start=30.0)) == [SCHOOL_ZONE_TEXT]
-    for t in (80.0, 130.0, 180.0):  # one frame each, 50 s apart
-        assert run(tracker, approach("school_zone", [None], start=t)) == []
-    assert run(tracker, approach("school_zone", [None, None], start=235.0)) == []  # 55 s after the last look-alike
     tracker.update(10.0, [])  # a seek back forgets the zone
     assert run(tracker, approach("school_zone", [None, None], start=12.0)) == [SCHOOL_ZONE_TEXT]
+
+
+def test_one_frame_look_alikes_neither_start_nor_extend_a_zone() -> None:
+    """Review 2026-10-11: one-frame look-alikes every few minutes kept the first zone alive forever, so a real new
+    school 20 min later was never announced."""
+    tracker = SignTracker(SignAlertsConfig(zone_gap_s=60.0))
+    assert run(tracker, approach("school_zone", [None], start=0.0)) == []  # one frame: not a sign yet
+    assert run(tracker, approach("school_zone", [None, None], start=30.0)) == [SCHOOL_ZONE_TEXT]
+    for t in (80.0, 130.0, 180.0):  # a look-alike for one frame, 50 s apart
+        assert run(tracker, approach("school_zone", [None], start=t)) == []
+    assert run(tracker, approach("school_zone", [None, None], start=235.0)) == [SCHOOL_ZONE_TEXT]  # a new zone
+
+
+def test_a_second_school_minutes_later_and_school_limits_in_the_zone() -> None:
+    """Review 2026-10-11: with the zone lasting 300 s a second school 3 min after the first was silent, and a SCHOOL
+    SPEED LIMIT sign didn't count as being in the zone. Defaults: a zone ends 2 min after its last school sign."""
+    tracker = SignTracker(SignAlertsConfig())
+    said = run(tracker, approach("school_zone", [None, None]))
+    said += run(tracker, approach("school_zone", [None, None], start=190.0))  # the next school, 3 min on
+    assert said == [SCHOOL_ZONE_TEXT, SCHOOL_ZONE_TEXT]
+    tracker = SignTracker(SignAlertsConfig())
+    said = run(tracker, approach("school_zone", [None, None]))
+    said += run(tracker, approach("school_speed_limit", [20, 20], start=100.0))  # in the zone: extends it
+    said += run(tracker, approach("school_zone", [None, None], start=200.0))  # 100 s after the limit: same zone
+    assert said == [SCHOOL_ZONE_TEXT, "School speed limit 20."]
 
 
 def test_a_speed_limit_seen_twice_in_one_frame_or_lost_and_found_is_said_once() -> None:
@@ -267,6 +286,36 @@ def test_the_app_builds_the_lane_and_sign_models_one_at_a_time(tmp_path: Path) -
     try:
         assert built == ["lanes", "signs"] and overlaps == []
         assert app.status["lanes"] == "on" and app.status["signs"] == "on"
+    finally:
+        app.stop()
+
+
+def test_a_lane_model_still_loading_after_the_timeout_keeps_the_sign_model_off(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Review 2026-10-11: after the start timeout the sign model was built anyway, side by side with the lane model
+    still loading (the failure the one-at-a-time start fixes). Now it isn't started, and the page says why."""
+    import app as app_module
+    from perception.lanes import LaneMasks
+    from tests.test_lanes import _app
+
+    monkeypatch.setattr(app_module, "MODEL_START_TIMEOUT_S", 0.2)
+    sign_built: list[bool] = []
+
+    def lane_factory() -> object:
+        time.sleep(0.6)
+        return lambda f: LaneMasks(f.t, f.index, (8, 8), np.zeros((8, 8), np.uint8), np.zeros((8, 8), np.uint8), {})
+
+    def sign_factory() -> SlowDetector:
+        sign_built.append(True)
+        return SlowDetector()
+
+    app, _ = _app(tmp_path, lane_model=lane_factory, sign_model=sign_factory)
+    app.start()
+    try:
+        time.sleep(0.8)
+        assert sign_built == [] and app.sign_worker is None
+        assert app.status["signs"] == "off (lane model still loading)"
     finally:
         app.stop()
 
