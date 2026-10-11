@@ -18,13 +18,21 @@ from core.types import Frame
 from perception import signs as signs_mod
 from perception.sign_classes import KIND_INDEX, KINDS, SPEED_VALUES, VALUE_KINDS, kind_from_label, parse_speed_value
 from perception.signs import (
+    RawSign,
     SignDetection,
     SignDetector,
     SignGpuError,
+    check_value_classes,
     crop_square,
     decide_value,
+    engine_is_fp16,
     engine_path,
+    engine_staleness,
+    file_sha256,
     parse_value_class,
+    select,
+    sidecar_path,
+    touches_border,
 )
 from scripts.signs import label_bdd_signs as labeler
 from scripts.signs import prepare_data as prep
@@ -502,6 +510,153 @@ def test_real_engines_read_the_do_not_enter_signs_on_a_dev_clip() -> None:
     assert all(d.value is None for d in out if d.kind not in ("speed_limit", "school_speed_limit"))
 
 
+# ------------------------------------------------------------------------- the app's rules: select()
+
+
+def test_select_applies_per_kind_conf_then_duplicates_then_the_value_rule() -> None:
+    cfg = SignsConfig(conf=0.4, class_conf={"stop": 0.6}, value_conf=0.9, value_min_px=16.0, duplicate_iou=0.6)
+    raw = [
+        RawSign("stop", 0.5, (10.0, 10.0, 40.0, 40.0)),  # below stop's own 0.6: dropped
+        RawSign("speed_limit", 0.8, (100.0, 100.0, 130.0, 140.0), 35, 0.95),  # value reported
+        RawSign("school_speed_limit", 0.7, (101.0, 101.0, 131.0, 141.0), 25, 0.99),  # same sign, less sure
+        RawSign("speed_limit", 0.6, (300.0, 100.0, 330.0, 140.0), 45, 0.85),  # unsure: no value
+        RawSign("speed_limit", 0.55, (500.0, 100.0, 510.0, 112.0), 25, 0.99),  # 12 px: not attempted
+        RawSign("speed_limit", 0.52, (700.0, 100.0, 730.0, 140.0), None, 0.99),  # reject class wins: no value
+        RawSign("yield", 0.5, (900.0, 100.0, 940.0, 140.0)),
+    ]
+    out = select(raw, cfg, 1280, 720)
+    assert [(d.kind, d.value) for d in out] == [
+        ("speed_limit", 35),
+        ("speed_limit", None),
+        ("speed_limit", None),
+        ("speed_limit", None),
+        ("yield", None),
+    ]
+    assert [d.value_conf for d in out] == [pytest.approx(0.95), pytest.approx(0.85), None, pytest.approx(0.99), None]
+
+
+def test_select_withholds_values_at_the_frame_border() -> None:
+    cfg = SignsConfig(value_conf=0.9, value_edge_px=2.0)
+
+    def value(box: tuple[float, float, float, float], w: int = 1280, h: int = 720) -> int | None:
+        return select([RawSign("speed_limit", 0.9, box, 35, 0.99)], cfg, w, h)[0].value
+
+    assert value((1200.0, 5.0, 1230.0, 45.0)) == 35
+    assert value((100.0, 0.5, 130.0, 40.0)) is None  # top edge: the number may be cut off
+    assert value((1250.0, 300.0, 1279.0, 340.0)) is None  # right edge
+    assert value((100.0, 680.0, 130.0, 719.0)) is None  # bottom edge
+    assert value((100.0, 2.5, 130.0, 60.0), 1920, 1080) is None  # the margin is measured at 1280: 3 px at 1920
+    assert touches_border((0.0, 10.0, 20.0, 30.0), 1280, 720, 0.0) is False  # edge_px 0 turns the rule off
+
+
+def test_classifier_classes_must_be_exactly_the_value_set() -> None:
+    good = dict(enumerate(["none", *(f"v{v}" for v in SPEED_VALUES)]))
+    check_value_classes(good)
+    with pytest.raises(ValueError, match="don't match"):
+        check_value_classes({0: "none", 1: "v25", 2: "v35"})
+    with pytest.raises(ValueError, match="v90"):
+        check_value_classes({**good, 99: "v90"})
+
+
+def test_detector_refuses_a_classifier_with_other_classes(fake_detector: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_FakeYOLO, "cls_names", {0: "none", 1: "v25", 2: "v35"})
+    with pytest.raises(ValueError, match="value classifier"):
+        fake_detector()
+
+
+def test_raw_detections_classify_down_to_the_given_height(fake_detector: Any) -> None:
+    _FakeYOLO.det_rows = [
+        (600, 200, 610, 212, 0.9, KIND_INDEX["speed_limit"]),  # 12 px tall
+        (100, 100, 140, 140, 0.9, KIND_INDEX["stop"]),
+    ]
+    _FakeYOLO.probs = [0.0, 0.0, 1.0]
+    det = fake_detector()
+    raw = det.raw_detections(_frame(), classify_min_px=1.0)  # the evaluation's setting
+    assert raw[0].top_value == 35 and raw[0].top_prob == pytest.approx(1.0)
+    assert raw[1].top_value is None and raw[1].top_prob is None  # never classified: not a speed kind
+    out = det.detect(_frame())  # the app: below value_min_px, so no value (and no classifier call)
+    assert out[0].kind == "speed_limit" and out[0].value is None and out[0].value_conf is None
+
+
+# ----------------------------------------------------------------------- GPU / FP16 / stale engines
+
+
+class TensorRTBackend:
+    """Stands in for ultralytics' TensorRT backend (_verify_gpu checks the class name)."""
+
+    def __init__(self, quantize: int | None, fp16: bool, layers: list[str]) -> None:
+        self.metadata = {"args": {"quantize": quantize}}
+        self.fp16 = fp16
+        self.model = layers  # engine_layer_names is patched to return this
+
+
+def _verify(backend: Any, fallback: bool = False, **cfg: Any) -> tuple[str, str]:
+    det = SignDetector.__new__(SignDetector)
+    det.cfg = SignsConfig(**cfg)
+    det._fallback = {"detector": fallback}
+    return det._verify_gpu("detector", SimpleNamespace(predictor=SimpleNamespace(model=backend)))  # type: ignore[arg-type]
+
+
+def test_verify_gpu_rejects_weights_on_the_cpu() -> None:
+    with pytest.raises(SignGpuError, match="cpu"):
+        _verify(SimpleNamespace(model=torch.nn.Linear(2, 2)), engine="pytorch")  # CPU, FP32
+    with pytest.raises(SignGpuError):
+        _verify(SimpleNamespace(model=torch.nn.Linear(2, 2)), fallback=True)  # the .pt fallback is checked too
+
+
+def test_verify_gpu_checks_the_engine_really_computes_in_fp16(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(signs_mod, "engine_layer_names", lambda engine: engine)
+
+    def trt(quantize: int | None, fp16: bool, layers: list[str], device: str = "cuda:0") -> Any:
+        return SimpleNamespace(backend=TensorRTBackend(quantize, fp16, layers), device=torch.device(device))
+
+    # ModelOpt AutoCast engine: FP32 input binding, the input cast to FP16 inside the network.
+    assert _verify(trt(16, False, ["images_cast_to_fp16", "/model.0/conv/Conv"])) == ("cuda:0", "fp16")
+    assert _verify(trt(16, True, []))[1] == "fp16"  # FP16 bindings
+    with pytest.raises(SignGpuError, match="fp32"):
+        _verify(trt(None, False, ["conv"]))  # an FP32 engine while half is configured
+    with pytest.raises(SignGpuError):
+        _verify(trt(16, False, ["conv"]))  # metadata says 16, but nothing in the engine is FP16
+    with pytest.raises(SignGpuError):
+        _verify(trt(16, True, [], device="cpu"))
+    assert _verify(trt(None, False, ["conv"]), half=False)[1] == "fp32"  # FP32 when that's configured
+    assert engine_is_fp16(False, 16, ["images_cast_to_fp16"]) and not engine_is_fp16(True, None, [])
+
+
+def test_stale_engine_detection(tmp_path: Path) -> None:
+    import os
+
+    w = tmp_path / "det.pt"
+    w.write_bytes(b"new weights")
+    e = engine_path(w, (736, 1280), True)
+    e.write_bytes(b"engine")
+    os.utime(w, (e.stat().st_mtime - 10, e.stat().st_mtime - 10))
+    assert engine_staleness(e, w) is None  # no sidecar, engine newer than the weights
+    sidecar_path(e).write_text(json.dumps({"weights_sha256": file_sha256(w)}))
+    assert engine_staleness(e, w) is None
+    sidecar_path(e).write_text(json.dumps({"weights_sha256": "0" * 64}))
+    assert "other weights" in (engine_staleness(e, w) or "")
+    sidecar_path(e).unlink()
+    os.utime(w, (e.stat().st_mtime + 10, e.stat().st_mtime + 10))
+    assert "newer" in (engine_staleness(e, w) or "")
+    w.unlink()
+    assert engine_staleness(e, w) is None  # engine delivered without weights: nothing to compare
+
+
+def test_detector_falls_back_to_the_weights_when_the_engine_is_stale(fake_detector: Any, tmp_path: Path) -> None:
+    for name, size in (("det", (736, 1280)), ("cls", (96, 96))):
+        (tmp_path / f"{name}.pt").write_bytes(name.encode())
+        engine = engine_path(tmp_path / f"{name}.pt", size, True)
+        engine.write_bytes(b"engine")
+        sidecar_path(engine).write_text(json.dumps({"weights_sha256": file_sha256(tmp_path / f"{name}.pt")}))
+    cfg = SignsConfig(weights=tmp_path / "det.pt", classifier_weights=tmp_path / "cls.pt")
+    d = SignDetector(cfg, tmp_path)
+    assert d.det_path.suffix == ".engine" and not any(d._fallback.values())
+    (tmp_path / "det.pt").write_bytes(b"retrained")  # new weights, old engine
+    d = SignDetector(cfg, tmp_path)
+    assert d.det_path.suffix == ".pt" and d._fallback == {"detector": True, "classifier": False}
+
+
 # ---------------------------------------------------------------------------------- evaluation logic
 
 from scripts.signs import evaluate as ev  # noqa: E402
@@ -511,50 +666,71 @@ def _cfg(**kw: Any) -> SignsConfig:
     return SignsConfig(**{"conf": 0.4, "value_conf": 0.9, "value_min_px": 16.0, **kw})
 
 
-def _res(gts: list[ev.Gt], dets: list[ev.Det], ignore: list[tuple[float, float, float, float]] | None = None) -> Any:
-    r = ev.ImageResult("img", gts, ignore or [])
-    r.dets = dets
-    return r
+def _res(
+    gts: list[ev.Gt],
+    raw: list[RawSign],
+    ignore: list[tuple[float, float, float, float]] | None = None,
+    w: int = 1280,
+    h: int = 720,
+) -> ev.ImageResult:
+    return ev.ImageResult("img", gts, ignore or [], raw, w, h)
+
+
+def _sl(box: tuple[float, float, float, float], value: int | None, p: float = 0.99, conf: float = 0.9) -> RawSign:
+    return RawSign("speed_limit", conf, box, value, p)
 
 
 def test_eval_counts_right_wrong_and_withheld_values() -> None:
     sl = ev.Gt((100, 100, 130, 140), "speed_limit", 35, True)
     stop = ev.Gt((300, 100, 340, 140), "stop", None, None)
-    dets = [
-        ev.Det((101, 101, 131, 141), "speed_limit", 0.9, 35, 0.95),  # right value
-        ev.Det((299, 99, 341, 141), "speed_limit", 0.8, 45, 0.99),  # speed limit on a stop sign: FP + wrong value
-        ev.Det((600, 100, 630, 140), "speed_limit", 0.7, 25, 0.5),  # FP, value withheld (p < 0.9): not wrong
+    raw = [
+        _sl((101, 101, 131, 141), 35, 0.95),  # right value
+        _sl((299, 99, 341, 141), 45, 0.99, conf=0.8),  # speed limit on a stop sign: FP + wrong value
+        _sl((600, 100, 630, 140), 25, 0.5, conf=0.7),  # FP, value withheld (p < 0.9): not wrong
     ]
-    s = ev.summarize([_res([sl, stop], dets)], _cfg())
+    s = ev.summarize([_res([sl, stop], raw)], _cfg())
     assert s["speed_values"] == {"speed_limit:right": 1}
     assert [w["said"] for w in s["wrong_values"]] == [45]
+    assert s["reported_values"] == {"right": 1, "wrong": 1}
     assert s["per_kind"]["speed_limit"]["tp"] == 1 and s["per_kind"]["speed_limit"]["fp"] == 2
     assert s["per_kind"]["stop"]["fn"] == 1
 
 
-def test_eval_ignore_regions_count_neither_way_but_values_are_listed() -> None:
-    dets = [ev.Det((100, 100, 130, 140), "speed_limit", 0.9, 25, 0.99)]
-    s = ev.summarize([_res([], dets, ignore=[(98, 98, 132, 142)])], _cfg())
-    assert s["per_kind"] == {} and s["wrong_values"] == []
-    assert [u["said"] for u in s["unverifiable_values"]] == [25]
+def test_eval_values_near_ignore_regions_are_still_judged() -> None:
+    # A value on a labeled sign of another kind that also lies on an ignore region is WRONG (this was a hole).
+    stop = ev.Gt((300, 100, 340, 140), "stop", None, None)
+    s = ev.summarize([_res([stop], [_sl((300, 100, 340, 140), 25)], ignore=[(299, 99, 341, 141)])], _cfg())
+    assert len(s["wrong_values"]) == 1 and s["per_kind"]["stop"]["fn"] == 1
+    # A wrong number on a labeled limit touching an ignore box: wrong.
+    sl = ev.Gt((100, 100, 130, 140), "speed_limit", 35, True)
+    s = ev.summarize([_res([sl], [_sl((100, 100, 130, 140), 25)], ignore=[(95, 95, 135, 145)])], _cfg())
+    assert [w["said"] for w in s["wrong_values"]] == [25] and s["speed_values"] == {"speed_limit:wrong": 1}
+    # Only a value on an ignore region with no labeled sign under it is unverifiable (listed for a look).
+    s = ev.summarize([_res([], [_sl((100, 100, 130, 140), 25)], ignore=[(98, 98, 132, 142)])], _cfg())
+    assert s["per_kind"] == {} and s["wrong_values"] == [] and [u["said"] for u in s["unverifiable_values"]] == [25]
+    # A labeled speed limit whose number nobody could read: unverifiable too.
+    unknown = ev.Gt((100, 100, 130, 140), "speed_limit", None, False)
+    s = ev.summarize([_res([unknown], [_sl((100, 100, 130, 140), 25)])], _cfg())
+    assert s["reported_values"] == {"unverifiable": 1}
+    # A value far from every label and ignore region (e.g. on a sign-free frame): wrong.
+    s = ev.summarize([_res([], [_sl((700, 100, 730, 140), 25)])], _cfg())
+    assert len(s["wrong_values"]) == 1 and s["per_kind"]["speed_limit"]["fp"] == 1
 
 
 def test_eval_small_or_unsure_values_are_not_reported() -> None:
     sl = ev.Gt((100, 100, 112, 112), "speed_limit", 35, True)  # 12 px tall
-    dets = [ev.Det((100, 100, 112, 112), "speed_limit", 0.9, 30, 0.99)]
-    s = ev.summarize([_res([sl], dets)], _cfg())
+    s = ev.summarize([_res([sl], [_sl((100, 100, 112, 112), 30)])], _cfg())
     assert s["speed_values"] == {"speed_limit:no_value": 1} and not s["wrong_values"]
-    # at 1080p the same rule is measured at 1280 px width: 24 px tall at 1920 = 16 px -> value reported
+    # at 1080p the rule is measured at 1280 px width: 24 px tall at 1920 = 16 px -> value reported
     sl2 = ev.Gt((100, 100, 118, 124), "speed_limit", 35, True)
-    r = _res([sl2], [ev.Det((100, 100, 118, 124), "speed_limit", 0.9, 35, 0.99)])
-    r.scale = 1.5
+    r = _res([sl2], [_sl((100, 100, 118, 124), 35)], w=1920, h=1080)
     assert ev.summarize([r], _cfg())["speed_values"] == {"speed_limit:right": 1}
 
 
 def test_eval_matching_is_by_kind_and_iou() -> None:
     g = ev.Gt((100, 100, 140, 140), "stop", None, None)
-    wrong_kind = ev.Det((100, 100, 140, 140), "yield", 0.9, None, None)
-    far = ev.Det((150, 150, 190, 190), "stop", 0.9, None, None)
+    wrong_kind = RawSign("yield", 0.9, (100.0, 100.0, 140.0, 140.0))
+    far = RawSign("stop", 0.9, (150.0, 150.0, 190.0, 190.0))
     s = ev.summarize([_res([g], [wrong_kind, far])], _cfg())
     assert s["per_kind"]["stop"] == {**s["per_kind"]["stop"], "tp": 0, "fp": 1, "fn": 1}
     assert s["per_kind"]["yield"]["fp"] == 1
@@ -562,11 +738,276 @@ def test_eval_matching_is_by_kind_and_iou() -> None:
 
 def test_eval_average_precision() -> None:
     gts = [ev.Gt((0, 0, 10, 10), "stop", None, None), ev.Gt((50, 0, 60, 10), "stop", None, None)]
-    dets = [
-        ev.Det((0, 0, 10, 10), "stop", 0.9, None, None),  # TP
-        ev.Det((100, 0, 110, 10), "stop", 0.8, None, None),  # FP
-        ev.Det((50, 0, 60, 10), "stop", 0.7, None, None),  # TP
+    raw = [
+        RawSign("stop", 0.9, (0.0, 0.0, 10.0, 10.0)),  # TP
+        RawSign("stop", 0.8, (100.0, 0.0, 110.0, 10.0)),  # FP
+        RawSign("stop", 0.7, (50.0, 0.0, 60.0, 10.0)),  # TP
     ]
-    ap, n = ev.average_precision([_res(gts, dets)], "stop")
+    ap, n = ev.average_precision([_res(gts, raw)], "stop", _cfg())
     assert n == 2 and ap == pytest.approx(0.5 + 0.5 * (2 / 3))
-    assert np.isnan(ev.average_precision([_res(gts, dets)], "yield")[0])
+    assert np.isnan(ev.average_precision([_res(gts, raw)], "yield", _cfg())[0])
+
+
+def test_eval_value_sweep_counts_fall_with_the_threshold() -> None:
+    sl = ev.Gt((100, 100, 130, 140), "speed_limit", 35, True)
+    rows = ev.value_sweep([_res([sl], [_sl((100, 100, 130, 140), 45, 0.92)])], _cfg())
+    by_t = {r["value_conf"]: r for r in rows}
+    assert by_t[0.9]["wrong_total"] == 1 and by_t[0.93]["wrong_total"] == 0 and by_t[0.93]["readable"] == 1
+
+
+def test_eval_raw_cache_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ev, "RAW_CACHE", tmp_path)
+    g = ev.Gt((0, 0, 10, 10), "stop", None, None)
+    r = _res([g], [_sl((1.0, 2.0, 3.0, 4.0), 35, 0.9, conf=0.5)])
+    ev.save_raw("x", [r], {"frames": 1})
+    (back,), timing = ev.load_raw("x", [("img", Path("img.jpg"), [g], [])])
+    assert back.raw == r.raw and back.gts == [g] and timing == {"frames": 1}
+    with pytest.raises(KeyError):
+        ev.load_raw("x", [("other", Path("o.jpg"), [], [])])
+
+
+def test_eval_refuses_missing_frames(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class _Det:
+        def __init__(self, cfg: SignsConfig, root: Path) -> None:
+            self.det_path = self.cls_path = Path("x")
+
+    monkeypatch.setattr(signs_mod, "SignDetector", _Det)
+    with pytest.raises(FileNotFoundError):
+        ev.run_detector([("a", tmp_path / "missing.jpg", [], [])], SignsConfig())
+
+
+def test_tune_set_is_the_val_fraction_minus_anything_trained(monkeypatch: pytest.MonkeyPatch) -> None:
+    imgs = [Path(f"/x/img{i}.jpg") for i in range(300)]
+    val = [p for p in imgs if prep.in_val(p)]
+    assert len(val) >= 3
+    boxes = [prep.Box((0.0, 0.0, 10.0, 10.0), "stop"), prep.Box((20.0, 0.0, 30.0, 10.0), None)]
+    samples = [prep.Sample(p, boxes, "bdd") for p in imgs]
+    monkeypatch.setattr(prep, "bdd_samples", lambda split: (samples, []))
+    monkeypatch.setattr(prep, "training_images", lambda: {prep.rel_path(val[0])})
+    items = ev.tune_items()
+    assert [i[0] for i in items] == [p.name for p in val[1:]]
+    _name, _path, gts, ignore = items[0]
+    assert [g.kind for g in gts] == ["stop"] and ignore == [(20.0, 0.0, 30.0, 10.0)]
+
+
+def test_heldout_items_read_signs_ignore_and_audit(tmp_path: Path) -> None:
+    data = {
+        "images": [
+            {
+                "image": "valid/shard_000/a.jpg",
+                "signs": [{"box": [0, 0, 10, 20], "kind": "speed_limit", "value": 25, "readable": True}],
+                "ignore": [[30, 0, 40, 20]],
+                "audit": {
+                    "signs": [{"box": [50, 0, 60, 20], "kind": "stop", "value": None, "readable": None}],
+                    "ignore": [],
+                },
+            },
+            {"image": "valid/shard_001/b.jpg", "signs": [], "ignore": [], "sign_free": True},
+        ]
+    }
+    path = tmp_path / "h.json"
+    path.write_text(json.dumps(data))
+    with_audit = ev.heldout_items(path)
+    assert [g.kind for g in with_audit[0][2]] == ["speed_limit", "stop"] and with_audit[0][3] == [(30, 0, 40, 20)]
+    assert [g.kind for g in ev.heldout_items(path, audit=False)[0][2]] == ["speed_limit"]
+    assert with_audit[1][2] == [] and with_audit[1][3] == []
+
+
+def test_eval_values_threshold_rules(tmp_path: Path) -> None:
+    from scripts.signs import eval_values as evv
+
+    rows = evv.sweep([(35, 0.95), (25, 0.8), (None, 0.99), (40, 0.7)], [35, None, None, 45])
+    at = {r["threshold"]: r for r in rows}
+    assert at[0.7] == {"threshold": 0.7, "right": 1, "wrong": 2, "withheld": 1}
+    assert at[0.85] == {"threshold": 0.85, "right": 1, "wrong": 0, "withheld": 3}
+    assert evv.lowest_safe(rows) == 0.85
+    assert evv.crop_truth(tmp_path / "v30" / "bdd_000001.png") == 30
+    assert evv.crop_truth(tmp_path / "none" / "bdd_000002_true25.png") == 25  # a real 25 trained as "none"
+    assert evv.crop_truth(tmp_path / "none" / "bddother_000003.png") is None
+
+
+# --------------------------------------------------------------------- dataset building (leakage etc.)
+
+
+def test_plan_det_jobs_never_trains_on_the_val_fraction() -> None:
+    imgs = [Path(f"/x/train/shard_000/img{i}.jpg") for i in range(400)]
+    pos = [prep.Sample(p, [prep.Box((0.0, 0.0, 10.0, 10.0), "stop")], "bdd") for p in imgs[:100]]
+    neg = [prep.Sample(p, [], "bdd") for p in imgs[100:]]
+    hard = next(s for s in neg if not prep.in_val(s.image))
+    jobs, synth = prep.plan_det_jobs(pos, neg, {prep.rel_path(hard.image)}, [], [], [], 0.3, 200)
+    trained = [j[0].image for j in jobs if j[1] == "train"] + [s[0].image for s in synth]
+    assert trained and not any(prep.in_val(p) for p in trained)
+    assert all(j[1] == "val" for j in jobs if prep.in_val(j[0].image))
+    assert len(synth) == 200 and all(s[1] == "train" for s in synth)
+    assert any(j[0] is hard and j[3] == 1.0 for j in jobs)  # hard negatives keep all their tiles
+    assert not {s[0].image for s in synth} & {j[0].image for j in jobs}  # a background is used once
+
+
+def test_cls_backgrounds_come_from_the_training_fraction() -> None:
+    neg = [prep.Sample(Path(f"/x/n{i}.jpg"), [], "bdd") for i in range(600)]
+    bgs = prep.cls_backgrounds(neg)
+    assert len(bgs) == prep.CLS_BACKGROUNDS and not any(prep.in_val(s.image) for s in bgs)
+
+
+def test_synthetic_signs_never_land_on_existing_boxes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image
+
+    from scripts.signs import synth
+
+    calls: list[tuple[int, int, int, int]] = []
+    real = synth.composite
+
+    def spy(bg: np.ndarray, sign: np.ndarray, alpha: np.ndarray, x: int, y: int, rng: Any, pole: bool) -> Any:
+        calls.append((x, y, alpha.shape[1], alpha.shape[0]))
+        return real(bg, sign, alpha, x, y, rng, pole)
+
+    monkeypatch.setattr(synth, "composite", spy)
+
+    class _Renderer:
+        def any(self, kind: str, value: int | None, rng: Any) -> Image.Image:
+            return Image.new("RGBA", (60, 75), (255, 255, 255, 255))
+
+        def distractor(self, rng: Any) -> Image.Image:
+            return Image.new("RGBA", (60, 60), (0, 128, 0, 255))
+
+    existing = [prep.Box((600.0, 0.0, 1280.0, 720.0), "stop"), prep.Box((0.0, 0.0, 300.0, 400.0), None)]
+    pasted = 0
+    for seed in range(40):
+        calls.clear()
+        _img, boxes = prep.synth_signs(
+            np.full((720, 1280, 3), 90, np.uint8), existing, _Renderer(), np.random.default_rng(seed)
+        )
+        for x, y, w, h in calls:
+            assert all(prep._iou(prep.paste_footprint(x, y, w, h, 720), b.xyxy) == 0 for b in existing)
+        assert boxes[:2] == existing and all(b.kind is not None for b in boxes[2:])  # every pasted sign is labeled
+        pasted += len(boxes) - 2
+    assert pasted > 0
+
+
+def test_masking_never_paints_a_labeled_neighbour(tmp_path: Path) -> None:
+    import cv2
+
+    img = np.full((720, 1280, 3), 80, np.uint8)
+    img[100:140, 200:232] = 255  # labeled speed limit
+    img[100:140, 236:268] = 250  # unclear sign right next to it: its mask margin reaches the labeled one
+    path = tmp_path / "a.png"
+    cv2.imwrite(str(path), img)
+    boxes = [prep.Box((200.0, 100.0, 232.0, 140.0), "speed_limit", 35), prep.Box((236.0, 100.0, 268.0, 140.0), None)]
+    loaded = prep.load_scaled(prep.Sample(path, boxes, "bdd"))
+    assert loaded is not None
+    out, _ = loaded
+    assert out[100:140, 200:232].min() == 255  # the labeled sign is intact
+    assert out[100:140, 240:264].max() < 200  # the unclear one is masked
+
+
+def test_unboxed_detections_become_masks_only_where_nothing_is_labeled() -> None:
+    s = prep.Sample(Path("/x/a.jpg"), [prep.Box((100.0, 100.0, 130.0, 140.0), "stop")], "bdd")
+    unboxed = {prep.rel_path(s.image): [(101.0, 101.0, 131.0, 141.0), (500.0, 100.0, 530.0, 140.0)]}
+    out = prep.with_unboxed_masks(s, unboxed)
+    assert [b.kind for b in out.boxes] == ["stop", None] and out.boxes[1].xyxy == (500.0, 100.0, 530.0, 140.0)
+    assert prep.with_unboxed_masks(s, {}) is s
+
+
+def test_bdd_samples_mask_unknown_and_unlabeled_signs(monkeypatch: pytest.MonkeyPatch) -> None:
+    img = "train/shard_000/a.jpg"
+    recs = [
+        {"key": "train/a/0", "image": img, "box": [0, 0, 10, 20], "kind": "stop", "value": None},
+        {"key": "train/a/1", "image": img, "box": [20, 0, 30, 20], "kind": "unclear", "value": None},
+        {"key": "train/a/2", "image": img, "box": [40, 0, 50, 20], "kind": "other", "value": None},
+        {"key": "train/b/0", "image": "train/shard_000/b.jpg", "box": [0, 0, 10, 20], "kind": "other", "value": None},
+    ]
+    meta = {
+        img: {"0": (0, 0, 10, 20), "1": (20, 0, 30, 20), "2": (40, 0, 50, 20), "3": (60, 0, 66, 8)},
+        "train/shard_000/b.jpg": {"0": (0, 0, 10, 20)},
+    }
+    monkeypatch.setattr(prep, "read_labels", lambda split: recs)
+    monkeypatch.setattr(prep, "dev_clip_ids", lambda: set())
+    monkeypatch.setattr(prep, "bdd_sign_boxes", lambda split: meta)
+    pos, neg = prep.bdd_samples("train")
+    assert [s.image.name for s in pos] == ["a.jpg"] and [s.image.name for s in neg] == ["b.jpg"]
+    # unclear and too-small-to-label boxes are masked; "other" signs stay background
+    assert [(b.xyxy, b.kind) for b in pos[0].boxes] == [
+        ((0, 0, 10, 20), "stop"),
+        ((20, 0, 30, 20), None),
+        ((60, 0, 66, 8), None),
+    ]
+    assert neg[0].boxes == []
+
+
+def test_ctacke_samples_apply_the_reread_checks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    for folder in ("mph35", "mph25"):
+        (tmp_path / "labels" / "train" / folder).mkdir(parents=True)
+        (tmp_path / "images" / "train" / folder).mkdir(parents=True)
+        (tmp_path / "images" / "train" / folder / "f.png").write_bytes(b"")
+    lines = "0 0.5 0.5 0.01 0.02\n0 0.6 0.5 0.01 0.02\n0 0.7 0.5 0.01 0.02\n"
+    (tmp_path / "labels" / "train" / "mph35" / "f.txt").write_text(lines)
+    (tmp_path / "labels" / "train" / "mph25" / "f.txt").write_text("0 0.5 0.5 0.01 0.02\n")
+    check = tmp_path / "check.jsonl"
+    check.write_text(
+        json.dumps({"key": "ctacke/train/mph35/f/0", "readable": True})
+        + "\n"
+        + json.dumps({"key": "ctacke/train/mph35/f/1", "readable": False})
+        + "\n"
+    )
+    raw = tmp_path / "raw.jsonl"
+    raw.write_text(json.dumps({"key": "ctacke/train/mph35/f/2", "kind": "unclear"}) + "\n")
+    monkeypatch.setattr(prep, "CTACKE", tmp_path)
+    monkeypatch.setattr(prep, "CTACKE_CHECK", check)
+    monkeypatch.setattr(prep, "CTACKE_CHECK_RAW", raw)
+    by_folder = {s.image.parent.name: s for s in prep.ctacke_samples("train")}
+    got = [(b.kind, b.value, b.cls_label) for b in by_folder["mph35"].boxes]
+    assert got == [("speed_limit", 35, None), ("speed_limit", 35, "none"), (None, 35, "none")]
+    assert [(b.kind, b.value) for b in by_folder["mph25"].boxes] == [("school_speed_limit", 25)]
+
+
+def test_real_crops_keep_the_true_value_of_unreadable_limits(tmp_path: Path) -> None:
+    import cv2
+
+    path = tmp_path / "f.png"
+    cv2.imwrite(str(path), np.full((200, 300, 3), 120, np.uint8))
+    boxes = [
+        prep.Box((50.0, 50.0, 90.0, 100.0), "speed_limit", 30, cls_label="none"),  # unreadable real 30
+        prep.Box((150.0, 50.0, 190.0, 100.0), "speed_limit", 45),
+        prep.Box((200.0, 50.0, 240.0, 100.0), "stop"),
+        prep.Box((10.0, 10.0, 14.0, 14.0), "speed_limit", 25),  # too small
+    ]
+    labels = [label for label, _crop in prep._real_crops([prep.Sample(path, boxes, "bdd")], 2, 0, 14)]
+    assert labels == ["none@30", "v45", "v45", "none"]
+
+
+def test_heldout_build_applies_the_review(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.signs import make_heldout as mh
+
+    img = "valid/shard_000/a.jpg"
+    meta = {
+        img: {
+            "0": (0, 0, 10, 20),
+            "1": (20, 0, 30, 20),
+            "2": (40, 0, 50, 20),
+            "3": (60, 0, 70, 20),
+            "9": (90, 0, 96, 8),
+        }
+    }
+    monkeypatch.setattr(mh, "bdd_sign_boxes", lambda split: meta)
+    monkeypatch.setattr(mh, "dev_clip_ids", lambda: set())
+    recs = [
+        {"key": "valid/a/0", "image": img, "box": [0, 0, 10, 20], "kind": "speed_limit", "value": 35},
+        {"key": "valid/a/1", "image": img, "box": [20, 0, 30, 20], "kind": "speed_limit", "value": 25},
+        {"key": "valid/a/2", "image": img, "box": [40, 0, 50, 20], "kind": "other", "value": None},
+        {"key": "valid/a/3", "image": img, "box": [60, 0, 70, 20], "kind": "stop", "value": None},
+    ]
+    review = {"not_clearly_readable": ["valid/a/1"], "ignore": ["valid/a/3"]}
+    (im,), counts = mh.build_images(recs, review, {"valid/a/2": ("speed_limit", 40, True)}, audit=False)
+    assert [(s["kind"], s["value"], s["readable"]) for s in im["signs"]] == [
+        ("speed_limit", 35, True),
+        ("speed_limit", 25, False),
+        ("speed_limit", 40, True),
+    ]
+    assert im["ignore"] == [[60, 0, 70, 20], [90, 0, 96, 8]] and "audit" not in im and counts["readable_speed"] == 2
+
+
+def test_hard_negative_curation_blocks() -> None:
+    from scripts.signs import curate_det_negatives as cur
+
+    assert cur.rest_excluded(200) and not cur.rest_excluded(214)  # one-way block: only checked non-signs kept
+    assert cur.rest_excluded(92) and not cur.rest_excluded(84)  # NO TURN ON RED dropped, NO TURNS text sign kept

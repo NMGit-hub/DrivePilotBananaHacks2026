@@ -8,24 +8,27 @@
 Same recipe as scripts/build_engine.py (read its docstring): ultralytics' FP16 TensorRT export needs NVIDIA
 ModelOpt, whose extras would replace the voice pipeline's onnxruntime, so the export runs in a separate
 `.venv-trtbuild` with the *same* TensorRT version as `.venv` (an engine only loads with the TensorRT that built
-it). Engines land next to the weights as <stem>_<h>x<w>_fp16.engine (perception/signs.engine_path).
---deliver copies the weights and engines to another checkout's models/signs/ and prints sizes and versions.
+it). Engines land next to the weights as <stem>_<h>x<w>_fp16.engine (perception/signs.engine_path), each with a
+sidecar <engine>.json recording the weights' sha256, input size and TensorRT version; an engine is rebuilt when
+its weights changed. --deliver copies weights, engines and sidecars to another checkout's models/signs/.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from core.config import load_config  # noqa: E402
-from perception.signs import engine_path  # noqa: E402
+from perception.signs import engine_path, engine_staleness, file_sha256, sidecar_path  # noqa: E402
 
 BUILD_VENV = REPO_ROOT / ".venv-trtbuild"
 TORCH_INDEX = "https://download.pytorch.org/whl/cu126"
@@ -93,6 +96,19 @@ def export(python: Path, weights: Path, imgsz: tuple[int, int], half: bool, devi
     return engine
 
 
+def write_sidecar(engine: Path, weights: Path, imgsz: tuple[int, int], half: bool, version: str) -> None:
+    """Record what an engine was built from (perception/signs.py refuses an engine whose weights hash differs)."""
+    data = {
+        "weights": weights.name,
+        "weights_sha256": file_sha256(weights),
+        "imgsz": list(imgsz),
+        "half": half,
+        "tensorrt": version,
+        "built": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    sidecar_path(engine).write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def trt_version(python: Path) -> str:
     """TensorRT version of an environment."""
     out = subprocess.run(
@@ -117,14 +133,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.setup_only:
             print(f"build venv ready: {python} (TensorRT {trt_version(python)})")
             return 0
+        version = trt_version(python)
         for weights, imgsz in jobs:
             engine = engine_path(weights, imgsz, s.half)
-            if engine.exists() and not args.force:
-                print(f"engine already built: {engine}")
-                continue
             if not weights.exists():
                 raise SystemExit(f"weights missing: {weights} (train first: scripts/signs/train.py)")
+            stale = engine_staleness(engine, weights) if engine.exists() else "missing"
+            if stale is None and sidecar_path(engine).exists() and not args.force:
+                print(f"engine already built from these weights: {engine}")
+                continue
             export(python, weights, imgsz, s.half, s.device, 4.0)
+            write_sidecar(engine, weights, imgsz, s.half, version)
             print(f"done: {engine} ({engine.stat().st_size / 1e6:.1f} MB)")
         return 0
     args.deliver.mkdir(parents=True, exist_ok=True)
@@ -132,9 +151,10 @@ def main(argv: list[str] | None = None) -> int:
     if not runtime.exists():
         runtime = Path(sys.executable)
     for weights, imgsz in jobs:
-        for f in (weights, engine_path(weights, imgsz, s.half)):
-            if not f.exists():
-                raise SystemExit(f"missing: {f}")
+        engine = engine_path(weights, imgsz, s.half)
+        if not sidecar_path(engine).exists() or engine_staleness(engine, weights) is not None:
+            raise SystemExit(f"{engine.name} is missing, stale or has no sidecar: run export_engines.py first")
+        for f in (weights, engine, sidecar_path(engine)):
             shutil.copy2(f, args.deliver / f.name)
             print(f"{f.name}: {f.stat().st_size / 1e6:.2f} MB -> {args.deliver}")
     print(f"TensorRT (runtime env): {trt_version(runtime)}")

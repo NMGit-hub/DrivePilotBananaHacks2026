@@ -2,8 +2,8 @@
 
     .venv/Scripts/python scripts/signs/mine_det_negatives.py --weights runs/signs/det/weights/best.pt
 
-Runs the detector (PyTorch, GPU) on every pseudo-labeled BDD100K train frame that holds none of our 13 kinds and
-was not already in the training set; frames with a detection above --conf that doesn't sit on an "unclear"
+Runs the detector (PyTorch, GPU) on every pseudo-labeled BDD100K train frame that holds none of our 13 kinds,
+outside the held-out val fraction (the tune set); frames with a detection above --conf that doesn't sit on an "unclear"
 (masked) sign are written to data/signs/hardneg_det.txt. prepare_data.py det adds them as negative frames (their
 "other" signs stay background, so route shields, advisory plates and look-alikes are learned as "not ours").
 """
@@ -18,7 +18,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.signs.prepare_data import bdd_samples  # noqa: E402
+from scripts.signs.prepare_data import bdd_samples, in_val  # noqa: E402
 
 OUT = REPO_ROOT / "data" / "signs" / "hardneg_det.txt"
 
@@ -32,7 +32,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--conf", type=float, default=0.3)
     args = p.parse_args(argv)
     model = YOLO(str(args.weights), task="detect")
-    _pos, neg = bdd_samples("train")
+    _pos, all_neg = bdd_samples("train")
+    neg = [s for s in all_neg if not in_val(s.image)]  # the val fraction stays untouched (tune set)
     hits: list[tuple[str, float, str]] = []
     for n, s in enumerate(neg):
         res: Any = model.predict(str(s.image), imgsz=1280, conf=args.conf, device=0, half=True, verbose=False)

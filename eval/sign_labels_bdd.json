@@ -1,5 +1,5 @@
 {
- "description": "Write the hand-checked BDD100K held-out sign set: eval/sign_labels_bdd.json (tracked).",
+ "description": "Write the hand-checked BDD100K held-out sign sets (tracked).",
  "source": "BDD100K valid (dronefreak/BDD100K mirror, shard_000), 1280x720; labels: Claude Opus 5.5 + hand review",
  "review": {
   "not_clearly_readable": [

@@ -1,12 +1,16 @@
 """Speed-value classifier on its own: crops at the labeled boxes, so value reading is measured without the detector.
 
     .venv/Scripts/python scripts/signs/eval_values.py                 # threshold from validation, then held-out
+    .venv/Scripts/python scripts/signs/eval_values.py --weights runs/signs/cls5/weights/best.pt
     .venv/Scripts/python scripts/signs/eval_values.py --write-metrics
 
-1. Threshold: on the classifier's validation crops from real signs (BDD100K train-split hold-out and ctacke val,
-   data/signs/cls/val, never the BDD held-out), the lowest probability threshold with no wrong value.
-2. Held-out: the hand-checked BDD100K speed limits (eval/sign_labels_bdd.json) cropped from the full frame exactly
-   as perception/signs.py crops a detection; right / wrong / withheld at that threshold, and a sweep.
+1. Threshold: on the classifier's real BDD validation crops (data/signs/cls/val, files bdd_*, bddother_*, hardneg_*:
+   speed limits, every "other"/not-a-sign box and every curated look-alike of the BDD train split's held-out
+   fraction, never trained on), the lowest probability threshold with no wrong value. ctacke val crops are reported
+   separately and not used: ctacke's val split shares physical signs with its train split. The app's value_conf is
+   the larger of this and the lowest threshold with no wrong value end to end on the tune set (evaluate.py tune).
+2. Held-out: the hand-checked BDD100K speed limits (eval/sign_labels_bdd*.json) cropped from the full frame
+   exactly as perception/signs.py crops a detection; right / wrong / withheld per threshold.
 """
 
 from __future__ import annotations
@@ -24,23 +28,27 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from core.config import load_config  # noqa: E402
-from perception.signs import crop_square, parse_value_class  # noqa: E402
+from perception.signs import check_value_classes, crop_square, top_reading  # noqa: E402
 
 BDD_IMAGES = REPO_ROOT / "data" / "signs" / "raw" / "bdd100k_det" / "data" / "images"
 CLS_VAL = REPO_ROOT / "data" / "signs" / "cls" / "val"
-HELDOUT = REPO_ROOT / "eval" / "sign_labels_bdd.json"
+HELDOUT = {
+    "original": REPO_ROOT / "eval" / "sign_labels_bdd.json",
+    "fresh": REPO_ROOT / "eval" / "sign_labels_bdd_fresh.json",
+}
 METRICS = REPO_ROOT / "models" / "signs" / "metrics.json"
 THRESHOLDS = (0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.93, 0.95, 0.97, 0.98, 0.99, 0.995)
+SELECTION_PREFIXES = ("bdd_", "bddother_", "hardneg_")  # real BDD crops used to choose the threshold
+REPORT_PREFIXES = ("ctacke_",)  # real but leaky: reported only
 
 
 def classify(model: Any, crops: list[np.ndarray], imgsz: int) -> list[tuple[int | None, float]]:
     """Top-1 (value or None for the reject class, probability) per crop."""
+    names = dict(model.names)
     out = []
     for c in crops:
         r = model.predict(c, imgsz=imgsz, device=0, verbose=False)[0]
-        probs = r.probs.data.float().cpu().numpy()
-        top = int(np.argmax(probs))
-        out.append((parse_value_class(model.names[top]), float(probs[top])))
+        out.append(top_reading(r.probs.data.float().cpu().numpy(), names))
     return out
 
 
@@ -61,81 +69,112 @@ def sweep(preds: list[tuple[int | None, float]], truth: list[int | None]) -> lis
     return rows
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Pick the value threshold on validation crops, then score the held-out speed limits."""
-    from ultralytics import YOLO
+def lowest_safe(rows: list[dict[str, Any]]) -> float:
+    """The lowest threshold with no wrong value at it and at every higher threshold (max if none)."""
+    chosen = max(THRESHOLDS)
+    for r in sorted(rows, key=lambda r: -r["threshold"]):
+        if r["wrong"]:
+            break
+        chosen = r["threshold"]
+    return chosen
 
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--weights", type=Path, default=None, help="classifier .pt (default: config signs.classifier)")
-    p.add_argument("--write-metrics", action="store_true")
-    args = p.parse_args(argv)
-    cfg = load_config()
-    s = cfg.signs
-    model = YOLO(str(args.weights or cfg.resolve_path(s.classifier_weights)), task="classify")
 
-    # 1. validation crops from real signs (already square, CLS_SIZE): file prefix bdd_/ctacke_ = real
-    val_crops, val_truth = [], []
+def crop_truth(path: Path) -> int | None:
+    """True value of a validation crop: its folder's value, or "..._true30.png" (a real 30 trained as "none")."""
+    if "_true" in path.stem:
+        return int(path.stem.rpartition("_true")[2])
+    name = path.parent.name
+    return int(name[1:]) if name.startswith("v") and name[1:].isdigit() else None
+
+
+def val_crops(prefixes: tuple[str, ...]) -> tuple[list[np.ndarray], list[int | None]]:
+    """Real validation crops whose file name starts with one of prefixes, with their true values."""
+    crops, truth = [], []
     for d in sorted(CLS_VAL.iterdir()):
         for f in sorted(d.glob("*.png")):
-            if f.name.startswith(("bdd_", "ctacke_")):
+            if f.name.startswith(prefixes):
                 img = cv2.imread(str(f))
                 if img is not None:
-                    val_crops.append(img)
-                    # "..._true30.png": a real 30 mph sign trained as "none" (unreadable): reading 30 is right
-                    true = f.stem.rpartition("_true")[2] if "_true" in f.stem else None
-                    val_truth.append(int(true) if true else parse_value_class(d.name))
-    val_rows = sweep(classify(model, val_crops, s.classifier_imgsz), val_truth)
-    safe = [r["threshold"] for r in val_rows if r["wrong"] == 0]
-    chosen = min(safe) if safe else max(THRESHOLDS)
-    print(f"validation (real crops: {len(val_crops)}, speed values {sum(t is not None for t in val_truth)}):")
-    for r in val_rows:
-        print(f"  {r}")
-    print(f"chosen value threshold (lowest with 0 wrong on validation): {chosen}")
+                    crops.append(img)
+                    truth.append(crop_truth(f))
+    return crops, truth
 
-    # 2. held-out BDD speed limits
-    data = json.loads(HELDOUT.read_text(encoding="utf-8"))
+
+def heldout_crops(path: Path, imgsz: int) -> tuple[list[np.ndarray], list[int], list[bool]]:
+    """Held-out speed-limit crops with a known value: (crops, values, clearly readable)."""
+    data = json.loads(path.read_text(encoding="utf-8"))
     crops, truth, readable = [], [], []
     for im in data["images"]:
-        sl = [x for x in im["signs"] if x["kind"] in ("speed_limit", "school_speed_limit")]
+        sl = [x for x in im["signs"] if x["kind"] in ("speed_limit", "school_speed_limit") and x["value"] is not None]
         if not sl:
             continue
         frame = cv2.imread(str(BDD_IMAGES / im["image"]))
         if frame is None:
             raise SystemExit(f"missing held-out frame {im['image']} (download BDD valid: scripts/signs/README.md)")
         for x in sl:
-            if x["value"] is None:
-                continue
-            c = crop_square(frame, tuple(x["box"]), s.classifier_imgsz)
+            c = crop_square(frame, tuple(x["box"]), imgsz)
             if c is not None:
                 crops.append(c)
                 truth.append(x["value"])
                 readable.append(bool(x["readable"]))
-    preds = classify(model, crops, s.classifier_imgsz)
-    all_rows = sweep(preds, truth)
-    r_idx = [i for i, ok in enumerate(readable) if ok]
-    readable_rows = sweep([preds[i] for i in r_idx], [truth[i] for i in r_idx])
-    at = next(r for r in readable_rows if r["threshold"] == chosen)
-    print(f"held-out BDD speed limits with a value: {len(crops)} (clearly readable {len(r_idx)})")
-    for r in readable_rows:
-        print(f"  readable {r}")
-    for r in all_rows:
-        print(f"  all      {r}")
-    mistakes = [
-        {"truth": truth[i], "said": preds[i][0], "p": round(preds[i][1], 3)}
-        for i in range(len(crops))
-        if preds[i][0] is not None and preds[i][0] != truth[i]
-    ]
-    print(f"top-1 mistakes (any probability): {mistakes}")
-    print(f"at {chosen}: {at}")
+    return crops, truth, readable
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Pick the value threshold on validation crops, then score the held-out speed limits."""
+    from ultralytics import YOLO
+
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--weights", type=Path, default=None, help="classifier .pt (default: config signs.classifier)")
+    p.add_argument("--heldout", choices=["original", "fresh", "both", "none"], default="both")
+    p.add_argument("--write-metrics", action="store_true")
+    args = p.parse_args(argv)
+    cfg = load_config()
+    s = cfg.signs
+    weights = args.weights or cfg.resolve_path(s.classifier_weights)
+    model = YOLO(str(weights), task="classify")
+    check_value_classes(dict(model.names))
+    out: dict[str, Any] = {"weights": str(weights.name)}
+
+    crops, truth = val_crops(SELECTION_PREFIXES)
+    rows = sweep(classify(model, crops, s.classifier_imgsz), truth)
+    chosen = lowest_safe(rows)
+    n_speed = sum(t is not None for t in truth)
+    print(f"validation for the threshold (real BDD crops {len(crops)}, speed values {n_speed}):")
+    for r in rows:
+        print(f"  {r}")
+    print(f"lowest value threshold with 0 wrong on BDD validation: {chosen}")
+    out |= {"threshold_from_validation": chosen, "validation_sweep": rows, "validation_crops": len(crops)}
+    c_crops, c_truth = val_crops(REPORT_PREFIXES)
+    if c_crops:
+        c_rows = sweep(classify(model, c_crops, s.classifier_imgsz), c_truth)
+        print(f"ctacke val (reported only, leaks with ctacke train; {len(c_crops)} crops):")
+        for r in c_rows:
+            print(f"  {r}")
+        out["ctacke_val_sweep"] = c_rows
+
+    sets = ["original", "fresh"] if args.heldout == "both" else ([] if args.heldout == "none" else [args.heldout])
+    for name in sets:
+        h_crops, h_truth, h_readable = heldout_crops(HELDOUT[name], s.classifier_imgsz)
+        preds = classify(model, h_crops, s.classifier_imgsz)
+        r_idx = [i for i, ok in enumerate(h_readable) if ok]
+        readable_rows = sweep([preds[i] for i in r_idx], [h_truth[i] for i in r_idx])
+        all_rows = sweep(preds, h_truth)
+        mistakes = [
+            {"truth": h_truth[i], "said": preds[i][0], "p": round(preds[i][1], 3)}
+            for i in range(len(h_crops))
+            if preds[i][0] is not None and preds[i][0] != h_truth[i]
+        ]
+        print(f"held-out {name}: speed limits with a value {len(h_crops)} (clearly readable {len(r_idx)})")
+        for r in readable_rows:
+            print(f"  readable {r}")
+        for r in all_rows:
+            print(f"  all      {r}")
+        print(f"  top-1 mistakes (any probability): {mistakes}")
+        out[f"heldout_{name}"] = {"readable_sweep": readable_rows, "all_sweep": all_rows, "top1_mistakes": mistakes}
     if args.write_metrics:
         prev = json.loads(METRICS.read_text(encoding="utf-8")) if METRICS.exists() else {}
-        prev["value_classifier"] = {
-            "threshold_from_validation": chosen,
-            "validation_sweep": val_rows,
-            "heldout_readable_sweep": readable_rows,
-            "heldout_all_sweep": all_rows,
-            "heldout_top1_mistakes": mistakes,
-        }
+        prev["value_classifier"] = out
         METRICS.parent.mkdir(parents=True, exist_ok=True)
         METRICS.write_text(json.dumps(prev, indent=2), encoding="utf-8")
     return 0
