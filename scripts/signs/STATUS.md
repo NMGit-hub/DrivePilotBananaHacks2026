@@ -31,6 +31,32 @@ school_speed_limit are thin in real data and lean on synthetic examples: see Kno
 | Overpass font | numbers on synthetic speed-limit signs | SIL OFL |
 | Not used: LISA (official download now 404s; Roboflow copy needs a key that wasn't provided in time), the HF Mapillary mirror `ThankGod/mapillary_traffic_sign_dataset_cleaned` (boxes visibly misaligned with images; category ids undocumented) | | |
 
+## Design choices (and why)
+- **One "speed_limit" class + a value classifier, not per-value detector classes.** Real data per value is
+  far too thin for per-value boxes (BDD's ~250 training speed limits are ~85% "25"; ctacke covers 25-80 with
+  few distinct signs), while a crop classifier can learn every value from synthetic MUTCD renders plus the real
+  crops, has an explicit reject class ("none": other signs, route shields, unreadable numbers) and a probability
+  that can be thresholded so a doubtful value is withheld. This was a reasoned choice, not a measured
+  head-to-head (no time to train a second detector); the classifier alone reads 75/80 clearly readable held-out
+  limits right with no wrong value (see Numbers).
+- **Whole frame at 1280 px wide.** Distant signs are 15-40 px tall in a 720p frame; at the main detector's
+  384x640 they would shrink to 8-20 px. Training uses 640x640 tiles cut at native scale (half-tile overlap,
+  signs cut by a tile edge masked), inference runs on the full 736x1280 frame (fully convolutional). Measured:
+  ~3.5 ms TensorRT inference, ~7 ms per frame with pre/post-processing.
+- **Unknown signs are masked, not background.** Boxes whose kind the labeler couldn't tell, and sign boxes too
+  small to label, are painted over in training tiles so a real stop sign is never taught as "nothing".
+- **Look-alikes as negatives.** Route shields, advisory/exit speed plates and NIGHT/MINIMUM speed plates carry
+  numbers; they are pasted unlabeled into training frames and are reject crops for the classifier, and the
+  real ones the models still confused were mined and added (`mine_hard_negatives.py`, `mine_det_negatives.py`).
+
+## Training setup
+- Detector: YOLO26s from the COCO weights, 640x640 tiles (14.5k training tiles from 2,841 BDD frames with our
+  signs, 852 BDD frames without, 871 ctacke frames, 3,500 synthetic composites), batch 8 (2.6 GB on the shared
+  RTX 4050 Laptop), 40 epochs, cosine LR, mosaic (off for the last 5 epochs), scale +-30%, no horizontal flips
+  (they'd turn "no left turn" into "no right turn"), ultralytics 8.4.175 / torch 2.14.1+cu126.
+- Value classifier: YOLO26n-cls, 96x96 crops, 18 classes (5-85 mph + "none"), ~33k training crops (1,200
+  synthetic per value; real BDD, ctacke and hard-negative crops), dropout 0.2, 20 epochs, no flips/erasing.
+
 ## For the integrating session (main)
 - Merge `v2-signs`; it only appends to `config.yaml` (`signs:`), `core/config.py` (`SignsConfig` + the `signs`
   field at the end of `AppConfig`) and `.gitignore`, and adds `scripts/__init__.py` + `scripts/signs/__init__.py`

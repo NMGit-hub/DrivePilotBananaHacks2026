@@ -34,6 +34,7 @@ from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -85,6 +86,55 @@ class Sample:
 def stable_frac(text: str) -> float:
     """A deterministic number in [0, 1) from a string (for train/val splits that never change)."""
     return int(hashlib.md5(text.encode()).hexdigest()[:8], 16) / 2**32
+
+
+def in_val(image: Path) -> bool:
+    """Whether a BDD train image is in the held-out fraction (val / threshold tuning): never trained on."""
+    return stable_frac(image.stem) < VAL_FRAC
+
+
+def rel_path(image: Path) -> str:
+    """Repo-relative posix path of an image (the key of the training-image records); as is outside the repo."""
+    return image.relative_to(REPO_ROOT).as_posix() if image.is_relative_to(REPO_ROOT) else image.as_posix()
+
+
+USED_FOR_TRAINING = {"det": DATA / "used_for_training_det.txt", "cls": DATA / "used_for_training_cls.txt"}
+ORIGINAL_SYNTH = 3500  # synthetic composites of the first detector build (the run the fine-tune starts from)
+ORIGINAL_NEG_RATIO = 0.3
+CLS_BACKGROUNDS = 400
+
+
+def write_used_for_training(what: str, images: list[Path]) -> None:
+    """Record every source image a dataset build put into training (evaluate.py keeps them out of the tune set)."""
+    USED_FOR_TRAINING[what].write_text("\n".join(sorted({rel_path(p) for p in images})) + "\n", encoding="utf-8")
+
+
+def original_build_images() -> set[str]:
+    """BDD train images the first detector build and classifiers cls1-cls4 used as backgrounds, in any fraction.
+
+    Those builds took synthetic and classifier backgrounds without checking the val fraction, so some tune-set
+    frames were trained on. Reproduced exactly: the first build drew one seed per BDD positive from Random(0),
+    then shuffled all negatives (no hard negatives existed), kept int(0.3 * positives) real negatives and took the
+    next 3,500 as synthetic backgrounds; the classifier builds took the first 400 negatives unshuffled.
+    """
+    pos, neg = bdd_samples("train")
+    rng = random.Random(0)
+    for _ in pos:
+        rng.randrange(2**31)
+    shuffled = list(neg)
+    rng.shuffle(shuffled)
+    n_neg = int(ORIGINAL_NEG_RATIO * len(pos))
+    used = shuffled[n_neg : n_neg + ORIGINAL_SYNTH] + neg[:CLS_BACKGROUNDS]
+    return {rel_path(s.image) for s in used}
+
+
+def training_images() -> set[str]:
+    """Every BDD image any detector or classifier build trained on (recorded builds + the original build)."""
+    out = original_build_images()
+    for path in USED_FOR_TRAINING.values():
+        if path.exists():
+            out |= {line for line in path.read_text(encoding="utf-8").splitlines() if line}
+    return out
 
 
 def dev_clip_ids() -> set[str]:
@@ -245,6 +295,15 @@ def lisa_samples(split: str) -> list[Sample]:
     return out
 
 
+def restore_boxes(img: np.ndarray, original: np.ndarray, boxes: list[tuple[float, float, float, float]]) -> None:
+    """Copy the pixels of these boxes back from the original (a mask's margin must not paint a labeled sign)."""
+    h, w = img.shape[:2]
+    for x1, y1, x2, y2 in boxes:
+        a, b, c, d = max(0, math.floor(x1)), max(0, math.floor(y1)), min(w, math.ceil(x2)), min(h, math.ceil(y2))
+        if c > a and d > b:
+            img[b:d, a:c] = original[b:d, a:c]
+
+
 def mask_box(img: np.ndarray, xyxy: tuple[float, float, float, float]) -> None:
     """Paint over a box with its surroundings' mean color (slightly enlarged), in place."""
     h, w = img.shape[:2]
@@ -281,8 +340,10 @@ def write_tiles(
     stem = f"{sample.source}_{sample.image.parent.name}_{sample.image.stem}"
     for n, (x0, y0) in enumerate(tiles_for(w, h, rng)):
         tile = img[y0 : y0 + TILE, x0 : x0 + TILE].copy()
+        original = tile.copy()
         th, tw = tile.shape[:2]
         lines = []
+        labeled: list[tuple[float, float, float, float]] = []
         for b in sample.boxes:
             x1, y1, x2, y2 = b.xyxy
             cx1, cy1, cx2, cy2 = max(x1, x0), max(y1, y0), min(x2, x0 + tw), min(y2, y0 + th)
@@ -297,7 +358,9 @@ def write_tiles(
                 f"{KIND_INDEX[b.kind]} {(cx1 + cx2) / 2 / tw - x0 / tw:.6f} {(cy1 + cy2) / 2 / th - y0 / th:.6f} "
                 f"{(cx2 - cx1) / tw:.6f} {(cy2 - cy1) / th:.6f}"
             )
+            labeled.append((cx1 - x0, cy1 - y0, cx2 - x0, cy2 - y0))
             counts[b.kind] += 1
+        restore_boxes(tile, original, labeled)
         if not lines and rng.random() > keep_empty:
             continue
         if (th, tw) != (TILE, TILE):  # pad small images/tiles to a full tile (gray, like YOLO's letterbox)
@@ -330,9 +393,12 @@ def load_scaled(sample: Sample) -> tuple[np.ndarray, Sample] | None:
         Box((b.xyxy[0] * s, b.xyxy[1] * s, b.xyxy[2] * s, b.xyxy[3] * s), b.kind, b.value, b.cls_label)
         for b in sample.boxes
     ]
-    for b in boxes:
-        if b.kind is None:
-            mask_box(img, b.xyxy)
+    if any(b.kind is None for b in boxes):
+        original = img.copy()
+        for b in boxes:
+            if b.kind is None:
+                mask_box(img, b.xyxy)
+        restore_boxes(img, original, [b.xyxy for b in boxes if b.kind is not None])
     return img, Sample(sample.image, boxes, sample.source)
 
 
@@ -373,20 +439,25 @@ def sample_value(kind: str, rng: np.random.Generator) -> int | None:
     return None
 
 
-def _synth_job(args: tuple[Sample, str, int]) -> Counter:
-    from scripts.signs.synth import SignRenderer, composite, degrade, warp_sign
+def paste_footprint(x: int, y: int, w: int, h: int, frame_h: int) -> tuple[float, float, float, float]:
+    """Everything synth.composite may paint for a w x h sign at (x, y): the sign and a pole up to 3 heights long."""
+    return float(x), float(y), float(x + w), float(min(frame_h, y + 4 * h))
 
-    sample, split, seed = args
-    rng = np.random.default_rng(seed)
-    loaded = load_scaled(sample)
-    if loaded is None:
-        return Counter()
-    img, scaled = loaded
-    renderer = _renderer_cache.get("r") or _renderer_cache.setdefault("r", SignRenderer())
+
+def synth_signs(
+    img: np.ndarray, boxes: list[Box], renderer: Any, rng: np.random.Generator
+) -> tuple[np.ndarray, list[Box]]:
+    """Paste 1-3 labeled synthetic signs and 0-2 unlabeled look-alikes into a frame (in place) and degrade it.
+
+    A sign is pasted only where its footprint (sign + pole) overlaps no existing box, so a pasted sign is always
+    labeled and never covers a labeled or masked one. Returns (degraded frame, existing + new boxes).
+    """
+    from scripts.signs.synth import composite, degrade, warp_sign
+
     h, w = img.shape[:2]
     kinds, weights = zip(*SYNTH_KIND_WEIGHTS.items(), strict=True)
     p = np.array(weights) / sum(weights)
-    boxes: list[Box] = list(scaled.boxes)
+    boxes = list(boxes)
     for _ in range(int(rng.integers(1, 4))):
         kind = str(rng.choice(kinds, p=p))
         value = sample_value(kind, rng)
@@ -401,19 +472,37 @@ def _synth_job(args: tuple[Sample, str, int]) -> Counter:
         else:
             x = int(rng.uniform(0.35, 0.65) * w)
         y = int(rng.uniform(0.06, 0.5) * h)
-        box = composite(img, bgr, alpha, x, y, rng, pole=rng.random() < 0.8)
-        if box is not None and not any(_iou(box, b.xyxy) > 0.0 for b in boxes):
+        pole = rng.random() < 0.8
+        hh, ww = alpha.shape
+        if any(_iou(paste_footprint(x, y, ww, hh, h), b.xyxy) > 0.0 for b in boxes):
+            continue
+        box = composite(img, bgr, alpha, x, y, rng, pole=pole)
+        if box is not None:
             boxes.append(Box(box, kind, value))
     # Unlabeled look-alikes (route shields, advisory plates): background the detector must not call a sign.
     for _ in range(int(rng.integers(0, 3))):
         bgr, alpha = warp_sign(renderer.distractor(rng), float(np.exp(rng.uniform(np.log(14), np.log(100)))), rng)
         x = int(rng.uniform(0.03, 0.97) * w - bgr.shape[1] / 2)
         y = int(rng.uniform(0.06, 0.5) * h)
+        pole = rng.random() < 0.7
         hh, ww = alpha.shape
-        if any(_iou((x, y, x + ww, y + hh), b.xyxy) > 0.0 for b in boxes):
+        if any(_iou(paste_footprint(x, y, ww, hh, h), b.xyxy) > 0.0 for b in boxes):
             continue
-        composite(img, bgr, alpha, x, y, rng, pole=rng.random() < 0.7)
-    img = degrade(img, rng, strength=0.6)
+        composite(img, bgr, alpha, x, y, rng, pole=pole)
+    return degrade(img, rng, strength=0.6), boxes
+
+
+def _synth_job(args: tuple[Sample, str, int]) -> Counter:
+    from scripts.signs.synth import SignRenderer
+
+    sample, split, seed = args
+    rng = np.random.default_rng(seed)
+    loaded = load_scaled(sample)
+    if loaded is None:
+        return Counter()
+    img, scaled = loaded
+    renderer = _renderer_cache.get("r") or _renderer_cache.setdefault("r", SignRenderer())
+    img, boxes = synth_signs(img, scaled.boxes, renderer, rng)
     out = Sample(sample.image, boxes, "synth")
     return write_tiles(out, img, DET_OUT, split, random.Random(seed), keep_empty=0.0)
 

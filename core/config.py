@@ -535,6 +535,12 @@ class SignsConfig(_Strict):
     value_min_px: float = Field(
         16.0, gt=0.0, description="Sign boxes shorter than this (pixels at 1280 px frame width) never get a value."
     )
+    value_edge_px: float = Field(
+        2.0, ge=0.0, description="No value for a sign this close to the frame border (its number may be cut off)."
+    )
+    duplicate_iou: float = Field(
+        0.6, gt=0.0, le=1.0, description="One sign reported as two kinds above this overlap: keep the surer one."
+    )
 
     @field_validator("imgsz")
     @classmethod

@@ -288,8 +288,13 @@ class _FakeYOLO:
     """Stands in for ultralytics.YOLO: detector boxes and classifier probabilities come from class attributes."""
 
     det_rows: ClassVar[list[tuple[float, float, float, float, float, int]]] = []
-    probs: ClassVar[list[float]] = []
-    cls_names: ClassVar[dict[int, str]] = {0: "none", 1: "v25", 2: "v35"}
+    probs: ClassVar[list[float]] = []  # for classes 0-2 ("none", "v25", "v35"); the other values get 0
+    cls_names: ClassVar[dict[int, str]] = {
+        0: "none",
+        1: "v25",
+        2: "v35",
+        **{i + 3: f"v{v}" for i, v in enumerate(v for v in SPEED_VALUES if v not in (25, 35))},
+    }
     det_names: ClassVar[dict[int, str]] = dict(enumerate(KINDS))
     cls_calls = 0
 
@@ -303,14 +308,15 @@ class _FakeYOLO:
             return [SimpleNamespace(boxes=_FakeBoxes(self.det_rows), speed={"inference": 1.0})]
         type(self).cls_calls += 1
         assert image.shape == (96, 96, 3)
-        return [SimpleNamespace(probs=SimpleNamespace(data=torch.tensor(self.probs)))]
+        probs = self.probs + [0.0] * (len(self.cls_names) - len(self.probs))
+        return [SimpleNamespace(probs=SimpleNamespace(data=torch.tensor(probs)))]
 
 
 @pytest.fixture
 def fake_detector(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     monkeypatch.setattr(signs_mod, "YOLO", _FakeYOLO)
     monkeypatch.setattr(signs_mod.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(signs_mod.torch.cuda, "memory_allocated", lambda *_: 0)
+    monkeypatch.setattr(signs_mod.torch.cuda, "mem_get_info", lambda *_: (0, 1))
     monkeypatch.setattr(SignDetector, "_verify_gpu", lambda self, what, model: ("cuda:0", "fp16"))
     _FakeYOLO.cls_calls = 0
     _FakeYOLO.det_names = dict(enumerate(KINDS))
@@ -393,7 +399,7 @@ def test_drop_duplicates_keeps_stacked_signs() -> None:
     a = SignDetection("one_way", None, 0.9, (100.0, 100.0, 160.0, 120.0))
     b = SignDetection("stop", None, 0.8, (110.0, 122.0, 150.0, 162.0))  # mounted right below: no overlap
     c = SignDetection("yield", None, 0.5, (100.0, 101.0, 160.0, 121.0))  # same box as a, less sure
-    assert drop_duplicates([c, b, a]) == [a, b]
+    assert drop_duplicates([c, b, a], 0.6) == [a, b]
 
 
 def test_detections_sorted_and_timed(fake_detector: Any) -> None:
@@ -424,7 +430,7 @@ def test_detector_refuses_cpu(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 def test_engine_resolution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(signs_mod, "YOLO", _FakeYOLO)
     monkeypatch.setattr(signs_mod.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(signs_mod.torch.cuda, "memory_allocated", lambda *_: 0)
+    monkeypatch.setattr(signs_mod.torch.cuda, "mem_get_info", lambda *_: (0, 1))
     monkeypatch.setattr(SignDetector, "_verify_gpu", lambda self, what, model: ("cuda:0", "fp16"))
     _FakeYOLO.det_names = dict(enumerate(KINDS))
     cfg = SignsConfig(weights=tmp_path / "det.pt", classifier_weights=tmp_path / "cls.pt")
@@ -458,36 +464,42 @@ _CFG = load_config()
 _DET_ENGINE = engine_path(_CFG.resolve_path(_CFG.signs.weights), _CFG.signs.imgsz, _CFG.signs.half)
 
 
+_SCHOOL_CLIP = Path("data/videos/dev/red_light_rain_school_zone__b61456bb-5bfb50ee.mov")
+
+
 @pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs the CUDA GPU")
 @pytest.mark.skipif(not _DET_ENGINE.exists(), reason="sign engines not built (scripts/signs/export_engines.py)")
-def test_real_engines_run_on_cuda_fp16_and_find_a_sign() -> None:
+def test_real_engines_run_on_cuda_fp16() -> None:
     det = SignDetector(_CFG.signs, _CFG.root)
     for name, model in (("detector", det.det), ("classifier", det.cls)):
         device, precision = det._verify_gpu(name, model)  # raises if not on the GPU as configured
         assert device.startswith("cuda") and precision == "fp16"
-    # A blank frame: no signs, and fast.
-    assert det.detect(_frame()) == []
-    # A drawn stop sign (red octagon with white STOP) on a road-gray frame is found.
-    import cv2
-
-    img = np.full((720, 1280, 3), (110, 115, 120), np.uint8)
-    cx, cy, r = 900, 250, 40
-    pts = np.array(
-        [[cx + r * np.cos(np.pi / 8 + k * np.pi / 4), cy + r * np.sin(np.pi / 8 + k * np.pi / 4)] for k in range(8)],
-        np.int32,
-    )
-    cv2.fillPoly(img, [pts], (40, 30, 200))
-    cv2.polylines(img, [pts], True, (255, 255, 255), 3)
-    cv2.putText(img, "STOP", (cx - 33, cy + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 3)
-    cv2.rectangle(img, (cx - 3, cy + r), (cx + 3, cy + 200), (90, 90, 90), -1)
-    out = det.detect(Frame(img, 0.0, 0, 0.0))
-    assert any(d.kind == "stop" for d in out), out
+    assert det.det_path.suffix == ".engine" and det.cls_path.suffix == ".engine"
+    # A blank frame: no signs, and fast (the measured numbers are in scripts/signs/STATUS.md).
     times = []
     for _ in range(20):
-        det.detect(_frame())
+        assert det.detect(_frame()) == []
         times.append(det.last_timings_ms["total"])
-    assert float(np.median(times)) < 30.0  # generous: the measured number is in scripts/signs/STATUS.md
+    assert float(np.median(times)) < 30.0
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs the CUDA GPU")
+@pytest.mark.skipif(not _DET_ENGINE.exists(), reason="sign engines not built (scripts/signs/export_engines.py)")
+@pytest.mark.skipif(not _SCHOOL_CLIP.exists(), reason="dev clip missing (scripts/fetch_dev_clips.py)")
+def test_real_engines_read_the_do_not_enter_signs_on_a_dev_clip() -> None:
+    import cv2
+
+    det = SignDetector(_CFG.signs, _CFG.root)
+    cap = cv2.VideoCapture(str(_SCHOOL_CLIP))
+    cap.set(cv2.CAP_PROP_POS_MSEC, 25_000)  # the sheet's "what do those red signs ahead say?" (DO NOT ENTER x2)
+    ok, img = cap.read()
+    cap.release()
+    assert ok
+    out = det.detect(Frame(img, 25.0, 0, 0.0))
+    assert any(d.kind == "do_not_enter" for d in out), out
+    assert all(d.value is None for d in out if d.kind not in ("speed_limit", "school_speed_limit"))
 
 
 # ---------------------------------------------------------------------------------- evaluation logic

@@ -35,7 +35,7 @@ def train_det(args: argparse.Namespace) -> Path:
     last = run / "weights" / "last.pt"
     if args.resume:
         model = YOLO(str(last))
-        model.train(resume=True)
+        model.train(resume=True, workers=args.workers)  # fewer workers = less RAM on the shared machine
     else:
         base = Path(args.base) if args.base else (REPO_ROOT / "models" / "yolo26s.pt")
         if not base.exists():
@@ -82,7 +82,7 @@ def train_cls(args: argparse.Namespace) -> Path:
     run = RUNS / args.name
     if args.resume:
         model = YOLO(str(run / "weights" / "last.pt"))
-        model.train(resume=True)
+        model.train(resume=True, workers=args.workers)  # fewer workers = less RAM on the shared machine
     else:
         model = YOLO(str(MODELS / "yolo26n-cls.pt"))
         model.train(

@@ -8,6 +8,26 @@ Python: `C:\ClaudeProjects\DrivePilot_BananaHacks2026\.venv\Scripts\python.exe` 
 `YOLO_AUTOINSTALL=false`. Deadlines: working detector to the other session by **Sun 2026-10-11 11:00 PDT**, project
 deadline Sun 20:59 PDT. Check the time with `date` (it is easy to lose track).
 
+## Session 3 progress (2026-10-10, 17:10-17:45 PDT; ended by the usage limit)
+- At 17:12: detector training alive (epoch 17/40, ~2.6 GB GPU, ETA ~20:00), watchdog PID 24908 idle (no
+  watchdog.log yet = no restarts needed), fresh_valid.jsonl complete (9,000 lines). Free RAM only ~1.2 GB.
+- DONE, committed (74 non-GPU sign tests pass): `perception/signs.py` refactor (fixes 5-8, 13, 15): `RawSign`,
+  `SignDetector.raw_detections(frame, classify_min_px)`, module `select(raw, cfg, w, h)` (per-kind conf ->
+  `drop_duplicates(cfg.duplicate_iou)` -> value rule incl. `value_edge_px`, both px rules measured at 1280 width),
+  `check_value_classes`, `engine_is_fp16` + `engine_layer_names` (the `images_cast_to_fp16` check), sidecar
+  `<engine>.json` helpers (`sidecar_path`, `file_sha256`, `engine_staleness`; `_resolve` falls back to the .pt
+  when stale), `mem_get_info` logging.
+- DONE, partly (committed, not yet exercised): `prepare_data.py` helpers `in_val`, `rel_path`,
+  `write_used_for_training`, `original_build_images`, `training_images`, `restore_boxes` (used in load_scaled
+  and write_tiles: fix 10), `paste_footprint` + `synth_signs` (fix 9, overlap checked before pasting).
+- STILL TO DO from fix list: build_det/build_cls must use `in_val` for synth/cls backgrounds, drop `--val-frac`,
+  call `write_used_for_training`, add val-fraction other/hardneg crops to cls/val (fix 3/4);
+  `evaluate.py` rewrite on `raw_detections` + `select` with the new wrong-value accounting (fixes 1, 11) and
+  `tune_items` excluding `training_images()`; `export_engines.py` must write the sidecar JSON (weights_sha256,
+  imgsz, TRT version) and rebuild on hash mismatch; `eval_values.py` (fix 4); mine_det_negatives: skip val-fraction
+  frames; make_heldout `--set fresh` + 500 sign-free frames (fix 12); tests listed in fix 16; then plan steps 2-9.
+- Note: evaluate.py still calls `detect()` at value_conf 0 (works, but not yet the shared-select design).
+
 ## User decisions so far
 - Approved: spend ~$7 more on Claude labels for a fresh held-out slice (done/running, see below) and keep training.
 - Approved earlier implicitly: Opus 5.5 labeling (~$40 spent before the fresh slice; tell the user the total).
