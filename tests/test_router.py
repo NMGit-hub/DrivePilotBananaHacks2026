@@ -148,6 +148,18 @@ TABLE: list[tuple[str, RouteKind, str]] = [
     ("What lane am I currently in?", M, "scene"),
     ("Which lane am I in for 520 east?", L, "lane"),
     ("What lane are we on for the exit?", L, "lane"),
+    # (review 2026-10-11: more position phrasings, and guidance questions that also ask where we are)
+    ("Tell me which lane I'm in.", M, "scene"),
+    ("Do you know which lane I'm in?", M, "scene"),
+    ("Which lane is this?", M, "scene"),
+    ("What lane am I currently driving in?", M, "scene"),
+    ("Which lane am I in right now for my exit?", L, "lane"),
+    ("Which lane am I in to turn left?", L, "lane"),
+    ("What lane am I in to go to Seattle?", L, "lane"),
+    ("Am I in the right lane? Which lane am I in?", L, "lane"),
+    ("What lane am I in? I need to take exit 12.", L, "lane"),
+    ("What lane are we in and which one do I need?", L, "lane"),
+    ("Which lane am I in compared to where I need to be?", L, "lane"),
     # --- everything else: the vision model
     ("What's the speed limit?", M, "scene"),
     ("What did that sign say?", M, "memory"),  # V2-M4: a sign we passed: remembered frames + close-ups
