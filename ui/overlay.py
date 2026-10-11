@@ -132,7 +132,7 @@ def frame_packet(
             if space.confirmed:
                 label = "Open spot" if space.stalls == 1 else f"{space.stalls} open spots"
                 items.append(
-                    {"kind": "spot", "box": _norm(space.region, width, height), "color": GREEN, "label": label}
+                    {"kind": "spot", "box": _norm(space.outline, width, height), "color": GREEN, "label": label}
                 )
 
     if highlight is not None:

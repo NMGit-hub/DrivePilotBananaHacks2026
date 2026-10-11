@@ -66,23 +66,25 @@ TICK_S = 0.5
 NEVER = float("-inf")  # no offer waiting for its reply
 
 CHECK_SYSTEM = (
-    "You check one dashcam image from a car that is looking for a parking space. A green box marks the aisle-side "
-    "edge of one space between two parked vehicles. Be strict: a space with anything in it, or that you can't "
+    "You check one dashcam image from a car that is looking for a parking space. A green outline marks one parking "
+    "space on the ground between two parked vehicles. Be strict: a space with anything in it, or that you can't "
     'see well enough, is not open; say "low" confidence when unsure.'
 )
 CHECK_LOT = (
-    "Look at the space marked by the green box, on the {side} side. Is it a real parking stall we could pull into "
-    "(not a driving lane, walkway, crosswalk, island or driveway), and is it completely empty: no car of any size, "
-    "no motorcycle, scooter, cart, cone, barrier or person in it? Is it restricted by paint or a sign: handicap "
+    "Look at the space marked by the green outline on the ground, on the {side} side. Is it a real parking stall "
+    "we could pull into (not a driving lane, walkway, crosswalk, island or driveway), and is it completely empty: "
+    "no car of any size, no motorcycle, scooter, cart, cone, barrier or person in it? Is it restricted by paint or "
+    "a sign: handicap "
     "(blue paint, wheelchair symbol), EV charging, reserved, compact, fire lane, no parking or loading? Also name "
     'the parked vehicle right before the space (nearer to us), e.g. "white SUV" or "gray sedan". Reply as '
     '{{"open": true|false, "restriction": "none"|"handicap"|"ev"|"reserved"|"compact"|"fire_lane"|"no_parking"|'
     '"loading"|"unknown", "before": "<color and type>" or null, "confidence": "high"|"medium"|"low"}}.'
 )
 CHECK_STREET = (
-    "Look at the curb space marked by the green box, on the {side} side. Is it a legal, empty curb space long "
-    "enough for a car: no vehicle, motorcycle or person in it, not a driveway, crosswalk, fire hydrant zone, bus "
-    "stop or painted (red/yellow/blue) curb, and no sign forbidding parking now? Name the parked vehicle right "
+    "Look at the curb space marked by the green outline on the ground, on the {side} side. Is it a legal, empty "
+    "curb space long enough for a car: no vehicle, motorcycle or person in it, not a driveway, crosswalk, fire "
+    "hydrant zone, bus stop or painted (red/yellow/blue) curb, and no sign forbidding parking now? Name the parked "
+    "vehicle right "
     'before the space (nearer to us). Reply as {{"open": true|false, "restriction": "none"|"handicap"|"ev"|'
     '"reserved"|"compact"|"fire_lane"|"no_parking"|"loading"|"unknown", "before": "<color and type>" or null, '
     '"confidence": "high"|"medium"|"low"}}.'
@@ -146,11 +148,19 @@ def describe(space: Space, cars_before: int, before: str | None, check: SpotChec
     return text
 
 
-def outlined(frame: Frame, region: tuple[float, float, float, float]) -> np.ndarray:
-    """The frame with the space outlined in green (what the model is asked about)."""
+def outlined(
+    frame: Frame, region: tuple[float, float, float, float], polygon: tuple[tuple[float, float], ...] = ()
+) -> np.ndarray:
+    """The frame with the space outlined in green (what the model is asked about): its ground footprint if known,
+    else its box."""
     image = frame.image.copy()
+    thick = max(2, image.shape[1] // 400)
+    if polygon:
+        points = np.array([[round(x), round(y)] for x, y in polygon], np.int32)
+        cv2.polylines(image, [points], isClosed=True, color=(0, 255, 0), thickness=thick)
+        return image
     x1, y1, x2, y2 = (round(v) for v in region)
-    cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), max(2, image.shape[1] // 400))
+    cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), thick)
     return image
 
 
@@ -404,10 +414,10 @@ class ParkingWatch:
         if self.model is None or frame is None:
             return None
         cfg = self.vision_cfg
-        marked = outlined(frame, space.region)
+        marked = outlined(frame, space.region, space.footprint)
         images = (
             ImagePart(encode_jpeg(marked, cfg.latest_width, cfg.jpeg_quality), "Now, the space outlined"),
-            ImagePart(encode_jpeg(crop(marked, space.region), 512, cfg.jpeg_quality), "Close-up of the space"),
+            ImagePart(encode_jpeg(crop(marked, space.outline), 512, cfg.jpeg_quality), "Close-up of the space"),
         )
         question = (CHECK_LOT if mode == "lot" else CHECK_STREET).format(side=space.side)
         request = VisionRequest(

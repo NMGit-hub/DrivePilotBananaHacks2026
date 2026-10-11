@@ -106,6 +106,15 @@ class Space:
     visible_depth: float  # how deep into the stall we can see now (m)
     confirmed: bool  # seen deep enough into: a "spot"
     along: float  # our travelled distance + z: where the space is along our path (dedupes re-detections)
+    footprint: tuple[tuple[float, float], ...] = ()  # image corners of the free stall on the ground (model, page)
+
+    @property
+    def outline(self) -> Box:
+        """The image box to show the driver and the model: the stall's ground footprint (else its front face)."""
+        if not self.footprint:
+            return self.region
+        xs, ys = [p[0] for p in self.footprint], [p[1] for p in self.footprint]
+        return min(xs), min(ys), max(xs), max(ys)
 
 
 @dataclass(frozen=True, slots=True)
@@ -610,6 +619,7 @@ class ParkingTracker:
                     visible_depth=depth,
                     confirmed=cand.confirmed or ready,
                     along=self._along + near.z + self._across,
+                    footprint=self._space_footprint(near, pitch, cam, horizon),
                 )
                 if looked and not cand.announced_candidate:
                     cand.announced_candidate = True
@@ -646,6 +656,16 @@ class ParkingTracker:
         points = [cam.project(x, z, up, horizon) for x in (x0, x1) for z in (z0, z1) for up in (0.0, height)]
         xs, ys = [p[0] for p in points], [p[1] for p in points]
         return min(xs), min(ys), max(xs), max(ys)
+
+    def _space_footprint(
+        self, near: ParkedCar, pitch: float, cam: Camera, horizon: float
+    ) -> tuple[tuple[float, float], ...]:
+        """Image corners of the first free stall after `near` on the ground (aisle-side edge, then the deep side): the
+        painted stall a person would point at (the front face alone is mostly what stands behind the stall)."""
+        sign = 1.0 if near.side == "right" else -1.0
+        z0, z1 = near.z + self._across, near.z + pitch + self._across
+        x0, x1 = near.x, near.x + sign * self._deep
+        return tuple(cam.project(x, z, 0.0, horizon) for x, z in ((x0, z0), (x0, z1), (x1, z1), (x1, z0)))
 
     def _visible_depth(self, near: ParkedCar, far: ParkedCar, pitch: float) -> float:
         """How deep into the middle of the first free stall (m, from the row's aisle-side edge) we can see past the
