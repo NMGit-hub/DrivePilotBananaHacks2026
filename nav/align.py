@@ -63,7 +63,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 
@@ -118,6 +118,14 @@ class NameTime:
         return len(self.candidates) > 1
 
 
+def time_zone(tz: str) -> ZoneInfo:
+    """The IANA time zone `tz` ("America/Los_Angeles"), or AlignError for a name that isn't one."""
+    try:
+        return ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError, OSError) as exc:  # (OSError: a folder of tzdata, "Pacific")
+        raise AlignError(f"unknown time zone {tz!r} (e.g. America/Los_Angeles)") from exc
+
+
 def parse_video_name(name: str, tz: str = DEFAULT_TZ) -> NameTime | None:
     """The start time in a camera file name `VID_YYYYMMDD_HHMMSS...` (None if the name has none)."""
     match = _NAME_RE.search(Path(name).name)
@@ -129,7 +137,7 @@ def parse_video_name(name: str, tz: str = DEFAULT_TZ) -> NameTime | None:
     except ValueError:
         log.warning("file name has an impossible date or time", name=name)
         return None
-    zone = ZoneInfo(tz)
+    zone = time_zone(tz)
     valid: list[datetime] = []
     for fold in (0, 1):
         instant = local.replace(tzinfo=zone, fold=fold).astimezone(UTC)
@@ -269,7 +277,7 @@ def decide_start(
         else:
             role, reason = "end", "assumed (Android's MP4 writer stamps the end); --creation-is start if not"
     if name is not None and name.ambiguous:
-        if creation is None or duration is None:
+        if creation is None or duration is None or creation_is != "auto":
             warnings.append(
                 f"the file name's time {name.local:%H:%M:%S} is in the hour repeated when clocks fell back: "
                 "took the first (daylight-time) one"
@@ -337,7 +345,7 @@ def parse_manual_start(text: str, tz: str = DEFAULT_TZ) -> datetime:
     except ValueError as exc:
         raise AlignError(f"--start: not an ISO time: {text!r}") from exc
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=ZoneInfo(tz))
+        parsed = parsed.replace(tzinfo=time_zone(tz))
     return parsed.astimezone(UTC)
 
 
@@ -809,8 +817,9 @@ def _fit(
     elif v.arrive is None and g.arrive is not None:
         if g.arrive - cfg.arrival_bias_s - shift > v.begin + cfg.contradict_s:
             problem = "the GPS still shows motion where the video's first frames show the car stopped"
-    elif g.arrive is None and v.arrive is not None and g.begin - shift > v.arrive + cfg.contradict_s:
-        problem = "the GPS track starts after the video's stop began"
+    elif g.arrive is None and v.arrive is not None and g.begin - shift < v.arrive - cfg.contradict_s:
+        # (a GPS track that starts after the video's stop began just missed the arrival: that's consistent)
+        problem = "the GPS shows the car stopped before the video's stop began"
     agreement = _agreement(video, video_range, gps, gps_ranges, shift, cfg)
     if not problem and agreement is not None and agreement < cfg.min_agreement:
         problem = f"stopped/moving agree on only {agreement:.0%} of the overlap"
@@ -997,6 +1006,9 @@ def perception_frames(
         cached_s = round(frames[-1].t, 1) if frames else 0.0
         log.info("perception cache too short; rebuilding", path=str(path), cached_s=cached_s)
     out = cache if cache is not None else partial
+    if out.resolve() == full.resolve() or out.resolve().parent == full.resolve().parent:
+        # (data/cache/perception/ holds whole-clip caches the evals trust: a partial one there would be truncated)
+        raise AlignError(f"won't write a partial perception cache into {full.parent}: give --cache another path")
     build_partial_cache(cfg, clip, out, search_s, progress)
     frames = load_cache(out, cfg)
     return frames, out, True

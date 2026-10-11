@@ -48,6 +48,7 @@ from core.logging_setup import get_logger
 from core.types import Frame
 from perception.detector import Track, is_own_hood
 from state.memory import SceneMemory
+from state.signs import box_iou
 from state.stop_queue import Approach
 from state.traffic_light import LightColor
 from state.world import WorldSnapshot
@@ -241,8 +242,16 @@ def sign_closeups(memory: SceneMemory, now: float, window_s: float, count: int) 
     """Close-ups of the signs the detectors saw in the last `window_s` (their best view so far), for a sign
     question: a sign 25 px tall in the frame can't be read, its close-up can (the test sheet's DO NOT ENTER signs).
     Labeled with what the detector took it for, as a hint, never as the answer."""
-    parts = []
-    for sign in memory.signs(window_s, count, now):
+    parts: list[ImagePart] = []
+    picked: list[tuple[float, tuple[float, float, float, float]]] = []
+    for sign in memory.signs(window_s, count * 3, now):
+        # One sign can be remembered twice (as the COCO detector's "stop sign" and the sign detector's "stop", or
+        # as two sightings): a box overlapping one already picked at about the same time is the same sign.
+        if any(abs(sign.t - t) < 1.0 and box_iou(sign.box, box) > 0.3 for t, box in picked):
+            continue
+        if len(parts) == count:
+            break
+        picked.append((sign.t, sign.box))
         where = "ahead" if sign.side == "ahead" else f"on the {sign.side}"
         read = f", read as {sign.text}" if sign.text else ""
         label = (

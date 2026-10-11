@@ -31,6 +31,7 @@ from nav.align import (  # noqa: E402
     format_summary,
     parse_manual_start,
     perception_frames,
+    time_zone,
 )
 
 if TYPE_CHECKING:
@@ -89,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         return cached, path
 
     try:
+        time_zone(args.tz)
         result = align(
             args.video,
             args.gpx,

@@ -119,7 +119,8 @@ class SignsSnapshot:
 EMPTY = SignsSnapshot(0.0, None, None, None, None, ())
 
 
-def _iou(a: Box, b: Box) -> float:
+def box_iou(a: Box, b: Box) -> float:
+    """Intersection over union of two (x1, y1, x2, y2) boxes."""
     iw = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
     ih = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
     inter = iw * ih
@@ -129,7 +130,7 @@ def _iou(a: Box, b: Box) -> float:
 
 def _near(a: Box, b: Box) -> bool:
     """Box b is where box a's sign could be a moment later (signs grow and slide outwards as we approach)."""
-    if _iou(a, b) > 0.1:
+    if box_iou(a, b) > 0.1:
         return True
     size = max(a[2] - a[0], a[3] - a[1], b[2] - b[0], b[3] - b[1])
     dx = (a[0] + a[2]) / 2 - (b[0] + b[2]) / 2

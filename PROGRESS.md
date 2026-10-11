@@ -4,7 +4,7 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
-### V2 (in progress, 2026-10-10): V2-M0..M6 built (M1 parking below the bar; M5 drift below its bars); M8 partly
+### V2 (2026-10-10/11): V2-M0..M6 and M8 done (M1 parking and M5 drift below their accuracy bars on public footage; M7 RF-DETR cut)
 - **`scripts/align_gpx.py` for our own drives** (2026-10-11, by an agent, reviewed and refactored here;
   `nav/align.py`, 44 tests): phone video (`VID_YYYYMMDD_HHMMSS`, Pacific time, DST-aware; `tzdata` added for
   Windows) + GPSLogger GPX (1.0, or 1.1 with speed in extensions, or no speed) -> a copy of the GPX with the
@@ -12,11 +12,12 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   or end of the recording decided from name + duration; a warning when they disagree by > 2 s), then is refined by
   the first clean pull-away from a stop: ego motion "stopped -> moving" vs the GPS speed rising, checked against
   the same stop's arrival ("high") and the stopped/moving agreement over the overlap; only "high" matches are
-  applied by default, else the timestamp start is kept and the summary says so. **Validation** (the agent's, on
-  BDD100K clips with a known `video_start` shifted by -9..+8 s, cached ego motion): 6 of 70 clips had a usable stop
-  and pull-away, and the start came back within 0.32 s on 53 of 54 tries (the 54th: -1.15 s, an ambiguous first
-  stop skipped); the other 64 clips correctly report "no refinement"; "medium" matches (parked at the start) were
-  off by up to 13 s, so they're opt-in. Re-checked here end to end on the GPU (592aaebe, start 2 s late): -0.23 s.
+  applied by default, else the timestamp start is kept and the summary says so. **Validation**
+  (`scripts/eval_align.py`, BDD100K clips with a known `video_start` moved off by -9, -7, ..., +8 s, cached ego
+  motion): 6 of 70 clips had a usable stop and pull-away, and the start came back within 0.32 s on 52 of 54 tries
+  (median 0.22 s; the 2 others -1.15 s: 3f225bea at +6/+8 s, whose first stop is ambiguous there, so its second
+  is used); the other 64 clips correctly report "no refinement"; "medium" matches (parked at the start) were off by
+  up to 13 s, so they're opt-in. Re-checked here end to end on the GPU (592aaebe, start 2 s late): -0.23 s.
   `eval.perception_cache.build_cache` takes `max_s` now (the tool caches only the first `--search-s` seconds).
 - **Test sheet, all 45 rows** (`eval/run_sheet.py`, lanes + signs + parking watch in lock-step, judge Claude Haiku,
   `runs/20261010-233000_sheet`): **32 right, 8 partly, 5 wrong** (71 % right). The 29 original rows: 21 / 6 / 2
@@ -552,7 +553,7 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
-- **V2 next steps: see HANDOFF.md section 2** (parking on real footage first). **V2 build plan** (`V2_BUILD_PLAN.md`, 2026-10-10): milestones V2-M0..M8 with "done when" tests and how each
+- **V2 next steps:** our own drives (`scripts/align_gpx.py`, README "Record your own drive") to check lanes and drift on the phone's 114° view and to tune parking; then V1's deferred live drive. Earlier: **V2 build plan** (`V2_BUILD_PLAN.md`, 2026-10-10): milestones V2-M0..M8 with "done when" tests and how each
   feature is tested without a live drive. The user answered the parking questions, set the deadline (**Sunday
   2026-10-11, 8:59 pm PDT**) and moved the sign fine-tune to a separate session (`SIGN_FINETUNE_PROMPT.md`).
   The user said go on 2026-10-10.

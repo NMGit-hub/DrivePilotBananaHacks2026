@@ -127,8 +127,9 @@ For drives: plug the laptop into its own charger and set Windows to **Best perfo
 
    `hfov_deg=null` uses the phone's 114° field of view instead of BDD100K's 60°. Options: `--no-refine`
    (timestamps only, no GPU), `--start 2026-10-11T14:30:22.4` (a renamed file), `--search-s 600` (no stop early
-   on). On BDD100K clips with a known start, shifted by -9..+8 s, it recovered the start within 0.32 s on 53 of 54
-   tries (nav/align.py has the method).
+   on). On BDD100K clips with a known start moved off by -9..+8 s (`scripts/eval_align.py`), the 6 clips with a
+   full stop and pull-away came back within 0.32 s on 52 of 54 tries (2 off by 1.15 s); the others kept the
+   timestamp start and said so (nav/align.py has the method).
 
 ## Tools
 
@@ -151,6 +152,7 @@ For drives: plug the laptop into its own charger and set Windows to **Best perfo
 .venv/Scripts/python scripts/eval_lanes.py virtual --clip data/videos/highway/<id>.mov   # a warped slow drift
 .venv/Scripts/python scripts/find_bdd_clips.py --scene "parking lot" --min-crawl-s 15 --max-mph 15 --fetch 10
 .venv/Scripts/python scripts/align_gpx.py data/videos/own/VID_<...>.mp4 data/gps/<track>.gpx   # own drive + GPX: video_start
+.venv/Scripts/python scripts/eval_align.py             # align_gpx's refinement vs BDD100K clips with a known start
 ```
 
 ## Configuration

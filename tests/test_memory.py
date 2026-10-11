@@ -250,6 +250,24 @@ def test_a_sign_question_gets_close_ups_of_the_signs_in_view() -> None:
     assert not any(image.label.startswith("Close-up of a sign") for image in model.requests[0].images)
 
 
+def test_one_sign_remembered_twice_gets_one_close_up() -> None:
+    """Review 2026-10-11: a stop sign is remembered as COCO's "stop sign" and the sign detector's "stop" (and a sign
+    can be two sightings): the duplicates took close-up slots from the other signs."""
+    c = cfg()
+    memory = SceneMemory(c.memory)
+    latest = frame(20.0)
+    memory.add_sign(latest, 1, "stop sign", (900.0, 250.0, 940.0, 290.0))
+    memory.add_sign(latest, 2, "stop", (901.0, 251.0, 941.0, 291.0))
+    memory.add_sign(frame(19.8), 3, "stop", (899.0, 249.0, 939.0, 289.0))
+    memory.add_sign(latest, 4, "one_way", (300.0, 300.0, 360.0, 320.0))
+    memory.add_sign(latest, 5, "no_left_turn", (500.0, 280.0, 530.0, 310.0))
+    snap = replace(empty_snapshot(20.0), frame=latest)
+    model = MockVision("A stop sign.")
+    list(scene(model, c, snap, [], memory=memory).answer(route("what do those signs say?"), snap))
+    labels = [image.label for image in model.requests[0].images if image.label.startswith("Close-up of a sign")]
+    assert len(labels) == 3 and sum("stop" in label for label in labels) == 1, labels
+
+
 def test_a_memory_question_without_memory_is_an_ordinary_scene_question() -> None:
     c = cfg()
     snap = replace(empty_snapshot(20.0), frame=frame(20.0))

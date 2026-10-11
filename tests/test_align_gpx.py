@@ -499,3 +499,53 @@ def test_cli_timestamps_only(
     assert "from the file name" in out and "video_start  2026-10-11 21:30:22.500 UTC" in out
     assert GpxReplay(tmp_path / "drive.aligned.gpx").fix_at(1.0) is not None
     assert align_gpx.main([str(video), str(gpx), "--no-refine", "--out", str(gpx)]) == 1  # would overwrite
+
+
+# ------------------------------------------------------------------------------- review fixes (2026-10-11)
+
+
+def test_a_gps_track_starting_during_the_stop_is_consistent_but_one_stopped_too_early_is_not() -> None:
+    """Review finding 6: the check was inverted. A GPS track that begins while we wait just missed the arrival
+    (consistent); a GPS already stopped while the video still shows us driving contradicts this stop."""
+    from nav.align import Stop, _fit
+
+    cfg = RefineSettings()
+    video = Stop(begin=18.0, end=31.0, arrive=18.0, depart=31.0, clean_departure=True)
+    late_start = Stop(begin=22.0, end=31.25, arrive=None, depart=31.25, clean_departure=True)
+    fit = _fit(video, late_start, [video], (0.0, 40.0), [late_start], [(22.0, 40.0)], cfg)
+    assert fit.problem == "" and fit.level == "medium" and abs(fit.shift) < 0.01
+    stopped_early = Stop(begin=5.0, end=31.25, arrive=None, depart=31.25, clean_departure=True)
+    fit = _fit(video, stopped_early, [video], (0.0, 40.0), [stopped_early], [(5.0, 40.0)], cfg)
+    assert "stopped before" in fit.problem
+
+
+def test_an_unknown_time_zone_is_an_error_not_a_traceback() -> None:
+    with pytest.raises(AlignError, match="unknown time zone"):
+        parse_video_name("VID_20261011_143022.mp4", tz="America/Los_Angles")
+    with pytest.raises(AlignError, match="unknown time zone"):
+        parse_manual_start("2026-10-11T14:30:22", tz="Pacific")
+
+
+def test_creation_is_set_by_hand_in_the_repeated_hour_says_it_took_the_first() -> None:
+    """Review nit: with --creation-is the repeated hour isn't picked by creation_time; the warning said it was."""
+    name = parse_video_name("VID_20261101_013000.mp4")  # 01:30 happens twice on 2026-11-01 in Los Angeles
+    assert name is not None and name.ambiguous
+    meta = VideoMeta(utc(2026, 11, 1, 9, 31, 0), 60.0, "pyav")
+    decision = decide_start(name, meta, creation_is="end")
+    assert any("took the first" in w for w in decision.warnings)
+    assert not any("creation_time picks" in w for w in decision.warnings)
+
+
+def test_a_partial_cache_is_never_written_into_the_full_caches_folder(tmp_path: Path) -> None:
+    """Review risk: an explicit --cache in data/cache/perception/ would get a truncated cache the evals then trust."""
+    from core.config import load_config
+    from nav.align import perception_frames
+
+    cfg = load_config(env_file=None, environ={})
+    clip = tmp_path / "VID_20261011_143022.mp4"
+    clip.write_bytes(b"")
+    target = cfg.root / "data" / "cache" / "perception" / "not_a_real_clip_for_this_test.pkl"
+    assert not target.exists()
+    with pytest.raises(AlignError, match="partial perception cache"):
+        perception_frames(cfg, clip, 30.0, 60.0, cache=target)
+    assert not target.exists()
