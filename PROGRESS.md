@@ -4,7 +4,13 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
-### V2 (in progress, 2026-10-10): 5A, V2-M0 done; V2-M1 parking measured (below the bar); V2-M2, M3, M4, M5 built
+### V2 (in progress, 2026-10-10): V2-M0..M6 built (M1 parking below the bar; M5 drift below its bars); M8 partly
+- **V2-M6 sign detector merged** (2026-10-10 ~21:40; the sign session's branch `v2-signs`, its STATUS in
+  `scripts/signs/STATUS.md`: fresh BDD held-out 69/77 clearly readable speed limits right, 0 values contradicting a
+  label, 6.6-7.1 ms a frame as TensorRT FP16). The app injects it like the lane model (`sign_model_factory`); the
+  test sheet runs it in lock-step (`--no-signs`). Live check on the school-zone dev clip: `signs=on lanes=on`,
+  signs 3.8 fps, lanes 10.4 fps, perception 30 fps, no errors; **but "School zone ahead." was said 4 times** (twice
+  in one frame, then at 2.4 s and 12.2 s): not yet fixed (HANDOFF 2.1).
 - **V2-M5 YOLOPv2 lanes and drift warning** (2026-10-10 evening; part 1 by an agent, finished, reviewed and integrated
   here). `perception/lanes.py`: the official YOLOPv2 TorchScript in FP16 on its own CUDA stream, the forward pass
   replayed as a CUDA graph (captured thread-locally: in the default global mode the detector thread's GPU work broke
@@ -509,6 +515,8 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
+- **Sign alerts repeat with the real detector:** "School zone ahead." 4 times on one clip (two signs in one frame,
+  then again 2 s and 12 s later); the once-per-zone rule needs fixing (HANDOFF 2.1).
 - **Drift warning (V2-M5) below its bars on BDD100K footage:** 1 alert in 5.7 min of real highway driving, a real
   slow move toward a line but not a drift a driver would call one (bar: 0); on the virtual-drift clips 13/18 slow
   drifts on time, 3 late, 2 effectively missed (bar: within 1 s). Learning "our usual place in the lane" needs 8 s at speed
