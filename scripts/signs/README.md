@@ -66,17 +66,21 @@ Hard negatives (both datasets pick them up when the files exist; rebuild after m
 # value classifier: non-speed BDD signs it reads as a number; check the sheet, keep the true negatives in
 # data/signs/hardneg_cls_curated.jsonl (one JSON line each, copied from hardneg_cls.jsonl)
 .venv/Scripts/python scripts/signs/mine_hard_negatives.py --weights models/signs/speed_value_cls.pt
-# detector: BDD frames with none of our labeled signs where it still fires -> data/signs/hardneg_det.txt;
-# most such hits are real signs BDD never boxed, so only the frames checked by eye are kept (curate_det_negatives.py)
+# detector: BDD frames with none of our labeled signs where it still fires -> data/signs/hardneg_det_raw.txt;
+# most such hits are real signs BDD never boxed, so every hit goes on contact sheets and only the frames checked by
+# eye are kept (the tile numbers in curate_det_negatives.py) -> data/signs/hardneg_det.txt
 .venv/Scripts/python scripts/signs/mine_det_negatives.py --weights runs/signs/det/weights/best.pt
+.venv/Scripts/python scripts/signs/dump_det_hits.py --weights runs/signs/det/weights/best.pt
+.venv/Scripts/python scripts/signs/review_sheet.py data/signs/hardneg_det_dets.jsonl --kind speed_limit --count 132
 .venv/Scripts/python scripts/signs/curate_det_negatives.py
 # unboxed real signs in the training frames (masked by prepare_data.py det, never background)
 .venv/Scripts/python scripts/signs/mine_unboxed.py --weights runs/signs/det/weights/best.pt
 ```
 
 Only the training fraction of BDD train is ever trained on (synthetic and classifier backgrounds included);
-each build records its training images in `data/signs/used_for_training_{det,cls}.txt`, and the tune set
-(`evaluate.py tune`) leaves out those and the first build's backgrounds.
+each build records its training images in `data/signs/used_for_training_{det,cls}.txt` (keep copies of the files
+of builds that delivered models: the delivered ones are `*_det_ft_build.txt` and `*_cls_cls5.txt`), and the tune
+set (`evaluate.py tune`) leaves out every `used_for_training_*.txt` image and the first build's backgrounds.
 
 ## 4. Training (shared GPU: batch 8 keeps the detector at ~2.6 GB; don't export engines while training: RAM)
 
@@ -95,11 +99,14 @@ Best weights are copied to `models/signs/signs_yolo26s.pt` and `models/signs/spe
 ## 5. Evaluation
 
 ```bash
-.venv/Scripts/python scripts/signs/eval_values.py --write-metrics      # classifier alone; threshold from BDD validation
+.venv/Scripts/python scripts/signs/eval_values.py --views 1 3 5 7      # classifier alone: threshold per view count
 .venv/Scripts/python scripts/signs/evaluate.py tune                    # end to end on the tune set (thresholds)
+# after choosing (never before): held-out sets
 .venv/Scripts/python scripts/signs/evaluate.py all --write-metrics     # fresh, bdd, bdd_noaudit, public, tune
+.venv/Scripts/python scripts/signs/eval_values.py --views 1 3 5 7 --heldout both --write-metrics
 .venv/Scripts/python scripts/signs/evaluate.py tune --cached --set signs.value_conf=0.95   # re-score without the GPU
-.venv/Scripts/python scripts/signs/bench_signs.py                      # per-frame time on the GPU
+.venv/Scripts/python scripts/signs/bench_signs.py                      # per-frame time on a dev clip
+.venv/Scripts/python scripts/signs/bench_frames.py --write-metrics     # per-frame time on frames with speed limits
 ```
 
 `evaluate.py` runs the detector once per frame (`raw_detections`) and applies the app's rules with the same

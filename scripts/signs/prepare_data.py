@@ -165,11 +165,14 @@ def original_build_images() -> set[str]:
 
 
 def training_images() -> set[str]:
-    """Every BDD image any detector or classifier build trained on (recorded builds + the original build)."""
+    """Every BDD image any detector or classifier build trained on (recorded builds + the original build).
+
+    Reads every data/signs/used_for_training_*.txt, not just the current builds' files: a rebuild overwrites those,
+    and the delivered models were trained on earlier builds (kept as *_det_ft_build.txt, *_cls_cls5.txt).
+    """
     out = original_build_images()
-    for path in USED_FOR_TRAINING.values():
-        if path.exists():
-            out |= {line for line in path.read_text(encoding="utf-8").splitlines() if line}
+    for path in sorted(DATA.glob("used_for_training_*.txt")):
+        out |= {line for line in path.read_text(encoding="utf-8").splitlines() if line}
     return out
 
 
@@ -210,12 +213,12 @@ def bdd_samples(split: str, fixes: bool = True) -> tuple[list[Sample], list[Samp
     return pos, neg
 
 
-# Pseudo-label errors found by checking, by eye on full-resolution crops, the validation crops the value classifier
-# disagreed with at high probability (2026-10-10). Only BDD-train val-fraction frames (validation / tune), never
-# the held-out sets. key -> (kind, value).
+# Pseudo-label errors found by checking, by eye on full-resolution crops (and the source video where the frame was
+# too small), the validation crops the value classifier disagreed with at high probability (2026-10-10). Only
+# BDD-train val-fraction frames (validation / tune), never the held-out sets. key -> (kind, value).
 LABEL_FIXES: dict[str, tuple[str, int | None]] = {
     "train/009bd04d-0f1f9967/20": ("speed_limit", 25),  # white R2-1 with a big 25 at night, called "other"
-    "train/2db6f386-71e116f8/24": ("unclear", None),  # white panel "20" under two text lines: kind doubtful
+    "train/2db6f386-71e116f8/24": ("speed_limit", 20),  # SPEED LIMIT 20 over a pedestrian sign (video, 9-10 s)
 }
 
 

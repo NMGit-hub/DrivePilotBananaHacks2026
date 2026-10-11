@@ -14,11 +14,14 @@ data/signs/eval_raw/<set>.json (--cached reuses them, e.g. to sweep thresholds w
 Matching: a detection hits a labeled sign of the same kind at IoU >= 0.5 (greedy, most confident first).
 Detections on ignore regions (signs of unknown kind, too small to label) count neither way.
 
-Speed values: every reported value is judged. It is matched to the labeled sign of ANY kind it overlaps most
-(IoU >= 0.5): right if that sign is a speed kind with the same value, unverifiable if it is a speed kind whose
-value nobody could read, WRONG otherwise (another value, or a sign that carries no speed). A value matching no
-labeled sign is unverifiable if it overlaps an ignore region (IoU >= 0.3) and WRONG elsewhere. Unverifiable values
-are listed and must be checked by eye; thresholds are chosen with wrong + unverifiable both at 0.
+Speed values: every reported value is judged. It is matched to the labeled box of ANY kind it overlaps most
+(IoU >= 0.5), including the held-out sets' boxes the pseudo-labeler called "other": right if that sign is a speed
+kind with the same value, unverifiable if it is a speed kind whose value nobody could read, "on_other" on an "other"
+box (not checked by hand: may be a limit the labeler missed), and WRONG on a labeled sign of our kinds with another
+value or no number ("contradicting a label"). A value matching no box is unverifiable if it overlaps an ignore
+region (IoU >= 0.3) and "on_nothing" elsewhere. Strictly, wrong + on_other + on_nothing all count as wrong values
+(`wrong_values`), and every one of them, like every unverifiable value, must be looked at; thresholds are chosen
+with all of them at 0 on the tune set.
 """
 
 from __future__ import annotations
@@ -116,8 +119,17 @@ def match(
     return pairs, [gts[i] for i in free]
 
 
+OTHER = "other"  # Gt kind of a sign box the pseudo-labeler called other / not a sign (never one of KINDS)
+
+
 def judge_value(d: SignDetection, gts: list[Gt], ignore: list[BoxT]) -> tuple[str, int | None]:
-    """("right" | "wrong" | "unverifiable", the labeled value) for a detection that reports a value."""
+    """How a reported value compares with the labels, and the labeled value.
+
+    "right"; "wrong" (contradicts a labeled sign of our kinds: another number, or a sign without one);
+    "on_other" (on a box the pseudo-labeler called "other": not checked by hand, may be a missed limit);
+    "on_nothing" (no labeled box there); "unverifiable" (a limit whose number nobody could read, or a sign of
+    unknown kind). Strictly, on_other and on_nothing count as wrong too: each one must be looked at.
+    """
     best: Gt | None = None
     best_iou = IOU_HIT
     for g in gts:
@@ -125,13 +137,18 @@ def judge_value(d: SignDetection, gts: list[Gt], ignore: list[BoxT]) -> tuple[st
         if o >= best_iou:
             best, best_iou = g, o
     if best is not None:
+        if best.kind == OTHER:
+            return "on_other", None
         if best.kind not in VALUE_KINDS:
             return "wrong", None
         if best.value is None:
             return "unverifiable", None
         return ("right" if best.value == d.value else "wrong"), best.value
     # Only a real overlap with a region of unknown kind excuses a value (not a centre inside a tiny box).
-    return ("unverifiable" if any(iou(d.box, g) >= 0.3 for g in ignore) else "wrong"), None
+    return ("unverifiable" if any(iou(d.box, g) >= 0.3 for g in ignore) else "on_nothing"), None
+
+
+STRICTLY_WRONG = ("wrong", "on_other", "on_nothing")
 
 
 def average_precision(results: list[ImageResult], kind: str, cfg: SignsConfig) -> tuple[float, int]:
@@ -170,15 +187,16 @@ def summarize(results: list[ImageResult], cfg: SignsConfig, with_ap: bool = True
         for d, g in pairs:
             per_kind[d.kind]["tp" if g is not None else "fp"] += 1
         for g in missed:
-            per_kind[g.kind]["fn"] += 1
+            if g.kind in per_kind:  # "other" boxes are labels to judge values against, not signs to find
+                per_kind[g.kind]["fn"] += 1
         for d in dets:
             if d.value is None:
                 continue
             outcome, truth = judge_value(d, r.gts, r.ignore)
             judged[outcome] += 1
             rec = {"image": r.name, "box": [round(x) for x in d.box], "kind": d.kind, "said": d.value}
-            if outcome == "wrong":
-                wrong.append({**rec, "truth": truth, "p": round(d.value_conf or 0.0, 3)})
+            if outcome in STRICTLY_WRONG:
+                wrong.append({**rec, "truth": truth, "on": outcome, "p": round(d.value_conf or 0.0, 3)})
             elif outcome == "unverifiable":
                 unverified.append(rec)
         # Readable speed limits: right / wrong / no value / missed (by the same-kind match).
@@ -220,7 +238,8 @@ def summarize(results: list[ImageResult], cfg: SignsConfig, with_ap: bool = True
         "readable_speed_limits": readable,
         "readable_right_value_rate": round(right / max(1, readable), 3),
         "reported_values": dict(judged),
-        "wrong_values": wrong,
+        "values_contradicting_a_label": sum(w["on"] == "wrong" for w in wrong),
+        "wrong_values": wrong,  # strictly wrong: contradicting a label, on an "other" box or on nothing
         "unverifiable_values": unverified,
     }
 
@@ -246,8 +265,9 @@ def value_sweep(results: list[ImageResult], cfg: SignsConfig) -> list[dict[str, 
 
 
 def model_fingerprint(cfg: SignsConfig) -> dict[str, Any]:
-    """What raw detections depend on: the weights (sha256; an engine's sidecar ties it to them) and the input."""
-    from perception.signs import file_sha256
+    """What raw detections depend on: the weights (sha256; an engine's sidecar ties it to them), the input, and
+    how a value is read (number of views, their geometry, the crop padding)."""
+    from perception.signs import CROP_PAD, VALUE_VIEWS, file_sha256
 
     det_w, cls_w = (p if p.is_absolute() else REPO_ROOT / p for p in (cfg.weights, cfg.classifier_weights))
     return {
@@ -257,6 +277,9 @@ def model_fingerprint(cfg: SignsConfig) -> dict[str, Any]:
         "classifier_imgsz": cfg.classifier_imgsz,
         "half": cfg.half,
         "engine": cfg.engine,
+        "value_views": cfg.value_views,
+        "views_geometry": [list(v) for v in VALUE_VIEWS[: cfg.value_views]],
+        "crop_pad": CROP_PAD,
     }
 
 
@@ -323,11 +346,14 @@ def heldout_items(path: Path, audit: bool = True) -> list[Item]:
     data = json.loads(path.read_text(encoding="utf-8"))
     items: list[Item] = []
     for im in data["images"]:
-        signs, ignore = list(im["signs"]), list(im["ignore"])
+        signs, ignore, others = list(im["signs"]), list(im["ignore"]), list(im.get("negatives", []))
         if audit and im.get("audit"):
             signs += im["audit"]["signs"]
             ignore += im["audit"]["ignore"]
+            dropped = im["audit"].get("drop_negatives", [])
+            others = [b for b in others if b not in dropped]
         gts = [Gt(tuple(s["box"]), s["kind"], s["value"], s["readable"]) for s in signs]
+        gts += [Gt(tuple(b), OTHER, None, None) for b in others]  # pseudo-labeled "other" signs (not hand-checked)
         items.append((im["image"], BDD_IMAGES / im["image"], gts, [tuple(b) for b in ignore]))
     return items
 
@@ -413,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
         for k, v in s["per_kind"].items():
             print(f"  {k:20s} {v}")
         print(f"  readable limits: {s['speed_values']}  right-value rate: {s['readable_right_value_rate']}")
-        print(f"  reported values: {s['reported_values']}")
+        print(f"  reported values: {s['reported_values']}  contradicting a label: {s['values_contradicting_a_label']}")
         print(f"  WRONG values: {len(s['wrong_values'])} {s['wrong_values'][: args.show]}")
         print(f"  unverifiable values: {len(s['unverifiable_values'])} {s['unverifiable_values'][: args.show]}")
         for row in s["value_threshold_sweep"]:

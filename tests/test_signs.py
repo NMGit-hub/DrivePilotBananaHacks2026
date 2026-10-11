@@ -305,6 +305,8 @@ class _FakeYOLO:
         **{i + 3: f"v{v}" for i, v in enumerate(v for v in SPEED_VALUES if v not in (25, 35))},
     }
     det_names: ClassVar[dict[int, str]] = dict(enumerate(KINDS))
+    view_probs: ClassVar[list[list[float]] | None] = None  # per-crop probabilities (views); None: `probs` for all
+    crop_counts: ClassVar[list[int]] = []  # crops per classifier call
     cls_calls = 0
 
     def __init__(self, path: str, task: str) -> None:
@@ -317,9 +319,16 @@ class _FakeYOLO:
             return [SimpleNamespace(boxes=_FakeBoxes(self.det_rows), speed={"inference": 1.0})]
         type(self).cls_calls += 1
         crops = image if isinstance(image, list) else [image]
+        type(self).crop_counts.append(len(crops))
         assert all(c.shape == (96, 96, 3) for c in crops)
-        probs = self.probs + [0.0] * (len(self.cls_names) - len(self.probs))
-        return [SimpleNamespace(probs=SimpleNamespace(data=torch.tensor(probs))) for _ in crops]
+        per_crop = self.view_probs or [self.probs] * len(crops)
+        out = []
+        for i in range(len(crops)):
+            p = per_crop[i % len(per_crop)]
+            out.append(
+                SimpleNamespace(probs=SimpleNamespace(data=torch.tensor(p + [0.0] * (len(self.cls_names) - len(p)))))
+            )
+        return out
 
 
 @pytest.fixture
@@ -330,6 +339,8 @@ def fake_detector(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     monkeypatch.setattr(SignDetector, "_verify_gpu", lambda self, what, model: ("cuda:0", "fp16"))
     _FakeYOLO.cls_calls = 0
     _FakeYOLO.det_names = dict(enumerate(KINDS))
+    _FakeYOLO.view_probs = None
+    _FakeYOLO.crop_counts = []
 
     def make(**overrides: Any) -> SignDetector:
         cfg = SignsConfig(engine="pytorch", **overrides)
@@ -855,9 +866,6 @@ def test_eval_values_threshold_rules(tmp_path: Path) -> None:
     assert evv.lowest_safe(rows) == 0.85
     unsafe = evv.sweep([(40, 0.999)], [45])  # wrong even at the highest threshold: no safe threshold at all
     assert evv.lowest_safe(unsafe) is None
-    assert evv.crop_truth(tmp_path / "v30" / "bdd_000001.png") == 30
-    assert evv.crop_truth(tmp_path / "none" / "bdd_000002_true25.png") == 25  # a real 25 trained as "none"
-    assert evv.crop_truth(tmp_path / "none" / "bddother_000003.png") is None
 
 
 # --------------------------------------------------------------------- dataset building (leakage etc.)
@@ -1146,7 +1154,100 @@ def test_detector_reads_values_over_views(fake_detector: Any) -> None:
     det = fake_detector(value_views=5)
     calls = _FakeYOLO.cls_calls
     (d,) = det.detect(_frame())
-    assert d.value == 35 and _FakeYOLO.cls_calls == calls + 1  # one classifier call with the 5 views
+    assert d.value == 35 and _FakeYOLO.cls_calls == calls + 1  # one classifier call ...
+    assert _FakeYOLO.crop_counts[-1] == 5  # ... with the 5 views
+    det3 = fake_detector(value_views=3)
+    det3.detect(_frame())
+    assert _FakeYOLO.crop_counts[-1] == 3
+
+
+def test_detector_withholds_a_value_when_the_views_disagree(fake_detector: Any) -> None:
+    _FakeYOLO.det_rows = [(600, 200, 630, 240, 0.9, KIND_INDEX["speed_limit"])]
+    sure_35, sure_25, unsure_35 = [0.0, 0.0, 0.999], [0.0, 0.999, 0.0], [0.04, 0.0, 0.96]
+    _FakeYOLO.view_probs = [sure_35, sure_35, sure_25, sure_35, sure_35]  # one view reads 25
+    (d,) = fake_detector(value_views=5, value_conf=0.9).detect(_frame())
+    assert d.value is None and d.value_conf == pytest.approx(0.999, abs=1e-3)
+    _FakeYOLO.view_probs = [sure_35, sure_35, unsure_35, sure_35, sure_35]  # all 35, the weakest at 0.96
+    (d,) = fake_detector(value_views=5, value_conf=0.97).detect(_frame())
+    assert d.value is None and d.value_conf == pytest.approx(0.96, abs=1e-3)  # the weakest view decides
+    (d,) = fake_detector(value_views=5, value_conf=0.95).detect(_frame())
+    assert d.value == 35
+
+
+def test_scaled_views_are_clipped_at_the_frame_edge() -> None:
+    from perception.signs import read_value, view_boxes
+
+    near_edge = (1250.0, 300.0, 1278.0, 340.0)
+    boxes = view_boxes(near_edge, 5)
+    assert max(b[2] for b in boxes) > 1280  # the shifted and scaled views reach past the frame...
+    img = np.zeros((720, 1280, 3), np.uint8)
+    got: list[int] = []
+
+    def classify(crops: list[np.ndarray]) -> list[tuple[int | None, float]]:
+        got.extend(c.shape[0] for c in crops)
+        return [(25, 0.99)] * len(crops)
+
+    assert read_value(classify, img, near_edge, 96, 5) == (25, 0.99) and got == [96] * 5  # ...and is clipped
+
+
+def test_eval_values_on_other_boxes_are_their_own_category() -> None:
+    other = ev.Gt((100, 100, 130, 140), ev.OTHER, None, None)  # a box the pseudo-labeler called "other"
+    stop = ev.Gt((300, 100, 340, 140), "stop", None, None)
+    raw = [_sl((101, 101, 131, 141), 25), _sl((300, 100, 340, 140), 35, conf=0.8), _sl((700, 100, 730, 140), 25)]
+    s = ev.summarize([_res([other, stop], raw)], _cfg())
+    assert s["reported_values"] == {"on_other": 1, "wrong": 1, "on_nothing": 1}
+    assert s["values_contradicting_a_label"] == 1  # only the value on the labeled stop sign
+    assert sorted(w["on"] for w in s["wrong_values"]) == ["on_nothing", "on_other", "wrong"]  # all strictly wrong
+    assert "other" not in s["per_kind"] and s["per_kind"]["stop"]["fn"] == 1  # "other" boxes are never missed
+
+
+def test_heldout_items_load_other_boxes_and_the_audit_drops(tmp_path: Path) -> None:
+    data = {
+        "images": [
+            {
+                "image": "valid/shard_000/a.jpg",
+                "signs": [],
+                "ignore": [],
+                "negatives": [[0, 0, 10, 20], [30, 0, 40, 20]],
+                "audit": {
+                    "signs": [{"box": [30, 0, 40, 20], "kind": "speed_limit", "value": 20, "readable": True}],
+                    "ignore": [],
+                    "drop_negatives": [[30, 0, 40, 20]],
+                },
+            }
+        ]
+    }
+    path = tmp_path / "h.json"
+    path.write_text(json.dumps(data))
+    (audited,) = ev.heldout_items(path)
+    assert [(g.kind, g.box) for g in audited[2]] == [("speed_limit", (30, 0, 40, 20)), (ev.OTHER, (0, 0, 10, 20))]
+    (plain,) = ev.heldout_items(path, audit=False)
+    assert [g.kind for g in plain[2]] == [ev.OTHER, ev.OTHER]
+
+
+def test_eval_values_heldout_uses_the_app_rules(tmp_path: Path) -> None:
+    from scripts.signs import eval_values as evv
+
+    signs = [
+        {"box": [100, 100, 130, 140], "kind": "speed_limit", "value": 25, "readable": True},  # read
+        {"box": [200, 100, 210, 112], "kind": "speed_limit", "value": 25, "readable": False},  # 12 px: too small
+        {"box": [300, 0.5, 330, 40], "kind": "speed_limit", "value": 30, "readable": False},  # at the frame border
+        {"box": [400, 100, 430, 140], "kind": "speed_limit", "value": None, "readable": False},  # no value
+        {"box": [500, 100, 530, 140], "kind": "stop", "value": None, "readable": None},
+    ]
+    path = tmp_path / "h.json"
+    path.write_text(json.dumps({"images": [{"image": "valid/shard_000/a.jpg", "signs": signs}]}))
+    items, readable = evv.heldout_items(path, SignsConfig())
+    assert [it[1] for it in items] == [(100, 100, 130, 140)] and readable == [True]
+
+
+def test_training_images_read_every_recorded_build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / "used_for_training_det.txt").write_text("a.jpg\n")
+    (tmp_path / "used_for_training_det_ft_build.txt").write_text("b.jpg\n")  # an earlier build, kept
+    (tmp_path / "used_for_training_cls_cls5.txt").write_text("c.jpg\n")
+    monkeypatch.setattr(prep, "DATA", tmp_path)
+    monkeypatch.setattr(prep, "original_build_images", lambda: {"o.jpg"})
+    assert prep.training_images() == {"a.jpg", "b.jpg", "c.jpg", "o.jpg"}
 
 
 def test_hard_negative_curation_blocks() -> None:

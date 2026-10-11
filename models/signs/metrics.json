@@ -2166,7 +2166,36 @@
     ],
     "classifier_imgsz": 96,
     "half": true,
-    "engine": "tensorrt"
+    "engine": "tensorrt",
+    "value_views": 5,
+    "views_geometry": [
+      [
+        0.0,
+        0.0,
+        1.0
+      ],
+      [
+        -0.08,
+        0.0,
+        1.0
+      ],
+      [
+        0.08,
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.9
+      ],
+      [
+        0.0,
+        0.0,
+        1.12
+      ]
+    ],
+    "crop_pad": 0.15
   },
   "fresh": {
     "frames": 3175,
@@ -2299,9 +2328,11 @@
     "readable_right_value_rate": 0.896,
     "reported_values": {
       "right": 74,
-      "wrong": 6,
+      "on_nothing": 3,
+      "on_other": 3,
       "unverifiable": 8
     },
+    "values_contradicting_a_label": 0,
     "wrong_values": [
       {
         "image": "valid/shard_000/3b24ac1a-40377289.jpg",
@@ -2314,6 +2345,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_nothing",
         "p": 1.0
       },
       {
@@ -2327,6 +2359,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_other",
         "p": 1.0
       },
       {
@@ -2340,6 +2373,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_nothing",
         "p": 0.981
       },
       {
@@ -2353,6 +2387,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_other",
         "p": 0.992
       },
       {
@@ -2366,6 +2401,7 @@
         "kind": "speed_limit",
         "said": 20,
         "truth": null,
+        "on": "on_other",
         "p": 1.0
       },
       {
@@ -2379,6 +2415,7 @@
         "kind": "speed_limit",
         "said": 50,
         "truth": null,
+        "on": "on_nothing",
         "p": 0.906
       }
     ],
@@ -2582,8 +2619,8 @@
       "frames": 3175,
       "model": "signs_yolo26s_736x1280_fp16.engine",
       "classifier": "speed_value_cls_96x96_fp16.engine",
-      "median_ms": 6.39,
-      "p95_ms": 9.84
+      "median_ms": 5.89,
+      "p95_ms": 8.75
     },
     "lowest_value_conf_without_wrong_total": null,
     "lowest_value_conf_without_wrong_or_unverifiable": null
@@ -2720,9 +2757,11 @@
     "readable_right_value_rate": 0.885,
     "reported_values": {
       "unverifiable": 7,
-      "wrong": 5,
-      "right": 77
+      "on_other": 3,
+      "right": 77,
+      "on_nothing": 2
     },
+    "values_contradicting_a_label": 0,
     "wrong_values": [
       {
         "image": "valid/shard_000/0049e5b8-afda7206.jpg",
@@ -2735,6 +2774,7 @@
         "kind": "speed_limit",
         "said": 45,
         "truth": null,
+        "on": "on_other",
         "p": 0.999
       },
       {
@@ -2748,6 +2788,7 @@
         "kind": "school_speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_nothing",
         "p": 0.976
       },
       {
@@ -2761,6 +2802,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_other",
         "p": 0.92
       },
       {
@@ -2774,6 +2816,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_nothing",
         "p": 0.996
       },
       {
@@ -2787,6 +2830,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_other",
         "p": 0.966
       }
     ],
@@ -2979,8 +3023,8 @@
       "frames": 2623,
       "model": "signs_yolo26s_736x1280_fp16.engine",
       "classifier": "speed_value_cls_96x96_fp16.engine",
-      "median_ms": 6.12,
-      "p95_ms": 9.24
+      "median_ms": 6.24,
+      "p95_ms": 9.4
     },
     "lowest_value_conf_without_wrong_total": null,
     "lowest_value_conf_without_wrong_or_unverifiable": null
@@ -3116,9 +3160,11 @@
     "readable_right_value_rate": 0.885,
     "reported_values": {
       "unverifiable": 7,
-      "wrong": 7,
-      "right": 75
+      "on_other": 4,
+      "right": 75,
+      "on_nothing": 3
     },
+    "values_contradicting_a_label": 0,
     "wrong_values": [
       {
         "image": "valid/shard_000/0049e5b8-afda7206.jpg",
@@ -3131,6 +3177,7 @@
         "kind": "speed_limit",
         "said": 45,
         "truth": null,
+        "on": "on_other",
         "p": 0.999
       },
       {
@@ -3144,6 +3191,7 @@
         "kind": "school_speed_limit",
         "said": 20,
         "truth": null,
+        "on": "on_other",
         "p": 1.0
       },
       {
@@ -3157,6 +3205,7 @@
         "kind": "school_speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_nothing",
         "p": 0.976
       },
       {
@@ -3170,6 +3219,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_other",
         "p": 0.92
       },
       {
@@ -3183,6 +3233,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_nothing",
         "p": 0.996
       },
       {
@@ -3196,6 +3247,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_nothing",
         "p": 1.0
       },
       {
@@ -3209,6 +3261,7 @@
         "kind": "speed_limit",
         "said": 25,
         "truth": null,
+        "on": "on_other",
         "p": 0.966
       }
     ],
@@ -3401,8 +3454,8 @@
       "frames": 2623,
       "model": "signs_yolo26s_736x1280_fp16.engine",
       "classifier": "speed_value_cls_96x96_fp16.engine",
-      "median_ms": 6.12,
-      "p95_ms": 9.24
+      "median_ms": 6.24,
+      "p95_ms": 9.4
     },
     "lowest_value_conf_without_wrong_total": null,
     "lowest_value_conf_without_wrong_or_unverifiable": null
@@ -3439,8 +3492,9 @@
     "readable_right_value_rate": 0.93,
     "reported_values": {
       "right": 85,
-      "wrong": 2
+      "on_nothing": 2
     },
+    "values_contradicting_a_label": 0,
     "wrong_values": [
       {
         "image": "mph50/mph50_004",
@@ -3453,6 +3507,7 @@
         "kind": "speed_limit",
         "said": 50,
         "truth": null,
+        "on": "on_nothing",
         "p": 0.999
       },
       {
@@ -3466,6 +3521,7 @@
         "kind": "speed_limit",
         "said": 50,
         "truth": null,
+        "on": "on_nothing",
         "p": 0.999
       }
     ],
@@ -3580,8 +3636,8 @@
       "frames": 100,
       "model": "signs_yolo26s_736x1280_fp16.engine",
       "classifier": "speed_value_cls_96x96_fp16.engine",
-      "median_ms": 22.09,
-      "p95_ms": 27.77
+      "median_ms": 20.94,
+      "p95_ms": 26.91
     },
     "lowest_value_conf_without_wrong_total": null,
     "lowest_value_conf_without_wrong_or_unverifiable": null
@@ -3590,13 +3646,13 @@
     "frames": 516,
     "per_kind": {
       "speed_limit": {
-        "labeled": 31,
-        "tp": 25,
+        "labeled": 32,
+        "tp": 26,
         "fp": 3,
         "fn": 6,
-        "precision": 0.893,
-        "recall": 0.806,
-        "ap50": 0.853
+        "precision": 0.897,
+        "recall": 0.812,
+        "ap50": 0.858
       },
       "school_speed_limit": {
         "labeled": 0,
@@ -3699,203 +3755,440 @@
       }
     },
     "speed_values": {
-      "speed_limit:right": 19,
+      "speed_limit:right": 20,
       "speed_limit:no_value": 6,
       "speed_limit:missed": 4
     },
-    "readable_speed_limits": 29,
-    "readable_right_value_rate": 0.655,
+    "readable_speed_limits": 30,
+    "readable_right_value_rate": 0.667,
     "reported_values": {
-      "right": 21,
-      "unverifiable": 1
+      "right": 22
     },
+    "values_contradicting_a_label": 0,
     "wrong_values": [],
-    "unverifiable_values": [
-      {
-        "image": "2db6f386-71e116f8.jpg",
-        "box": [
-          1248,
-          232,
-          1272,
-          270
-        ],
-        "kind": "speed_limit",
-        "said": 20
-      }
-    ],
+    "unverifiable_values": [],
     "value_threshold_sweep": [
       {
         "value_conf": 0.5,
-        "readable": 29,
-        "right_on_readable": 19,
+        "readable": 30,
+        "right_on_readable": 20,
         "wrong_total": 1,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 2
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 1
       },
       {
         "value_conf": 0.6,
-        "readable": 29,
-        "right_on_readable": 19,
+        "readable": 30,
+        "right_on_readable": 20,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.7,
-        "readable": 29,
-        "right_on_readable": 19,
+        "readable": 30,
+        "right_on_readable": 20,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.8,
-        "readable": 29,
-        "right_on_readable": 19,
+        "readable": 30,
+        "right_on_readable": 20,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.85,
-        "readable": 29,
-        "right_on_readable": 19,
+        "readable": 30,
+        "right_on_readable": 20,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.9,
-        "readable": 29,
-        "right_on_readable": 19,
+        "readable": 30,
+        "right_on_readable": 20,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.93,
-        "readable": 29,
-        "right_on_readable": 18,
+        "readable": 30,
+        "right_on_readable": 19,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.95,
-        "readable": 29,
-        "right_on_readable": 18,
+        "readable": 30,
+        "right_on_readable": 19,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.97,
-        "readable": 29,
-        "right_on_readable": 18,
+        "readable": 30,
+        "right_on_readable": 19,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.98,
-        "readable": 29,
-        "right_on_readable": 18,
+        "readable": 30,
+        "right_on_readable": 19,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.99,
-        "readable": 29,
-        "right_on_readable": 18,
+        "readable": 30,
+        "right_on_readable": 19,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.995,
-        "readable": 29,
-        "right_on_readable": 18,
+        "readable": 30,
+        "right_on_readable": 19,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       },
       {
         "value_conf": 0.998,
-        "readable": 29,
-        "right_on_readable": 17,
+        "readable": 30,
+        "right_on_readable": 18,
         "wrong_total": 0,
-        "unverifiable": 1,
-        "wrong_or_unverifiable": 1
+        "unverifiable": 0,
+        "wrong_or_unverifiable": 0
       }
     ],
     "timing_eval_loop": {
       "frames": 516,
       "model": "signs_yolo26s_736x1280_fp16.engine",
       "classifier": "speed_value_cls_96x96_fp16.engine",
-      "median_ms": 6.16,
-      "p95_ms": 9.13
+      "median_ms": 6.06,
+      "p95_ms": 9.7
     },
     "lowest_value_conf_without_wrong_total": 0.6,
-    "lowest_value_conf_without_wrong_or_unverifiable": null
+    "lowest_value_conf_without_wrong_or_unverifiable": 0.6
   },
   "value_classifier": {
     "weights": "speed_value_cls.pt",
     "model": "speed_value_cls_96x96_fp16.engine",
     "configured_views": 5,
-    "validation_views5": {
+    "validation_views1": {
       "sweep": [
         {
           "threshold": 0.5,
-          "right": 24,
-          "wrong": 1,
-          "withheld": 1438
+          "right": 26,
+          "wrong": 6,
+          "withheld": 1432
         },
         {
           "threshold": 0.6,
-          "right": 24,
-          "wrong": 1,
-          "withheld": 1438
+          "right": 26,
+          "wrong": 6,
+          "withheld": 1432
         },
         {
           "threshold": 0.7,
+          "right": 26,
+          "wrong": 3,
+          "withheld": 1435
+        },
+        {
+          "threshold": 0.8,
+          "right": 26,
+          "wrong": 2,
+          "withheld": 1436
+        },
+        {
+          "threshold": 0.85,
+          "right": 25,
+          "wrong": 2,
+          "withheld": 1437
+        },
+        {
+          "threshold": 0.9,
+          "right": 25,
+          "wrong": 2,
+          "withheld": 1437
+        },
+        {
+          "threshold": 0.93,
+          "right": 25,
+          "wrong": 2,
+          "withheld": 1437
+        },
+        {
+          "threshold": 0.95,
+          "right": 25,
+          "wrong": 2,
+          "withheld": 1437
+        },
+        {
+          "threshold": 0.97,
           "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.98,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.99,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.995,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.998,
+          "right": 23,
+          "wrong": 0,
+          "withheld": 1441
+        }
+      ],
+      "lowest_safe": 0.97
+    },
+    "validation_views3": {
+      "sweep": [
+        {
+          "threshold": 0.5,
+          "right": 25,
+          "wrong": 2,
+          "withheld": 1437
+        },
+        {
+          "threshold": 0.6,
+          "right": 25,
+          "wrong": 2,
+          "withheld": 1437
+        },
+        {
+          "threshold": 0.7,
+          "right": 25,
           "wrong": 1,
           "withheld": 1438
         },
         {
           "threshold": 0.8,
-          "right": 24,
+          "right": 25,
           "wrong": 1,
           "withheld": 1438
         },
         {
           "threshold": 0.85,
+          "right": 25,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.9,
+          "right": 25,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.93,
+          "right": 25,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.95,
+          "right": 25,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.97,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.98,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.99,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.995,
           "right": 23,
+          "wrong": 0,
+          "withheld": 1441
+        },
+        {
+          "threshold": 0.998,
+          "right": 22,
+          "wrong": 0,
+          "withheld": 1442
+        }
+      ],
+      "lowest_safe": 0.97
+    },
+    "validation_views5": {
+      "sweep": [
+        {
+          "threshold": 0.5,
+          "right": 25,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.6,
+          "right": 25,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.7,
+          "right": 25,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.8,
+          "right": 25,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.85,
+          "right": 24,
           "wrong": 1,
           "withheld": 1439
         },
         {
           "threshold": 0.9,
-          "right": 23,
+          "right": 24,
           "wrong": 0,
           "withheld": 1440
         },
         {
           "threshold": 0.93,
-          "right": 23,
+          "right": 24,
           "wrong": 0,
           "withheld": 1440
         },
         {
           "threshold": 0.95,
-          "right": 23,
+          "right": 24,
           "wrong": 0,
           "withheld": 1440
         },
         {
           "threshold": 0.97,
+          "right": 23,
+          "wrong": 0,
+          "withheld": 1441
+        },
+        {
+          "threshold": 0.98,
+          "right": 23,
+          "wrong": 0,
+          "withheld": 1441
+        },
+        {
+          "threshold": 0.99,
+          "right": 23,
+          "wrong": 0,
+          "withheld": 1441
+        },
+        {
+          "threshold": 0.995,
           "right": 22,
+          "wrong": 0,
+          "withheld": 1442
+        },
+        {
+          "threshold": 0.998,
+          "right": 19,
+          "wrong": 0,
+          "withheld": 1445
+        }
+      ],
+      "lowest_safe": 0.9
+    },
+    "validation_views7": {
+      "sweep": [
+        {
+          "threshold": 0.5,
+          "right": 25,
+          "wrong": 1,
+          "withheld": 1438
+        },
+        {
+          "threshold": 0.6,
+          "right": 25,
+          "wrong": 0,
+          "withheld": 1439
+        },
+        {
+          "threshold": 0.7,
+          "right": 25,
+          "wrong": 0,
+          "withheld": 1439
+        },
+        {
+          "threshold": 0.8,
+          "right": 25,
+          "wrong": 0,
+          "withheld": 1439
+        },
+        {
+          "threshold": 0.85,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.9,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.93,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.95,
+          "right": 24,
+          "wrong": 0,
+          "withheld": 1440
+        },
+        {
+          "threshold": 0.97,
+          "right": 23,
           "wrong": 0,
           "withheld": 1441
         },
@@ -3903,32 +4196,32 @@
           "threshold": 0.98,
           "right": 22,
           "wrong": 0,
-          "withheld": 1441
+          "withheld": 1442
         },
         {
           "threshold": 0.99,
           "right": 22,
           "wrong": 0,
-          "withheld": 1441
+          "withheld": 1442
         },
         {
           "threshold": 0.995,
-          "right": 21,
+          "right": 20,
           "wrong": 0,
-          "withheld": 1442
+          "withheld": 1444
         },
         {
           "threshold": 0.998,
           "right": 18,
           "wrong": 0,
-          "withheld": 1445
+          "withheld": 1446
         }
       ],
-      "lowest_safe": 0.9
+      "lowest_safe": 0.6
     },
     "threshold_from_validation": 0.9,
     "validation_boxes": {
-      "bdd": 280,
+      "bdd": 281,
       "bddother": 1180,
       "hardneg": 3
     },
@@ -4179,161 +4472,161 @@
       "readable_sweep": [
         {
           "threshold": 0.5,
-          "right": 73,
+          "right": 72,
           "wrong": 0,
-          "withheld": 5
+          "withheld": 4
         },
         {
           "threshold": 0.6,
-          "right": 73,
+          "right": 72,
           "wrong": 0,
-          "withheld": 5
+          "withheld": 4
         },
         {
           "threshold": 0.7,
-          "right": 73,
+          "right": 72,
           "wrong": 0,
-          "withheld": 5
+          "withheld": 4
         },
         {
           "threshold": 0.8,
-          "right": 73,
+          "right": 72,
           "wrong": 0,
-          "withheld": 5
+          "withheld": 4
         },
         {
           "threshold": 0.85,
-          "right": 73,
+          "right": 72,
           "wrong": 0,
-          "withheld": 5
+          "withheld": 4
         },
         {
           "threshold": 0.9,
-          "right": 73,
+          "right": 72,
           "wrong": 0,
-          "withheld": 5
+          "withheld": 4
         },
         {
           "threshold": 0.93,
-          "right": 73,
+          "right": 72,
           "wrong": 0,
-          "withheld": 5
+          "withheld": 4
         },
         {
           "threshold": 0.95,
-          "right": 73,
+          "right": 72,
+          "wrong": 0,
+          "withheld": 4
+        },
+        {
+          "threshold": 0.97,
+          "right": 71,
           "wrong": 0,
           "withheld": 5
         },
         {
-          "threshold": 0.97,
-          "right": 72,
+          "threshold": 0.98,
+          "right": 70,
           "wrong": 0,
           "withheld": 6
         },
         {
-          "threshold": 0.98,
-          "right": 71,
-          "wrong": 0,
-          "withheld": 7
-        },
-        {
           "threshold": 0.99,
-          "right": 68,
+          "right": 67,
           "wrong": 0,
-          "withheld": 10
+          "withheld": 9
         },
         {
           "threshold": 0.995,
-          "right": 65,
+          "right": 64,
           "wrong": 0,
-          "withheld": 13
+          "withheld": 12
         },
         {
           "threshold": 0.998,
-          "right": 63,
+          "right": 62,
           "wrong": 0,
-          "withheld": 15
+          "withheld": 14
         }
       ],
       "all_sweep": [
         {
           "threshold": 0.5,
-          "right": 79,
+          "right": 77,
           "wrong": 1,
-          "withheld": 8
+          "withheld": 4
         },
         {
           "threshold": 0.6,
-          "right": 79,
+          "right": 77,
           "wrong": 1,
-          "withheld": 8
+          "withheld": 4
         },
         {
           "threshold": 0.7,
-          "right": 79,
+          "right": 77,
           "wrong": 1,
-          "withheld": 8
+          "withheld": 4
         },
         {
           "threshold": 0.8,
-          "right": 78,
+          "right": 76,
           "wrong": 1,
-          "withheld": 9
+          "withheld": 5
         },
         {
           "threshold": 0.85,
-          "right": 78,
+          "right": 76,
           "wrong": 1,
-          "withheld": 9
+          "withheld": 5
         },
         {
           "threshold": 0.9,
-          "right": 78,
+          "right": 76,
           "wrong": 1,
-          "withheld": 9
+          "withheld": 5
         },
         {
           "threshold": 0.93,
-          "right": 78,
+          "right": 76,
           "wrong": 1,
-          "withheld": 9
+          "withheld": 5
         },
         {
           "threshold": 0.95,
-          "right": 78,
+          "right": 76,
           "wrong": 1,
-          "withheld": 9
+          "withheld": 5
         },
         {
           "threshold": 0.97,
-          "right": 77,
+          "right": 75,
+          "wrong": 1,
+          "withheld": 6
+        },
+        {
+          "threshold": 0.98,
+          "right": 74,
+          "wrong": 1,
+          "withheld": 7
+        },
+        {
+          "threshold": 0.99,
+          "right": 71,
           "wrong": 1,
           "withheld": 10
         },
         {
-          "threshold": 0.98,
-          "right": 76,
-          "wrong": 1,
-          "withheld": 11
-        },
-        {
-          "threshold": 0.99,
-          "right": 73,
-          "wrong": 1,
+          "threshold": 0.995,
+          "right": 68,
+          "wrong": 0,
           "withheld": 14
         },
         {
-          "threshold": 0.995,
-          "right": 70,
-          "wrong": 0,
-          "withheld": 18
-        },
-        {
           "threshold": 0.998,
-          "right": 67,
+          "right": 66,
           "wrong": 0,
-          "withheld": 21
+          "withheld": 16
         }
       ],
       "top1_mistakes": [
@@ -4343,6 +4636,220 @@
           "p": 0.994
         }
       ]
+    }
+  },
+  "timing": {
+    "engines": [
+      "signs_yolo26s_736x1280_fp16.engine",
+      "speed_value_cls_96x96_fp16.engine"
+    ],
+    "heldout_speed_frames": {
+      "frames": 84,
+      "frames_with_a_speed_sign_classified": 81,
+      "value_views": 5,
+      "total_ms": {
+        "median": 8.28,
+        "p95": 9.88,
+        "max": 14.03
+      },
+      "classify_ms": {
+        "median": 2.38,
+        "p95": 3.19,
+        "max": 8.48
+      },
+      "total_ms_frames_with_classification": {
+        "median": 8.3,
+        "p95": 10.0,
+        "max": 14.03
+      },
+      "classify_ms_frames_with_classification": {
+        "median": 2.43,
+        "p95": 3.22,
+        "max": 8.48
+      }
+    },
+    "bench_20261010-212844": {
+      "clip": "red_light_rain_school_zone__b61456bb-5bfb50ee.mov",
+      "frames": 904,
+      "rate_fps": "flat out",
+      "signs_detected": 2490,
+      "devices": {
+        "detector": [
+          "cuda:0",
+          "fp16"
+        ],
+        "classifier": [
+          "cuda:0",
+          "fp16"
+        ]
+      },
+      "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+      "torch_max_allocated_mb": 27,
+      "gpu_used_mb_whole_device": 1457,
+      "ms": {
+        "total": {
+          "median": 7.14,
+          "p95": 15.4,
+          "max": 24.07
+        },
+        "detect_total": {
+          "median": 7.0,
+          "p95": 15.25,
+          "max": 23.74
+        },
+        "inference": {
+          "median": 3.11,
+          "p95": 3.55,
+          "max": 9.6
+        },
+        "preprocess": {
+          "median": 1.83,
+          "p95": 4.67,
+          "max": 17.51
+        },
+        "postprocess": {
+          "median": 1.61,
+          "p95": 9.59,
+          "max": 16.44
+        },
+        "classify_total": {
+          "median": 0.1,
+          "p95": 0.18,
+          "max": 4.24
+        }
+      },
+      "with_perception": false
+    },
+    "bench_20261010-212932": {
+      "clip": "red_light_rain_school_zone__b61456bb-5bfb50ee.mov",
+      "frames": 904,
+      "rate_fps": "flat out",
+      "signs_detected": 2490,
+      "devices": {
+        "detector": [
+          "cuda:0",
+          "fp16"
+        ],
+        "classifier": [
+          "cuda:0",
+          "fp16"
+        ]
+      },
+      "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+      "torch_max_allocated_mb": 27,
+      "gpu_used_mb_whole_device": 1457,
+      "ms": {
+        "total": {
+          "median": 6.56,
+          "p95": 8.31,
+          "max": 15.07
+        },
+        "detect_total": {
+          "median": 6.43,
+          "p95": 8.14,
+          "max": 14.86
+        },
+        "inference": {
+          "median": 3.12,
+          "p95": 3.53,
+          "max": 4.95
+        },
+        "preprocess": {
+          "median": 1.56,
+          "p95": 2.01,
+          "max": 8.15
+        },
+        "postprocess": {
+          "median": 1.41,
+          "p95": 2.76,
+          "max": 9.01
+        },
+        "classify_total": {
+          "median": 0.1,
+          "p95": 0.14,
+          "max": 3.21
+        }
+      },
+      "with_perception": true,
+      "perception_tail": [
+        "21:29:31.797 INFO  perception.pipeline: video source finished processed=1204",
+        "",
+        "clip: C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\data\\videos\\dev\\red_light_rain_school_zone__b61456bb-5bfb50ee.mov  imgsz=(384, 640)  half=True",
+        "WARNING other GPU users during the run: python.exe",
+        "",
+        "[realtime] processed 1204 frames in 40.19 s = 29.96 fps (source 30.13 fps, dropped 6, frame errors 0)",
+        "  stage                       p50      p95      max  (ms)",
+        "  preprocess                 1.60     4.19    11.15",
+        "  inference                  2.38    11.30    11.56",
+        "  postprocess                2.16     4.91    38.07",
+        "  predict_total              8.00    17.26    47.66",
+        "  track                      1.13     1.71    88.25",
+        "  detect_track_total         9.35    18.48    93.73",
+        "  ego_motion                 7.30    11.56    93.65",
+        "  processing                10.89    18.54    94.00",
+        "  wait_for_frame            20.77    36.68    41.57",
+        "  latency                   11.00    18.64    94.17",
+        "  GPU: torch peak 8 MB, device used max 1529 MB, util avg 30%",
+        "",
+        "targets:",
+        "  [PASS] real-time processed fps: 29.96 (target >= 25.1)",
+        "  [PASS] p95 processing ms (detect + track || ego): 18.5 (target < 40.0)",
+        "  [PASS] p95 decode-to-result latency ms: 18.6 (target < 70.0)",
+        "",
+        "report: C:\\ClaudeProjects\\DrivePilot_signs\\runs\\20261010-212849_bench\\bench.json"
+      ]
+    },
+    "bench_20261010-213010": {
+      "clip": "red_light_rain_school_zone__b61456bb-5bfb50ee.mov",
+      "frames": 904,
+      "rate_fps": "flat out",
+      "signs_detected": 2490,
+      "devices": {
+        "detector": [
+          "cuda:0",
+          "fp16"
+        ],
+        "classifier": [
+          "cuda:0",
+          "fp16"
+        ]
+      },
+      "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+      "torch_max_allocated_mb": 27,
+      "gpu_used_mb_whole_device": 1457,
+      "ms": {
+        "total": {
+          "median": 6.8,
+          "p95": 7.44,
+          "max": 14.14
+        },
+        "detect_total": {
+          "median": 6.67,
+          "p95": 7.27,
+          "max": 13.88
+        },
+        "inference": {
+          "median": 3.35,
+          "p95": 3.55,
+          "max": 3.89
+        },
+        "preprocess": {
+          "median": 1.59,
+          "p95": 1.91,
+          "max": 2.52
+        },
+        "postprocess": {
+          "median": 1.39,
+          "p95": 1.68,
+          "max": 8.18
+        },
+        "classify_total": {
+          "median": 0.1,
+          "p95": 0.13,
+          "max": 3.26
+        }
+      },
+      "with_perception": false
     }
   }
 }

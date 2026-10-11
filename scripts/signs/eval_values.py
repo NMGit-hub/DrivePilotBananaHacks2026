@@ -1,20 +1,22 @@
 """Speed-value classifier on its own: readings at the labeled boxes, so value reading is measured without the detector.
 
-    .venv/Scripts/python scripts/signs/eval_values.py                 # threshold from validation, then held-out
-    .venv/Scripts/python scripts/signs/eval_values.py --views 1 3 5 7 # compare the number of agreeing views
-    .venv/Scripts/python scripts/signs/eval_values.py --write-metrics
+    .venv/Scripts/python scripts/signs/eval_values.py                     # threshold from validation only
+    .venv/Scripts/python scripts/signs/eval_values.py --views 1 3 5 7     # compare the number of agreeing views
+    .venv/Scripts/python scripts/signs/eval_values.py --heldout both --write-metrics   # + held-out scores
 
-Every box is read exactly as perception/signs.py reads a detection: crops of the box from the full frame
+Every box is read as perception/signs.py reads a detection: crops of the box from the full frame
 (`signs.value_views` shifted/scaled views that must agree, perception.signs.read_value), by the classifier as the
 app runs it (its FP16 TensorRT engine when one was built from these weights, else the weights in FP16 on the GPU).
 
 1. Threshold: on real BDD validation boxes (the BDD train split's held-out fraction, never trained on: its speed
    limits with a known value, its other kinds of our signs, every "other"/not-a-sign box at least 14 px tall and the
-   curated look-alikes), the lowest probability threshold with no wrong value at it and above. ctacke val is
+   curated look-alikes), the lowest probability threshold with no wrong value at it and above. Validation keeps
+   boxes the app would not read (14-16 px tall, at the frame border): stricter than the app. ctacke val is
    reported separately and not used: ctacke's val split shares physical signs with its train split. The app's
    value_conf is the larger of this and the lowest threshold with no wrong (or unverifiable) value end to end on
    the tune set (evaluate.py tune), one step higher if a genuine misread sits within 0.02 below it.
-2. Held-out: the hand-checked BDD100K speed limits (eval/sign_labels_bdd*.json); right / wrong / withheld.
+2. Held-out (only with --heldout, never while choosing): the hand-checked BDD100K speed limits
+   (eval/sign_labels_bdd*.json) the app would read (value_min_px, value_edge_px); right / wrong / withheld.
 """
 
 from __future__ import annotations
@@ -33,15 +35,18 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from core.config import load_config  # noqa: E402
+from core.config import SignsConfig, load_config  # noqa: E402
 from perception.sign_classes import VALUE_KINDS  # noqa: E402
 from perception.signs import (  # noqa: E402
+    VALUE_VIEWS,
     check_value_classes,
     engine_path,
     engine_staleness,
     read_value,
     sidecar_path,
     top_reading,
+    touches_border,
+    value_attempted,
 )
 
 BDD_IMAGES = REPO_ROOT / "data" / "signs" / "raw" / "bdd100k_det" / "data" / "images"
@@ -51,7 +56,8 @@ HELDOUT = {
 }
 METRICS = REPO_ROOT / "models" / "signs" / "metrics.json"
 THRESHOLDS = (0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.93, 0.95, 0.97, 0.98, 0.99, 0.995, 0.998)
-MIN_H = 14.0  # validation boxes shorter than this are skipped (as in the classifier's training crops)
+MIN_H = 14.0  # validation boxes shorter than this are skipped (the app reads >= 16 px: validation is stricter)
+BDD_W, BDD_H = 1280, 720
 
 Box = tuple[float, float, float, float]
 Item = tuple[Path, Box, int | None]  # (frame, box, true value: None = not a speed sign, any value is wrong)
@@ -83,14 +89,6 @@ def lowest_safe(rows: list[dict[str, Any]]) -> float | None:
             break
         chosen = r["threshold"]
     return chosen
-
-
-def crop_truth(path: Path) -> int | None:
-    """True value of a saved classifier crop: its folder's value, or "..._true30.png" (a real 30 trained as "none")."""
-    if "_true" in path.stem:
-        return int(path.stem.rpartition("_true")[2])
-    name = path.parent.name
-    return int(name[1:]) if name.startswith("v") and name[1:].isdigit() else None
 
 
 def resolve_classifier(weights: Path, imgsz: int, half: bool) -> Path:
@@ -130,15 +128,25 @@ def ctacke_items() -> list[Item]:
     return [(s.image, b.xyxy, b.value) for s in ctacke_samples("val") for b in s.boxes if b.kind and not b.cls_label]
 
 
-def heldout_items(path: Path) -> tuple[list[Item], list[bool]]:
-    """Held-out speed limits with a known value, and whether each is clearly readable."""
+def heldout_items(path: Path, cfg: SignsConfig) -> tuple[list[Item], list[bool]]:
+    """Held-out speed limits with a known value that the app would read, and whether each is clearly readable.
+
+    The app's own rules decide which boxes are read: at least value_min_px tall and not within value_edge_px of the
+    frame border (BDD frames are 1280x720).
+    """
     data = json.loads(path.read_text(encoding="utf-8"))
     items: list[Item] = []
     readable: list[bool] = []
     for im in data["images"]:
         for x in im["signs"]:
-            if x["kind"] in VALUE_KINDS and x["value"] is not None:
-                items.append((BDD_IMAGES / im["image"], tuple(x["box"]), x["value"]))
+            box = tuple(x["box"])
+            if (
+                x["kind"] in VALUE_KINDS
+                and x["value"] is not None
+                and value_attempted(x["kind"], box, BDD_W, cfg.value_min_px)
+                and not touches_border(box, BDD_W, BDD_H, cfg.value_edge_px)
+            ):
+                items.append((BDD_IMAGES / im["image"], box, x["value"]))
                 readable.append(bool(x["readable"]))
     return items, readable
 
@@ -164,8 +172,15 @@ def main(argv: list[str] | None = None) -> int:
 
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--weights", type=Path, default=None, help="classifier .pt (default: config); its engine if built")
-    p.add_argument("--views", type=int, nargs="+", default=None, help="value_views to compare (default: config)")
-    p.add_argument("--heldout", choices=["original", "fresh", "both", "none"], default="both")
+    p.add_argument(
+        "--views",
+        type=int,
+        nargs="+",
+        default=None,
+        choices=range(1, len(VALUE_VIEWS) + 1),
+        help="value_views to compare",
+    )
+    p.add_argument("--heldout", choices=["original", "fresh", "both", "none"], default="none", help="also score these")
     p.add_argument("--write-metrics", action="store_true")
     args = p.parse_args(argv)
     cfg = load_config()
@@ -212,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sets = ["original", "fresh"] if args.heldout == "both" else ([] if args.heldout == "none" else [args.heldout])
     for name in sets:
-        h_items, h_readable = heldout_items(HELDOUT[name])
+        h_items, h_readable = heldout_items(HELDOUT[name], s)
         preds = read_items(classify, h_items, s.classifier_imgsz, s.value_views)
         h_truth = [it[2] for it in h_items]
         r_idx = [i for i, ok in enumerate(h_readable) if ok]

@@ -2,12 +2,12 @@
 
 Stage 1: YOLO26s fine-tuned on US signs (13 MUTCD kinds, perception/sign_classes.py) runs on the whole frame at
 1280 px wide (imgsz 736x1280), so a distant sign keeps its 15-40 px instead of shrinking to half at 640.
-Stage 2: every speed-limit box tall enough to read is cropped from the full-resolution frame and classified into
-5-85 mph or "none". A value is reported only when the classifier is confident (`signs.value_conf`), the box is at
-least `signs.value_min_px` tall and doesn't touch the frame border: a wrong limit is worse than none, so a doubtful
-value is None.
+Stage 2: every speed-limit box tall enough to read is cropped from the full-resolution frame in `signs.value_views`
+slightly shifted/scaled views, each classified into 5-85 mph or "none". A value is reported only when every view
+reads the same number with probability >= `signs.value_conf`, the box is at least `signs.value_min_px` tall and
+doesn't touch the frame border: a wrong limit is worse than none, so a doubtful value is None.
 
-`SignDetector.raw_detections()` returns every box with the classifier's top reading; `select()` applies the app's
+`SignDetector.raw_detections()` returns every box with the classifier's consensus reading; `select()` applies the app's
 rules (per-kind confidence, duplicates, the value rule). `detect()` is the two together, and the evaluation
 (scripts/signs/evaluate.py) calls the same `select()`, so measured numbers are the app's numbers.
 
@@ -52,7 +52,7 @@ class SignDetection:
     value: int | None  # mph for speed limits when read confidently, else None
     conf: float  # detector confidence
     box: Box  # x1, y1, x2, y2 in frame pixels
-    value_conf: float | None = None  # classifier's top-class probability (None when the value wasn't attempted)
+    value_conf: float | None = None  # lowest top-class probability over the views (None: value not attempted)
 
     def to_record(self) -> dict[str, Any]:
         """Compact JSON-friendly form for run logs."""
@@ -67,10 +67,11 @@ class SignDetection:
 
 @dataclass(frozen=True, slots=True)
 class RawSign:
-    """One detector box before the app's rules, with the classifier's top reading if it was classified.
+    """One detector box before the app's rules, with the classifier's consensus reading if it was classified.
 
-    top_value is the top-1 class as mph (None when the top class is the reject class "none"); top_prob is its
-    probability. Both are None when the box wasn't classified (not a speed kind, too small, degenerate crop).
+    top_value is the mph every view read (None when the views disagree or one reads the reject class "none");
+    top_prob is the lowest top-class probability over the views (set even when they disagree). Both are None when
+    the box wasn't classified (not a speed kind, too small, degenerate crop).
     """
 
     kind: str
@@ -226,7 +227,8 @@ def select(raw: Sequence[RawSign], cfg: SignsConfig, frame_w: int, frame_h: int)
     """The app's rules on raw detections: per-kind confidence, then duplicates, then the value rule.
 
     A value is reported only for a speed kind at least value_min_px tall, not within value_edge_px of the border,
-    whose classifier top-1 is a speed with probability >= value_conf. Most confident first.
+    whose views all read the same speed with probability >= value_conf (RawSign.top_value / top_prob). Most
+    confident first.
     """
     passing = [r for r in raw if r.conf >= cfg.class_conf.get(r.kind, cfg.conf)]
     out: list[SignDetection] = []
