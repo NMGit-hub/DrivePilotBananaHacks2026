@@ -8,6 +8,29 @@ Python: `C:\ClaudeProjects\DrivePilot_BananaHacks2026\.venv\Scripts\python.exe` 
 `YOLO_AUTOINSTALL=false`. Deadlines: working detector to the other session by **Sun 2026-10-11 11:00 PDT**, project
 deadline Sun 20:59 PDT. Check the time with `date` (it is easy to lose track).
 
+## Session 3b state (2026-10-10 ~20:10 PDT) — READ THIS FIRST, it supersedes older notes below
+- Main run `runs/signs/det` early-stopped at epoch 39 (best epoch 24, mAP50 0.854). The old watchdog then kept
+  "resuming" the finished run: 7 stray COCO8 runs landed in the MAIN checkout `runs/detect/train`, `train-2..7`
+  and `C:\ClaudeProjects\datasets\coco8` (deleting them was denied by the permission classifier: the user was
+  asked to remove them). Watchdog killed. Never use `--resume` on a finished run.
+- All reviewer fixes 1-16 are implemented and committed (cb11c1f, 8c49c3e), plus a second independent review's
+  findings (thresholds chosen on wrong+unverifiable, raw cache tied to model hashes, eval_values runs the FP16
+  engine, speed-kind unboxed hits not masked, mining/curation split). 106 non-GPU sign tests, ruff, mypy clean.
+- Fresh held-out set built and hand-checked BLIND: `eval/sign_labels_bdd_fresh.json` (2,675 frames + 500
+  sign-free; 77 clearly readable speed limits). `make_heldout.py --set fresh`.
+- Detector hard negatives: 872 mined -> 299 curated by eye (`curate_det_negatives.py`; most mined hits were real
+  unboxed signs). `mine_unboxed.py` masks unboxed non-speed hits in training frames.
+- Fine-tune `runs/signs/det_ft` RUNNING (detached, started 19:32, 12 epochs, AdamW lr0 0.0002, ~7.5 min/epoch,
+  ends ~21:00). NOTE: its dataset masked ALL unboxed hits incl. speed kinds (built before the review fix); a
+  re-mine with kinds is running (`data/signs/mine_unboxed2.log`) to count how many speed-kind masks there were.
+- Next: pick det vs det_ft on `evaluate.py tune --tag _det/_ft` (detection metrics; `--set signs.weights=...`);
+  `prepare_data.py cls` (clean build with BDD look-alikes in val) -> `train.py cls --name cls5 --epochs 20
+  --batch 256 --workers 2 --no-copy`; copy winners to models/signs/{signs_yolo26s,speed_value_cls}.pt (cls5 is
+  mandatory: cls3 leaked val-fraction reject crops); export engines (nothing else heavy running); thresholds with
+  the engines: value_conf = max(eval_values BDD-validation choice, evaluate tune lowest with 0 wrong+unverifiable);
+  final eval all sets + check every unverifiable value by eye; bench; sheet; STATUS (draft written, PENDING
+  markers); deliver.
+
 ## Session 3 progress (2026-10-10, 17:10-17:45 PDT; ended by the usage limit)
 - At 17:12: detector training alive (epoch 17/40, ~2.6 GB GPU, ETA ~20:00), watchdog PID 24908 idle (no
   watchdog.log yet = no restarts needed), fresh_valid.jsonl complete (9,000 lines). Free RAM only ~1.2 GB.

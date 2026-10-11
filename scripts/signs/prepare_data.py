@@ -150,9 +150,10 @@ def original_build_images() -> set[str]:
     Those builds took synthetic and classifier backgrounds without checking the val fraction, so some tune-set
     frames were trained on. Reproduced exactly: the first build drew one seed per BDD positive from Random(0),
     then shuffled all negatives (no hard negatives existed), kept int(0.3 * positives) real negatives and took the
-    next 3,500 as synthetic backgrounds; the classifier builds took the first 400 negatives unshuffled.
+    next 3,500 as synthetic backgrounds; the classifier builds took the first 400 negatives unshuffled. Uses the
+    labels as they were then (no LABEL_FIXES: a fix can turn a negative frame into a positive).
     """
-    pos, neg = bdd_samples("train")
+    pos, neg = bdd_samples("train", fixes=False)
     rng = random.Random(0)
     for _ in pos:
         rng.randrange(2**31)
@@ -178,10 +179,10 @@ def dev_clip_ids() -> set[str]:
     return {c["bdd_id"] for c in data["clips"]}
 
 
-def bdd_samples(split: str) -> tuple[list[Sample], list[Sample]]:
+def bdd_samples(split: str, fixes: bool = True) -> tuple[list[Sample], list[Sample]]:
     """(pseudo-labeled images with at least one labeled box, labeled images with none of our signs)."""
     by_image: dict[str, list[dict]] = defaultdict(list)
-    for rec in read_labels(split):
+    for rec in read_labels(split, fixes):
         by_image[rec["image"]].append(rec)
     if not by_image:
         return [], []
@@ -209,8 +210,20 @@ def bdd_samples(split: str) -> tuple[list[Sample], list[Sample]]:
     return pos, neg
 
 
-def read_labels(split: str) -> list[dict]:
-    """Every pseudo-label of a split from data/signs/bdd_labels/<split>*.jsonl, one per crop key (first wins)."""
+# Pseudo-label errors found by checking, by eye on full-resolution crops, the validation crops the value classifier
+# disagreed with at high probability (2026-10-10). Only BDD-train val-fraction frames (validation / tune), never
+# the held-out sets. key -> (kind, value).
+LABEL_FIXES: dict[str, tuple[str, int | None]] = {
+    "train/009bd04d-0f1f9967/20": ("speed_limit", 25),  # white R2-1 with a big 25 at night, called "other"
+    "train/2db6f386-71e116f8/24": ("unclear", None),  # white panel "20" under two text lines: kind doubtful
+}
+
+
+def read_labels(split: str, fixes: bool = True) -> list[dict]:
+    """Every pseudo-label of a split from data/signs/bdd_labels/<split>*.jsonl, one per crop key (first wins).
+
+    LABEL_FIXES are applied unless fixes=False (they record the original kind under "labeler_kind").
+    """
     seen: set[str] = set()
     out = []
     for path in sorted(LABELS.glob(f"{split}*.jsonl")):
@@ -218,9 +231,13 @@ def read_labels(split: str) -> list[dict]:
             if not line:
                 continue
             rec = json.loads(line)
-            if rec["key"] not in seen:
-                seen.add(rec["key"])
-                out.append(rec)
+            if rec["key"] in seen:
+                continue
+            seen.add(rec["key"])
+            if fixes and rec["key"] in LABEL_FIXES:
+                kind, value = LABEL_FIXES[rec["key"]]
+                rec = {**rec, "labeler_kind": rec["kind"], "kind": kind, "value": value}
+            out.append(rec)
     return out
 
 

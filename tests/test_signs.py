@@ -813,7 +813,7 @@ def test_tune_set_is_the_val_fraction_minus_anything_trained(monkeypatch: pytest
     assert len(val) >= 3
     boxes = [prep.Box((0.0, 0.0, 10.0, 10.0), "stop"), prep.Box((20.0, 0.0, 30.0, 10.0), None)]
     samples = [prep.Sample(p, boxes, "bdd") for p in imgs]
-    monkeypatch.setattr(prep, "bdd_samples", lambda split: (samples, []))
+    monkeypatch.setattr(prep, "bdd_samples", lambda split, fixes=True: (samples, []))
     monkeypatch.setattr(prep, "training_images", lambda: {prep.rel_path(val[0])})
     items = ev.tune_items()
     assert [i[0] for i in items] == [p.name for p in val[1:]]
@@ -953,7 +953,7 @@ def test_bdd_samples_mask_unknown_and_unlabeled_signs(monkeypatch: pytest.Monkey
         img: {"0": (0, 0, 10, 20), "1": (20, 0, 30, 20), "2": (40, 0, 50, 20), "3": (60, 0, 66, 8)},
         "train/shard_000/b.jpg": {"0": (0, 0, 10, 20)},
     }
-    monkeypatch.setattr(prep, "read_labels", lambda split: recs)
+    monkeypatch.setattr(prep, "read_labels", lambda split, fixes=True: recs)
     monkeypatch.setattr(prep, "dev_clip_ids", lambda: set())
     monkeypatch.setattr(prep, "bdd_sign_boxes", lambda split: meta)
     pos, neg = prep.bdd_samples("train")
@@ -1053,7 +1053,7 @@ def test_unboxed_speed_kind_detections_are_not_masked(monkeypatch: pytest.Monkey
 def test_original_build_backgrounds_are_reproduced(monkeypatch: pytest.MonkeyPatch) -> None:
     pos = [prep.Sample(Path(f"/x/p{i}.jpg"), [prep.Box((0.0, 0.0, 9.0, 9.0), "stop")], "bdd") for i in range(20)]
     neg = [prep.Sample(Path(f"/x/n{i}.jpg"), [], "bdd") for i in range(5000)]
-    monkeypatch.setattr(prep, "bdd_samples", lambda split: (pos, neg))
+    monkeypatch.setattr(prep, "bdd_samples", lambda split, fixes=True: (pos, neg))
     # The first build, as it was written: one seed per positive, shuffle every negative, int(0.3 * pos) real
     # negatives, the next 3,500 synthetic backgrounds; the classifier builds took neg[:400] unshuffled.
     rng = random.Random(0)
@@ -1074,7 +1074,7 @@ def test_bdd_other_records_split_by_fraction(monkeypatch: pytest.MonkeyPatch) ->
     recs.append(
         {"key": "s", "image": "train/shard_000/small.jpg", "box": [0, 0, 10, 10], "kind": "other", "value": None}
     )
-    monkeypatch.setattr(prep, "read_labels", lambda split: recs)
+    monkeypatch.setattr(prep, "read_labels", lambda split, fixes=True: recs)
     monkeypatch.setattr(prep, "dev_clip_ids", lambda: set())
     val = prep.bdd_other_records("train", 10**6, 0, val=True)
     train = prep.bdd_other_records("train", 10**6, 0, val=False)
@@ -1105,6 +1105,17 @@ def test_malformed_sidecar_means_stale(tmp_path: Path) -> None:
     assert engine_staleness(e, w) is not None
     sidecar_path(e).write_text("{not json")
     assert "unreadable" in (engine_staleness(e, w) or "")
+
+
+def test_label_fixes_apply_only_when_asked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    key = next(iter(prep.LABEL_FIXES))
+    rec = {"key": key, "image": "train/shard_000/x.jpg", "box": [0, 0, 10, 20], "kind": "other", "value": None}
+    (tmp_path / "train.jsonl").write_text(json.dumps(rec) + "\n")
+    monkeypatch.setattr(prep, "LABELS", tmp_path)
+    (fixed,) = prep.read_labels("train")
+    assert (fixed["kind"], fixed["value"]) == prep.LABEL_FIXES[key] and fixed["labeler_kind"] == "other"
+    assert prep.read_labels("train", fixes=False)[0]["kind"] == "other"  # the first build saw the original label
+    assert all(prep.in_val(Path(k.split("/")[1])) for k in prep.LABEL_FIXES)  # never a training frame
 
 
 def test_hard_negative_curation_blocks() -> None:

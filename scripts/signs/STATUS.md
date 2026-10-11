@@ -96,7 +96,46 @@ PENDING
 - `kind` is one of `perception.sign_classes.KINDS`; `SignDetection.to_record()` is ready for run logs.
 
 ## Known issues / compromises
-PENDING
+- **Training labels are Claude pseudo-labels, not hand labels.** BDD100K boxes many signs by hand but not their
+  type; Claude Opus 5.5 assigned the type (and mph) per crop. Haiku 4.5 was tried first and rejected (many real
+  one-way/school/speed signs called "not a sign"). Opus is cautious ("unclear" boxes are masked, never trained as
+  background) but not perfect: it called some CITY/TOWN/AREA SPEED LIMIT variants "other" (one found in the fresh
+  held-out check, relabeled there).
+- **BDD100K does not box every sign.** Checking the detector's hits on "sign-free" training frames by eye showed
+  most were real unboxed signs. Unboxed hits of non-speed kinds found by the first detector are masked in training
+  (412 hits in 383 frames, about two thirds real on a viewed sample); unboxed signs it missed still train as
+  background, which costs some recall. The fine-tune's dataset was built before a review fix and also masked the 47
+  unboxed speed-kind hits (some of them look-alikes that would better have stayed negatives); the code now keeps
+  speed-kind hits as background (`data/signs/unboxed_det_v1_nokinds.jsonl` is the list the fine-tune used).
+- **The original held-out set was seen during development.** Interim models were evaluated on it, which led to the
+  look-alike negatives and a detection-triggered label audit (2 school speed limits added, 3 doubtful boxes
+  ignored). So the headline is the **fresh slice**, labeled after development and hand-checked blind before any
+  model ran on it; the original set is reported with and without the audit (`--no-audit`).
+- **Held-out labels are hand-checked for speed limits only.** On both sets every speed-limit box was checked by eye
+  on the full-resolution crop and the largest upright "other" boxes were checked for missed speed limits (fresh:
+  the 528 largest of 1,235, down to 40 px; smaller ones were not checked). The other kinds keep Opus's labels
+  (original set: spot-checked on contact sheets).
+- **Earlier builds leaked tune frames into training** (synthetic and classifier backgrounds drawn without the val
+  fraction; classifiers cls1-cls4 also trained val-fraction reject crops). Fixed in the current builds; the tune set
+  leaves out every frame any build trained on (235 of 751), and the delivered classifier (cls5) was trained on the
+  clean build only.
+- **BDD100K is mostly New York and the Bay Area**: its speed limits are mostly 25 mph (NYC). Other values come from
+  ctacke (25-80 mph, few distinct signs: video sequences of the same signs) and synthetic MUTCD renders. Real
+  speed-value checks cover 20-55 mph only.
+- **ctacke's public val split shares sign sequences with its train split** (adjacent frames of the same physical
+  signs), so the public-split numbers are optimistic and ctacke is not used to choose thresholds.
+- **Thin real data:** wrong_way, no_turn_on_red and school_speed_limit have a handful of real held-out instances;
+  their numbers are anecdotal and they lean on synthetic training examples.
+- **LISA is not used**: its official download returns 404 and the Roboflow copy needs an API key that wasn't
+  provided in time; `prepare_data.py` picks it up automatically if a Roboflow YOLO export is placed in
+  `data/signs/raw/lisa_yolo/`.
+- **Not validated on our own camera** (the phone's 114° ultrawide): signs appear smaller and later than in BDD's
+  narrower view; re-check on our drives.
+- **Process incidents on the shared machine:** run 1 crashed twice from system-RAM shortages and was resumed from
+  its per-epoch checkpoints. After it early-stopped, a watchdog script kept "resuming" the finished run, which made
+  ultralytics start 7 short COCO8 trainings that wrote `runs/detect/train*` into the main checkout and downloaded
+  `C:\ClaudeProjects\datasets\coco8` (removal is left to the user; nothing else was touched).
+- PENDING: timing caveats, threshold choice, anything found in the final evaluation.
 
 ## Best Fine-tune write-up
 PENDING
