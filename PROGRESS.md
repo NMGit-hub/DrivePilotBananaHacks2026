@@ -5,6 +5,28 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 ## Done
 
 ### V2 (2026-10-10/11): V2-M0..M6 and M8 done (M1 parking and M5 drift below their accuracy bars on public footage; M7 RF-DETR cut)
+- **V2-M8 done (2026-10-11 ~00:40).** Independent review of everything since the last push (7 bugs + 3 risks + 7
+  nits, each with a reproducer; all fixed with regression tests except 2 cosmetic nits): **safety**: the new "Check
+  the intersection before you go." was added to any model answer containing "green" ("It's about to turn green",
+  "the left-turn arrow just turned green", "the cross street's light...", "it was green when we went through",
+  "the green sign says...") -> now only a plain present statement about our light, while stopped, never against
+  the tracker's red/yellow, never on memory answers; the new "to clear" exemption let "you have time to clear the
+  lane" / "room to clear the turn" through the strict net -> only a waiting clause is exempt; "can I pull forward a
+  little?" (in DEMO.md) wasn't a go question and "you can pull forward" wasn't permission -> both caught. Also: lane
+  position vs guidance routing (11 phrasings each way), the sign model skipped (not raced) if the lane model is
+  still loading after the timeout, school zones end 2 min after their last confirmed school sign (one-frame
+  look-alikes kept a zone alive forever; a second school 3 min later was silent; school speed-limit signs count),
+  an inverted consistency check in the alignment, an unknown `--tz` traceback, a misleading DST warning, a partial
+  perception cache that could land over a full one, duplicate sign close-ups. Not fixed (cosmetic): the worker rate
+  overestimates by N/(N-1) on short runs; a GPX 1.1 speed-source label. **Final checks after the fixes:** 1366
+  tests pass, ruff + mypy clean; `scripts/bench_app.py --silent` with everything on passes every target
+  (`runs/20261011-002333_bench_app`: local 0.56 / 0.62 s, model 1.48 / 1.48 s, alerts 12 ms, perception 29.3 fps,
+  lanes 10.6 fps, signs 3.8 fps, 6/6); **test sheet 33 right, 6 partly, 6 wrong of 45 (73 %)**
+  (`runs/20261011-002438_sheet`; lights 7/7, right of way 2/2, controls 1/1, road 6/7, safety 5/6, lanes 4/5,
+  memory 2/3 + 1 partly, signs 4/7, parking 2/7 + 2 partly; row 45 now right: the pedestrian warning is kept).
+  Still wrong: 10 (a street name it can't read), 11 (NYC's no right on red: no location context), 18 (lane count 2
+  instead of 3, flaky), 25 (names the real DO NOT ENTER sign on the left, which the sheet didn't note, then
+  concludes "no parking": the sheet now says so, partly right from the next run), 41 and 43 (parking judgments).
 - **`scripts/align_gpx.py` for our own drives** (2026-10-11, by an agent, reviewed and refactored here;
   `nav/align.py`, 44 tests): phone video (`VID_YYYYMMDD_HHMMSS`, Pacific time, DST-aware; `tzdata` added for
   Windows) + GPSLogger GPX (1.0, or 1.1 with speed in extensions, or no speed) -> a copy of the GPX with the

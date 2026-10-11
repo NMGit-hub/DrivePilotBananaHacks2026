@@ -23,7 +23,7 @@ red_light_construction_pedestrian,29.0,is that person crossing?,"Yes, a pedestri
 school_bus_stop_arm_parking,18.0,why is that bus stopped?,"It's a school bus with its STOP arm out: picking up or dropping off children.",road,bus on our right with the STOP arm extended
 school_bus_stop_arm_parking,18.0,can I pass the school bus?,"No: its STOP arm is out, so traffic must stop and wait.",safety,
 school_bus_stop_arm_parking,26.0,what's that building on the right?,A TD Bank.,road,
-school_bus_stop_arm_parking,38.5,can I park here?,"Doesn't say yes: there is no sign in view that allows parking here, and we're in the travel lane beside a bank's parking lot. Saying it can't tell and to check the posted signs is right.",parking,
+school_bus_stop_arm_parking,38.5,can I park here?,"Doesn't say yes: there is no sign in view that allows parking here, and we're in the travel lane beside a bank's parking lot. Saying it can't tell and to check the posted signs is right. Naming the DO NOT ENTER sign on the left is fine, but saying it means no parking is wrong reasoning: partly right.",parking,"a real DO NOT ENTER sign on a building on the left (the lot's exit), ~22 px tall, in view 27-38 s (sign detector 0.8-0.89; checked on a 5x crop at 36 s, 2026-10-11)"
 stopped_behind_school_bus,25.0,why is the car ahead stopped?,It's waiting behind a stopped school bus.,road,under elevated tracks in the rain
 stopped_behind_school_bus,25.0,is there a parking meter here?,"Yes, a parking meter with a P sign on the right sidewalk.",parking,
 stopped_behind_school_bus,25.0,should I go around them?,"No: don't pass a stopped school bus; wait behind it.",safety,
