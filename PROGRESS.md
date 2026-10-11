@@ -34,7 +34,7 @@ The user's Mercedes dashcam clips (D:\Dashcam, HANDOFF.md section 2) are the dat
   crossing signs, a parking stall + "can I park here?", night highway + "how many lanes?". Model answers vary from
   run to run: for the roundabout, parking and highway scenes 2 takes were rendered and the better one used (every
   take is a real run; the first roundabout take called YIELD "too blurry", the first lane take said "third lane"
-  before the yellow-edge fix). Seen and not used: at a 6-head intersection (`dm_20260926_185554`) "Light's green"
+  before the yellow-edge fix; the rain scene was rendered again for the thumbnail fix, same answer). Seen and not used: at a 6-head intersection (`dm_20260926_185554`) "Light's green"
   never came because the right-turn heads stayed red (the safety rule working as designed); at night
   (`dm_20260929_195410`) a blooming green LED read YELLOW (Known issues); the parking finder found no spot.
 - **Measured on the user's footage:**
