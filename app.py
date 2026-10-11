@@ -188,6 +188,7 @@ class DrivePilotApp:
         scripted: Sequence[tuple[float, str]] = (),
         exit_at_end: bool = False,
         lane_model: LaneModelFactory | None = None,
+        sign_model: Callable[[], Any] | None = None,
     ) -> None:
         self.cfg = cfg
         self._make_source = make_source
@@ -226,6 +227,7 @@ class DrivePilotApp:
         # V2-M5: fed by the lanes thread; a wide camera's lane model sees only its center (the crop's view)
         self.lanes = LaneTracker(cfg.lanes, lane_view(cfg.effective_hfov_deg, cfg.lanes.max_view_deg)[1])
         self._lane_model = lane_model  # builds YOLOPv2 on the lanes thread (None: lanes off)
+        self._sign_model = sign_model  # builds the sign detector on the signs thread (None: sign alerts off)
         self.lane_worker: LaneWorker | None = None
         self._drivable: DrivableArea | None = None  # the lane model's latest drivable area (pedestrian warnings)
         self._segment = 0  # the video segment the world thread is in (lane results from an older one are dropped)
@@ -686,23 +688,12 @@ class DrivePilotApp:
     # ---------------------------------------------------------------------------------- lifecycle
 
     def _start_signs(self) -> None:
-        """The fine-tuned sign detector (V2-M6) on its own thread, if it is installed (`signs:` config and its
-        models, from the v2-signs branch); otherwise sign alerts are off and everything else runs."""
-        signs_cfg = getattr(self.cfg, "signs", None)
-        if not self.cfg.sign_alerts.enabled or signs_cfg is None:
-            self.status["signs"] = "off"
+        """The fine-tuned sign detector (V2-M6) on its own thread, if the app was given it (`sign_model`, see
+        `sign_model_factory`); otherwise sign alerts are off and everything else runs."""
+        if self._sign_model is None:
+            self.status.setdefault("signs", "off")
             return
-        weights = self.cfg.resolve_path(signs_cfg.weights)
-        if not weights.is_file():
-            self.status["signs"] = "off (no model)"
-            return
-
-        def factory() -> Any:
-            from perception.signs import SignDetector
-
-            return SignDetector(signs_cfg, self.cfg.root)
-
-        self.sign_worker = SignWorker(factory, self._on_signs, self.cfg.sign_alerts.fps).start()
+        self.sign_worker = SignWorker(self._sign_model, self._on_signs, self.cfg.sign_alerts.fps).start()
         self.status["signs"] = "on"
 
     def _start_lanes(self) -> None:
@@ -1024,6 +1015,23 @@ def lane_model_factory(cfg: AppConfig, status: dict[str, str]) -> LaneModelFacto
     return factory
 
 
+def sign_model_factory(cfg: AppConfig, status: dict[str, str]) -> Callable[[], Any] | None:
+    """What builds the fine-tuned sign detector on the signs thread, or None (sign alerts off, or no model)."""
+    if not cfg.sign_alerts.enabled:
+        status["signs"] = "off"
+        return None
+    if not cfg.resolve_path(cfg.signs.weights).is_file():
+        status["signs"] = "off (no model)"
+        return None
+
+    def factory() -> Any:
+        from perception.signs import SignDetector
+
+        return SignDetector(cfg.signs, cfg.root)
+
+    return factory
+
+
 def _vision(cfg: AppConfig, status: dict[str, str]) -> VisionModel | None:
     from answers.vision import VisionError, VisionRequest, create_vision_model
 
@@ -1134,6 +1142,7 @@ def build_app(
         scripted=args.ask,
         exit_at_end=args.exit_at_end,
         lane_model=lane_model_factory(cfg, status),
+        sign_model=sign_model_factory(cfg, status),
     )
     if hasattr(speaker, "on_record"):  # the audio speaker reports when each utterance was heard
         speaker.on_record = app.on_speech_record

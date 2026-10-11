@@ -905,6 +905,62 @@ class LoggingConfig(_Strict):
     frame_log_interval_s: float = Field(1.0, gt=0.0, description="Save one frame per this many seconds.")
 
 
+# --------------------------------------------------------------------------------------------- signs
+
+
+class SignsConfig(_Strict):
+    """Fine-tuned US sign detector + speed-value classifier (perception/signs.py, V2-M6)."""
+
+    weights: ConfigPath = Field(Path("models/signs/signs_yolo26s.pt"), description="Detector weights (.pt).")
+    classifier_weights: ConfigPath = Field(
+        Path("models/signs/speed_value_cls.pt"), description="Speed-limit value classifier weights (.pt)."
+    )
+    engine: Literal["tensorrt", "pytorch"] = Field(
+        "tensorrt", description="tensorrt: engines built by scripts/signs/export_engines.py; pytorch: eager."
+    )
+    device: int = Field(0, ge=0, description="CUDA device index. Refuses to run on the CPU.")
+    half: bool = Field(True, description="FP16 inference.")
+    imgsz: Annotated[tuple[int, int], Strict(False)] = Field(
+        (736, 1280), description="Detector input (height, width): 16:9 frames at 1280 wide, signs at full size."
+    )
+    classifier_imgsz: int = Field(96, ge=32, le=256, description="Square crop size of the value classifier.")
+    conf: float = Field(0.4, gt=0.0, lt=1.0, description="Minimum detection confidence (all kinds).")
+    class_conf: dict[str, float] = Field(
+        default_factory=dict, description="Per-kind minimum confidence overriding `conf`, e.g. {stop: 0.5}."
+    )
+    iou: float = Field(0.6, gt=0.0, lt=1.0)
+    value_conf: float = Field(
+        0.9, gt=0.0, le=1.0, description="Minimum classifier probability (in every view) to report a speed-limit value."
+    )
+    value_min_px: float = Field(
+        16.0, gt=0.0, description="Sign boxes shorter than this (pixels at 1280 px frame width) never get a value."
+    )
+    value_edge_px: float = Field(
+        2.0, ge=0.0, description="No value for a sign this close to the frame border (its number may be cut off)."
+    )
+    duplicate_iou: float = Field(
+        0.6, gt=0.0, le=1.0, description="One sign reported as two kinds above this overlap: keep the surer one."
+    )
+    value_views: int = Field(
+        5, ge=1, le=7, description="Shifted/scaled crops of a speed sign that must all read the same value."
+    )
+
+    @field_validator("imgsz")
+    @classmethod
+    def _multiple_of_32(cls, value: tuple[int, int]) -> tuple[int, int]:
+        if any(v % 32 or not 128 <= v <= 1920 for v in value):
+            raise ValueError("height and width must be multiples of 32 between 128 and 1920")
+        return value
+
+    @field_validator("class_conf")
+    @classmethod
+    def _conf_range(cls, value: dict[str, float]) -> dict[str, float]:
+        # Kind names are checked against the taxonomy by perception/signs.py (core doesn't import perception).
+        if any(not 0.0 < v < 1.0 for v in value.values()):
+            raise ValueError("class_conf values must be between 0 and 1")
+        return value
+
+
 # --------------------------------------------------------------------------------------------- root
 
 
@@ -964,6 +1020,7 @@ class AppConfig(_Strict):
     voice: VoiceConfig = VoiceConfig()
     ui: UiConfig = UiConfig()
     logging: LoggingConfig = LoggingConfig()
+    signs: SignsConfig = SignsConfig()
 
     # Not read from YAML: filled in by load_config.
     root: ConfigPath = Field(default=REPO_ROOT, exclude=True)

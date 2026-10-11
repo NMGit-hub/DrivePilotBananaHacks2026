@@ -62,6 +62,7 @@ from perception.pipeline import PerceptionResult, PerceptionWorker  # noqa: E402
 from state.lanes import LaneTracker  # noqa: E402
 from state.memory import SceneMemory  # noqa: E402
 from state.pedestrians import DrivableArea  # noqa: E402
+from state.signs import SignTracker  # noqa: E402
 from state.world import WorldState  # noqa: E402
 
 log = get_logger("eval.sheet")
@@ -223,6 +224,7 @@ def run_clip(
     voice: SpokenQuestions | None,
     out_dir: Path | None = None,
     lane_model: Callable[[Frame], LaneMasks] | None = None,
+    sign_model: Any = None,
 ) -> None:
     """Play the clip frame by frame and answer its rows at their times (`out_dir`: where to save the marked
     image of answers that pointed at an object). `lane_model`: YOLOPv2, run as the app's lanes thread does (at
@@ -233,6 +235,8 @@ def run_clip(
     memory = SceneMemory(cfg.memory)  # as in the app: "what was that sign?" and numbered objects
     latest_tracks: list[Any] = [()]
     lanes = LaneTracker(cfg.lanes, lane_view(cfg.effective_hfov_deg, cfg.lanes.max_view_deg)[1])
+    signs = SignTracker(cfg.sign_alerts)  # V2-M6: what the sign detector read (as the app's sign thread)
+    sign_t = [-1e9]
     drivable: list[DrivableArea | None] = [None]
     lane_t = [-1e9]
     tags: list[str] = []
@@ -241,7 +245,7 @@ def run_clip(
             cfg,
             vision,
             lambda n, s: world_holder[0].recent_frames(n, s),
-            lambda: lanes.context() if lanes.snapshot().valid else [],
+            lambda: signs.context(clock[0]) + (lanes.context() if lanes.snapshot().valid else []),
             tracks=lambda: latest_tracks[0],
             memory=memory,
             on_highlight=lambda track_id: tags.append(f"track {track_id}"),
@@ -276,6 +280,12 @@ def run_clip(
             masks = lane_model(frame)
             lanes.update(frame.t, masks, None)
             drivable[0] = DrivableArea(masks.t, masks.drivable, frame.segment, masks.view)
+        if sign_model is not None and frame.t - sign_t[0] >= 1.0 / cfg.sign_alerts.fps - 1e-6:
+            sign_t[0] = frame.t
+            signs.update(frame.t, sign_model.detect(frame))
+            for view in signs.last_frame:  # sign close-ups for "what was that sign?", as in the app
+                text = f"{view.value} mph" if view.value is not None else None
+                memory.add_sign(frame, view.id, view.kind, view.box, text=text)
         world.on_perception(result)
         latest_tracks[0] = tuple(result.tracks)
         memory.add(result.frame, result.tracks)
@@ -476,6 +486,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--previous", type=Path, default=None, help="An earlier results.csv: keep its manual verdicts.")
     parser.add_argument("--no-judge", action="store_true")
     parser.add_argument("--no-lanes", action="store_true", help="Without YOLOPv2 lane detection (V2-M5).")
+    parser.add_argument("--no-signs", action="store_true", help="Without the fine-tuned sign detector (V2-M6).")
     parser.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("--hfov", type=float, default=60.0, help="Field of view of the clips (BDD100K: ~60°).")
     args = parser.parse_args(argv)
@@ -515,6 +526,11 @@ def main(argv: list[str] | None = None) -> int:
             tts = None
         voice = SpokenQuestions(cfg, args.voice_name) if args.voice else None
         detector = Detector(cfg.perception, cfg.root)
+        sign_model = None
+        if cfg.sign_alerts.enabled and cfg.resolve_path(cfg.signs.weights).is_file() and not args.no_signs:
+            from perception.signs import SignDetector
+
+            sign_model = SignDetector(cfg.signs, cfg.root)
         lane_model = None
         if cfg.lanes.enabled and cfg.resolve_path(cfg.lanes.weights).is_file() and not args.no_lanes:
             from perception.lanes import LaneModel
@@ -526,7 +542,18 @@ def main(argv: list[str] | None = None) -> int:
         for name, clip_rows in clips.items():
             path = find_clip(name)
             print(f"{path.name}: {len(clip_rows)} question(s)", flush=True)
-            run_clip(cfg, path, clip_rows, detector, vision, tts, voice, out_dir=recorder.dir, lane_model=lane_model)
+            run_clip(
+                cfg,
+                path,
+                clip_rows,
+                detector,
+                vision,
+                tts,
+                voice,
+                out_dir=recorder.dir,
+                lane_model=lane_model,
+                sign_model=sign_model,
+            )
         judge_model = None if args.no_judge else vision
         for row in rows:
             judge(judge_model, row, cfg.vision.temperature)
