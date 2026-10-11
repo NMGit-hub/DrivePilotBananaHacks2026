@@ -13,7 +13,7 @@ deadline Sun 20:59 PDT. Check the time with `date` (it is easy to lose track).
 - Final settings: value_views 5, value_conf 0.9 (chosen on BDD validation boxes + tune, before the final held-out run).
 - Fresh held-out: 69/77 clearly readable limits right, no value contradicting a labeled sign; flagged values all
   checked by eye (STATUS "Numbers"). Full pytest 914 passed, ruff, mypy clean; branch pushed.
-- The last focused review (value views, reporting) is done and fixed (~22:45): "other" boxes are their own value
+- The last focused review (value views, reporting) is done and fixed (~22:10): "other" boxes are their own value
   category, the two "20" panels were read as SPEED LIMIT 20 in their source videos (data/videos/probe/), view sweeps
   and timing are in metrics.json, STATUS discloses that the view offsets were probed on held-out frames.
   Delivered models and config are unchanged by these fixes. 920 tests pass.

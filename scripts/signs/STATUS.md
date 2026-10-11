@@ -1,7 +1,7 @@
 # V2-M6 sign fine-tune: status
 
 Branch `v2-signs` (worktree `C:\ClaudeProjects\DrivePilot_signs`). Commands: [README.md](README.md).
-Last update: 2026-10-10 ~22:40 PDT. Every number below is in `models/signs/metrics.json` (tracked).
+Last update: 2026-10-10 ~22:10 PDT. Every number below is in `models/signs/metrics.json` (tracked).
 
 ## Result in one paragraph
 A two-stage US sign reader runs on the RTX 4050 as TensorRT FP16 engines at **6.6-7.1 ms per frame (median)** on a
