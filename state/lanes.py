@@ -31,8 +31,9 @@ usual place, is `drift_gap_m` from it, at `min_speed_mps` (25 mph) or more by GP
 change (we can't see the turn signal): no alert, and none for `lane_change_quiet_s` after crossing a line. The
 steadiness test matters at a lane change's start: the fitted speed lags the real one by most of
 `velocity_window_s`, so the first second of a fast move looks slow; the speed over the last `quick_window_s` must
-not be a lane change's either. One alert per drift: re-armed when we're back
-near our usual place or change lanes, with a cooldown.
+not be a lane change's either. Our lane must keep its shape meanwhile (its width steady, `drift_max_width_std_m`,
+and changed less than our shift: a lane splitting off moves one line, a drift moves us between both). One alert
+per drift: re-armed when we're back near our usual place or change lanes, with a cooldown.
 
 Called from the lanes thread (`update`, which measures outside the lock); `snapshot` and `reset` are safe from any
 thread (a reset is applied by the next `update`).
@@ -80,6 +81,7 @@ _FAN_MAX_STEP = 0.03  # one frame's fan-out measurement moves the horizon at mos
 _POLY_STEP_M = 2.0
 _HABIT_MAX_GAP_S = 0.5  # a habit sample stands for at most this long (frames missing in between don't count)
 _LANE_CHANGE_CONFIRM_S = 1.0  # a lane change is logged once we've stayed in the new lane this long
+_RELEARN_FRAMES = 24  # this many plausible lane widths rejected in a row (2 s at 12 fps): the width history restarts
 
 
 class MasksLike(Protocol):
@@ -371,6 +373,7 @@ class LaneTracker:
         self._horizon_n = 0
         self._vanishing: deque[float] = deque(maxlen=_HORIZON_WINDOW)  # recent measured vanishing rows
         self._widths: deque[float] = deque(maxlen=cfg.scale_window)
+        self._rejected: list[float] = []  # plausible widths rejected in a row (see _lanes)
         # So does our usual place in the lane (where the camera sits, how this driver keeps the lane).
         self._habit: deque[tuple[float, float, float]] = deque()  # (t, offset, seconds it stands for)
         self._habit_s = 0.0  # seconds of driving the samples stand for
@@ -386,6 +389,7 @@ class LaneTracker:
         self._p_prev: float | None = None
         self._p_smooth: float | None = None
         self._positions: deque[tuple[float, float]] = deque()  # (t, unwrapped raw position)
+        self._lane_widths: deque[tuple[float, float]] = deque()  # (t, our lane's measured width)
         self._speeds: deque[tuple[float, float]] = deque()  # (t, fitted lateral speed)
         self._votes: deque[tuple[float, int | None, int | None]] = deque()
         self._drift_side: Side | None = None
@@ -656,8 +660,17 @@ class LaneTracker:
         if self._widths:
             ratio = width_u / float(np.median(self._widths))
             if not cfg.lane_width_min_m / cfg.lane_width_m <= ratio <= cfg.lane_width_max_m / cfg.lane_width_m:
+                # Rejected. If plausible widths keep being rejected (_RELEARN_FRAMES in a row: a wide city street or
+                # a lot came first, then a highway), the history was wrong: start it over from them (review: the
+                # old history locked out normal lanes for the whole session).
+                self._rejected.append(width_u)
+                if len(self._rejected) >= _RELEARN_FRAMES:
+                    self._widths.clear()
+                    self._widths.extend(self._rejected)
+                    self._rejected.clear()
                 return base
-        self._widths.append(width_u)
+        self._rejected.clear()
+        self._widths.append(width_u)  # (only accepted widths: the scale is the camera's, it changes slowly)
         scale = self.scale
         center_u = (lines[left].offset_m + lines[right].offset_m) / 2.0
         v_left, v_right = self._drivable_sides(geo, masks.drivable, center_u, heading, curvature)
@@ -749,11 +762,13 @@ class LaneTracker:
     def _forget_track(self) -> None:
         """Forget the tracked lateral position and votes (lost lanes, time going backwards)."""
         self._k = 0
+        self._base = 0.0  # what the lane-relative offset is shifted by to stay continuous (lanes crossed, in m)
         self._k_logged = 0  # the lane we were last confirmed in (lane changes in the log)
         self._k_since = None
         self._p_prev = None
         self._p_smooth = None
         self._positions = deque()
+        self._lane_widths = deque()
         self._speeds = deque()
         self._votes = deque()
         self._last_valid_t = None
@@ -780,33 +795,43 @@ class LaneTracker:
         width = m.width_m
         d = m.offset_m
         # Unwrap across lane changes: the lane-relative offset jumps by a lane width when we cross a line.
+        # The base is fixed at each crossing (the width measured then): `k * width_now` would multiply every frame's
+        # width wobble by the number of lane changes and read it as sideways motion (review).
         if self._p_prev is not None:
-            best_k = min((self._k - 1, self._k, self._k + 1), key=lambda k: abs(d + k * width - self._p_prev))  # type: ignore[operator]
-            if best_k != self._k:
+            prev = self._p_prev
+            dk, base = min(
+                ((-1, self._base - width), (0, self._base), (1, self._base + width)), key=lambda o: abs(d + o[1] - prev)
+            )
+            if dk:
                 self._last_lane_change_t = t
-                self._k = best_k
+                self._k += dk
+                self._base = base
                 self._k_since = t
                 self._armed = {"left": True, "right": True}
                 self._drift_side = None
+                self._shift_votes(dk)
         if self._k != self._k_logged and self._k_since is not None and t - self._k_since >= _LANE_CHANGE_CONFIRM_S:
             self.lane_changes.append((self._k_since, self._k - self._k_logged))  # (flip-flops are not logged)
             self._k_logged = self._k
-        p = d + self._k * width
+        p = d + self._base
         dt = t - self._positions[-1][0] if self._positions else 0.0
         self._p_prev = p
         alpha = 1.0 if self._p_smooth is None else 1.0 - math.exp(-max(dt, 0.0) / cfg.smooth_s)
         self._p_smooth = p if self._p_smooth is None else self._p_smooth + alpha * (p - self._p_smooth)
         self._positions.append((t, p))
+        self._lane_widths.append((t, width))
         horizon_s = max(cfg.velocity_window_s, cfg.drift_window_s) + 1.0
         while self._positions and t - self._positions[0][0] > horizon_s:
             self._positions.popleft()
+        while self._lane_widths and t - self._lane_widths[0][0] > horizon_s:
+            self._lane_widths.popleft()
         v = self._velocity(t)
         if v is not None:
             self._speeds.append((t, v))
         while self._speeds and t - self._speeds[0][0] > horizon_s:
             self._speeds.popleft()
 
-        offset = self._p_smooth - self._k * width  # smoothed, relative to the current lane's center
+        offset = self._p_smooth - self._base  # smoothed, relative to the current lane's center
         at_speed = speed is not None and speed >= cfg.min_speed_mps
         after_change = t - self._last_lane_change_t < cfg.lane_change_quiet_s
         if at_speed and not after_change:
@@ -841,16 +866,35 @@ class LaneTracker:
         steady = sum(1 for _, vv in window if sign * vv > 0.0)
         if steady < cfg.drift_steady_share * len(window):
             return []  # not moving toward the line all along: the start of a sudden move (its speed fit lags)
+        widths = [ww for tt, ww in self._lane_widths if t - tt <= cfg.drift_window_s]
+        if float(np.std(widths)) > cfg.drift_max_width_std_m:
+            return []  # our lane changes shape (a lane splitting off, a merge): the line moving isn't us drifting
         past = [pp for tt, pp in self._positions if t - tt >= cfg.drift_window_s]
         if not past:
             return []
         shift = (p - past[-1]) * (1.0 if side == "right" else -1.0)
         if shift < cfg.drift_min_shift_m:
             return []
+        # When we drift, the line ahead of us comes closer and the one behind goes away by as much: the lane's
+        # width stays. When a lane narrows (a lane splitting off) or widens, one line moves and the width changes
+        # by about twice the apparent shift: the lane changed, not our place in it.
+        early = [ww for tt, ww in self._lane_widths if cfg.drift_window_s - 0.5 <= t - tt <= cfg.drift_window_s]
+        late = [ww for tt, ww in self._lane_widths if t - tt <= 0.5]
+        if early and late and abs(float(np.median(late)) - float(np.median(early))) > shift:
+            return []
         self._armed[side] = False
         self._last_alert_t = t
         self._drift_side = side
         return [DriftEvent(t, side, drift_text(side), gap, toward, offset, habit, speed)]
+
+    def _shift_votes(self, dk: int) -> None:
+        """We crossed into the next lane (dk = +1: one to the right): the recent votes for the lanes beside us
+        shift with us, so the old lane doesn't win the vote for the next second (review)."""
+
+        def moved(n: int | None, by: int) -> int | None:
+            return None if n is None or n + by < 0 else n + by
+
+        self._votes = deque((tt, moved(left, dk), moved(right, -dk)) for tt, left, right in self._votes)
 
     def _velocity(self, t: float, window_s: float | None = None) -> float | None:
         """Lateral speed (m/s, + = right): a least-squares slope over the last `window_s` (velocity_window_s)."""
@@ -904,17 +948,20 @@ class LaneTracker:
         )
         polygon: tuple[Point, ...] = ()
         drift_line = None
+        # The page shows the drift (red line, edge pulse) for drift_show_s after the alert, not until re-armed (a
+        # driver who stays near the line would see it forever).
+        drift = self._drift_side if t - self._last_alert_t <= self.cfg.drift_show_s else None
         if valid and m.left is not None and m.right is not None:
             polygon = m.lines[m.left].points + tuple(reversed(m.lines[m.right].points))
-            if self._drift_side is not None:
-                drift_line = m.lines[m.left if self._drift_side == "left" else m.right].points
+            if drift is not None:
+                drift_line = m.lines[m.left if drift == "left" else m.right].points
         lateral = self._speeds[-1][1] if self._speeds and valid else None
         return LanesSnapshot(
             t=t,
             valid=valid,
             lane_polygon=polygon,
             lines=views,
-            drift_side=self._drift_side,
+            drift_side=drift,
             drift_line=drift_line,
             lane_count=None if lanes_left is None or lanes_right is None else lanes_left + 1 + lanes_right,
             lane_index=None if lanes_left is None else lanes_left + 1,

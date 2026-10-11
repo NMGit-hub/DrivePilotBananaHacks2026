@@ -13,17 +13,17 @@ says otherwise (V2-M5 is pushed at its milestone end, after the review fixes).
 | V2-M0 test inputs | done (simulated GPS drives, BDD GPX, clip finder) |
 | V2-M1 parking spot | built, **measured below the bar on real footage**: 1/30 clear spots on the 28 usable BDD lot clips, 0.7 false/10 min; crawl clips (both halves labeled now) 0/8 found; the model check (Claude Haiku) rejects all spot events, so nothing false is spoken but nothing is found either. Needs our own lot footage (straight aisle drives with the phone). |
 | V2-M2 overlay page | built + checked in the browser (now also our lane, the drift line red + edge pulse) |
-| V2-M3 pedestrians | done; **now gated by YOLOPv2's drivable area** (crawl 12 -> 8 warnings, lot 6 -> 3, dev 0, only false/borderline ones removed) |
+| V2-M3 pedestrians | done; **now gated by YOLOPv2's drivable area** beside the feet (crawl 12 -> 9 warnings, lot 6 -> 5, dev 0; only false/borderline ones removed) |
 | V2-M4 memory + highlight | built; sheet 22/3/4 of 29 (was 23/3/3), highlights right on the 7 object rows |
-| V2-M5 YOLOPv2 lanes/drift | **merged and integrated** (app lanes thread, page, lane guidance, vision context, pedestrians); lane index 55/56 answered; drift: 2 borderline alerts in 5.7 min of real highway driving, virtual drifts 13/18 on time, lane changes 12/12 quiet (below the bars: PROGRESS Known issues). **Independent review running/finished: see section 2.1.** |
+| V2-M5 YOLOPv2 lanes/drift | **done** (app lanes thread, page incl. the green target lane, lane guidance, vision context, pedestrians); lane index 57/58 answered; drift: 1 borderline alert in 5.7 min of real highway driving, virtual drifts 13/18 on time, lane changes 12/12 quiet (below the bars: PROGRESS Known issues); review: 6 bugs fixed. **Not done: the phone's 114° ultrawide (PLAN: undistort or a center crop) for lanes.** |
 | V2-M6 sign detector | the other session (`C:\ClaudeProjects\DrivePilot_signs`, branch `v2-signs`) finished the 40-epoch detector and started a 12-epoch fine-tune (`det_ft`) at ~20:00 (GPU busy until ~21:30); due Sunday 11:00; **the app side is ready and wired** (sign alerts now muted in quiet mode) |
 | V2-M7 RF-DETR | not started (cut first) |
 | V2-M8 integration | started: the test sheet runs lane detection like the app (`eval/run_sheet.py`, `--no-lanes`); bench, full sheet, screenshots, README still to do |
 
 ## 2. Next steps (in order)
-1. **V2-M5 review findings.** An independent review subagent was reviewing `git diff 4fbc5b9..d9667e5` (lanes +
-   integration); its notes/reproducers go to the scratchpad `review_m5/findings.md` (session scratchpad; if lost,
-   re-run a review). Fix confirmed findings with regression tests, full pytest, ruff/mypy, commit, **push**.
+1. ~~V2-M5 review findings~~ **done**: 6 bugs fixed with regression tests (PROGRESS "V2-M5"), pushed. The sheet now
+   has 45 rows (16 V2 rows: lanes, memory, signs, parking, road/safety) and runs lane detection and the parking
+   watch like the app.
 2. **V2-M6 sign detector merge** when `scripts/signs/STATUS.md` in the signs worktree says ready. Merge `v2-signs`
    (it only appends `SignsConfig` + `signs:`, adds files, `scripts/__init__.py`, `scripts/signs/__init__.py`; expect a
    small conflict at the end of `AppConfig`). In `app._start_signs` replace `getattr(self.cfg, "signs", None)` with

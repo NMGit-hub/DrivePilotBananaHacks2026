@@ -227,11 +227,12 @@ class DrivePilotApp:
         self._lane_model = lane_model  # builds YOLOPv2 on the lanes thread (None: lanes off)
         self.lane_worker: LaneWorker | None = None
         self._drivable: DrivableArea | None = None  # the lane model's latest drivable area (pedestrian warnings)
+        self._segment = 0  # the video segment the world thread is in (lane results from an older one are dropped)
         self.world = WorldState(
             cfg,
             on_event=self._on_world_event,
             speed_source=self._gps_speed_at,
-            drivable_source=lambda: self._drivable,
+            drivable_source=self._current_drivable,
         )
         self.memory = SceneMemory(cfg.memory)  # V2: "what was that sign?"
         self.signs = SignTracker(cfg.sign_alerts)  # V2-M6: what the sign detector read (limits, school zones)
@@ -354,6 +355,10 @@ class DrivePilotApp:
     def _world_update(self, result: PerceptionResult) -> None:
         """World-state thread: update, and time any alert it raises from this frame's capture. Then, for the V2
         page, hand the frame to the screen with the overlay built from this very update."""
+        if result.new_segment:  # (before the world update: its pedestrian check must not see the old segment's road)
+            self._segment = result.frame.segment
+            self.lanes.reset()
+            self._drivable = None
         with self.latency.detection(result.frame.captured_at):
             self.world.on_perception(result)
         self._latest_tracks = tuple(result.tracks)
@@ -369,9 +374,6 @@ class DrivePilotApp:
                 self.signs.reset()
             self.sign_worker.offer(result.frame)
         if self.lane_worker is not None:
-            if result.new_segment:
-                self.lanes.reset()
-                self._drivable = None
             self.lane_worker.offer(result.frame)
         if self.hub is not None and self.cfg.ui.overlays:
             self.hub.offer_frame(result.frame, self._overlay(result))
@@ -656,6 +658,11 @@ class DrivePilotApp:
         lanes = self.lanes.context() if self.lanes_view(t) is not None else []
         return lines + self.signs.context(t) + lanes
 
+    def _current_drivable(self) -> DrivableArea | None:
+        """The lane model's latest drivable area, if it is from the current video segment (world thread)."""
+        road = self._drivable
+        return road if road is not None and road.segment == self._segment else None
+
     def lanes_view(self, t: float) -> LanesSnapshot | None:
         """Lane detection's latest, if it saw our lane at most LANES_FRESH_S before media time `t`."""
         snap = self.lanes.snapshot()
@@ -710,7 +717,9 @@ class DrivePilotApp:
     def _on_lanes(self, frame: Frame, masks: LaneMasks) -> None:
         """Lanes thread: the masks feed the lane tracker (drift warnings: safety, spoken at once) and the
         pedestrian check's drivable area."""
-        self._drivable = DrivableArea(masks.t, masks.drivable)
+        if frame.segment != self._segment:
+            return  # a frame from before a seek / loop restart, finished after it: its lanes and road are stale
+        self._drivable = DrivableArea(masks.t, masks.drivable, frame.segment)
         for event in self.lanes.update(frame.t, masks, self._gps_speed_at(frame.t)):
             if self.recorder is not None:
                 self.recorder.event(

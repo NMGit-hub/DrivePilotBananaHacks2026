@@ -66,8 +66,9 @@ class VisionLaneReader:
         self.cfg = cfg
         self._on_frame = on_frame  # e.g. save the frame sent to the model in the run folder
 
-    def __call__(self) -> tuple[int, int] | None:
-        """Ask the model about the latest frame (blocks for up to the vision deadlines)."""
+    def __call__(self, expected: int | None = None) -> tuple[int, int] | None:
+        """Ask the model about the latest frame (blocks for up to the vision deadlines). `expected`: the route's lane
+        count (unused: the navigation handler checks the reading against it)."""
         frame = self._frame()
         if frame is None:
             return None
@@ -88,21 +89,26 @@ class VisionLaneReader:
 
 
 class CameraLaneReader:
-    """`nav.handler.LaneReader`: lane detection's count and our lane when it knows both, else `fallback` (the
-    vision model), else None. `snapshot()` gives lane detection's latest, or None if it is stale."""
+    """`nav.handler.LaneReader`: lane detection's count and our lane when it knows both and the count is the
+    route's, else `fallback` (the vision model), else None. `snapshot()` gives lane detection's latest, or None if
+    it is stale. (A count that disagrees with the route's goes to the model, not to "I can't tell": lane
+    detection's count is its weak part.)"""
 
     def __init__(
         self,
         snapshot: Callable[[], LanesSnapshot | None],
-        fallback: Callable[[], tuple[int, int] | None] | None = None,
+        fallback: Callable[[int | None], tuple[int, int] | None] | None = None,
     ) -> None:
         self._snapshot = snapshot
         self._fallback = fallback
 
-    def __call__(self) -> tuple[int, int] | None:
-        """(lanes in our direction, our lane from the left), or None."""
+    def __call__(self, expected: int | None = None) -> tuple[int, int] | None:
+        """(lanes in our direction, our lane from the left), or None. `expected`: the route's lane count."""
         snap = self._snapshot()
-        if snap is not None and snap.lane_count is not None and snap.lane_index is not None:
-            log.info("lane reading", source="lane detection", lanes=snap.lane_count, ours=snap.lane_index)
-            return snap.lane_count, snap.lane_index
-        return self._fallback() if self._fallback is not None else None
+        count, ours = (snap.lane_count, snap.lane_index) if snap is not None else (None, None)
+        if count is not None and ours is not None and (expected is None or count == expected):
+            log.info("lane reading", source="lane detection", lanes=count, ours=ours)
+            return count, ours
+        if count is not None:
+            log.info("lane reading", source="lane detection", lanes=count, ours=ours, route_lanes=expected, used=False)
+        return self._fallback(expected) if self._fallback is not None else None

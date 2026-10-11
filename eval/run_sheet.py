@@ -46,6 +46,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from answers.assistant import Assistant  # noqa: E402
+from answers.parking import ParkingWatch  # noqa: E402
 from answers.scene import SceneHandler  # noqa: E402
 from answers.speech import Priority, TextSpeaker  # noqa: E402
 from answers.vision import VisionError, VisionModel, VisionRequest, create_vision_model  # noqa: E402
@@ -253,10 +254,23 @@ def run_clip(
     assistant.on_highlight = lambda track_id: tags.append(f"track {track_id}")
     world = WorldState(cfg, on_event=assistant.on_world_event, drivable_source=lambda: drivable[0])
     world_holder.append(world)
+    clock = [0.0]  # media time of the latest frame (the parking watch's clock)
+    parking = ParkingWatch(  # "help me find a parking spot", as in the app
+        cfg.parking,
+        cfg.vision,
+        vision,
+        assistant.say,
+        world.snapshot,
+        world.set_parking_mode,
+        lambda: clock[0],
+        quiet=lambda: assistant.alerts.quiet,
+    )
+    assistant.parking = parking
     pending = sorted(rows, key=lambda r: r.time_s)
 
     def on_result(result: PerceptionResult) -> None:
         frame = result.frame
+        clock[0] = frame.t
         if lane_model is not None and frame.t - lane_t[0] >= 1.0 / cfg.lanes.fps - 1e-6:
             lane_t[0] = frame.t
             masks = lane_model(frame)
@@ -315,6 +329,7 @@ def run_clip(
     worker.start()
     worker.join()
     source.stop()
+    parking.close()
     if worker.error is not None:
         raise RuntimeError(f"perception failed on {clip.name}") from worker.error
     for row in pending:  # past the end of the clip

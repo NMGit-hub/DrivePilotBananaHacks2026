@@ -12,9 +12,10 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   perception starts), 12 fps on the newest frame (`perception/frame_worker.py`, shared with the sign thread).
   `state/lanes.py`: lane lines as parallel curves in the top-down view, horizon from the lines' vanishing point,
   metric scale from our lane's width; lane count and our lane counted against the drivable area (None when not
-  clear). **Lane index on 65 hand-labeled highway frames (11 BDD clips): right on 55 of 56 answered (98 %),
-  answered 56/65 (86 % of all frames right: bar 85 %); lane count 17/24 answered** (it undercounts lanes on the
-  right, so lane guidance needs the count to match the route's, else falls back to the vision model). Found and
+  clear). **Lane index on 65 hand-labeled highway frames (11 BDD clips): right on 57 of 58 answered (98 %),
+  answered 58/65 (88 % of all frames right: bar 85 %); lane count 17/25 answered** (it undercounts lanes on the
+  right, so lane guidance needs the count to match the route's, else asks the vision model; the vision prompt
+  gets only our lane from the left). Found and
   fixed by the new tests (`tests/test_lanes.py`, rendered masks) and the clips: the heading/curvature search was
   biased by histogram bin phase (lines 0.15 m off; now scored on smoothed histograms with a wider fine search);
   the vanishing-row vote was won by a curved line's own segments (0.67 instead of 0.47 on a 1250 m curve; now both
@@ -23,26 +24,36 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   from the absolute offset it gave **10 false alerts**: the camera's mount + the driver's habit put the measured
   offset at -0.5..+0.2 m. Now drift is measured from our usual place (median offset over 2 min at speed, after 8 s
   of it), must be steady (toward the line in 80 % of 2.5 s) and not a lane change starting (a 0.6 s speed check:
-  the 1.5 s fit lags a quick move): **2 alerts left at the chosen 0.2 m gap, both borderline, real slow moves**
-  (night, easing 0.8 m right while a car passes close on the left; after a turn-lane split on a curve, ending near
-  the yellow line); 3 at 0.3 m. **Virtual drift** (`eval_lanes.py virtual`: a straight clip warped into a slow
+  the 1.5 s fit lags a quick move), and our lane must keep its shape (its width changing less than our shift: a
+  lane splitting off moves one line, a drift moves us between both): **1 alert left at the chosen 0.2 m gap**, a
+  borderline real slow move (night, easing 0.8 m right while a car passes close on the left). **Virtual drift** (`eval_lanes.py virtual`: a straight clip warped into a slow
   sideways slide, the lane model run on the warped frames; 3 clips, both sides, at the 0.2 m gap): **full lane
   changes (0.8 and 1.2 m/s) 12/12 quiet; slow drifts (0.12-0.3 m/s) 13/18 alerted within 1 s of the expected time,
-  3 late (1.4-3.2 s), 2 missed** (552991d2 leftward: the car started 0.4 m right of its usual place, so the slide had
-  to reach ~1.1 m, where the warped frames distort; a jump in the measured position then reads as a lane change
-  starting). At 0.1 m: 2 missed + 3 late; at 0.3 m: 17/18 on time but 3 alerts on the real clips. So the plan's bars
-  (0 alerts on straight driving / lane changes; within 1 s on the virtual clip) are not fully met: see Known issues.
+  3 late by 1.2-3.3 s, 2 effectively missed** (552991d2 leftward, 6 s and 21 s late: the car started 0.4 m right of
+  its usual place, so the slide had to reach ~1.1 m, where the warped frames distort). So the plan's bars (0 alerts
+  on straight driving / lane changes; within 1 s on the virtual clip) are not fully met: see Known issues.
+  **Independent review (V2-M5): 6 bugs, each with a reproducer, all fixed with regression tests:** (1, safety) the
+  pedestrian road gate read the mask under someone's feet, where YOLOPv2 leaves a hole around a person and our
+  hood line is never road: people crossing a few metres ahead read as "off the road" (34/34 and 39/50 frames on two
+  dev clips; a person dead ahead never warned about when pulling away): now the road beside their feet counts, and
+  nobody within 0.9 m of the path's middle is gated; (2) a first wide lane (a city street, a lot) locked out normal
+  lanes for the session (now: two seconds of rejected plausible widths restart the width history; the scale
+  history is 50 s, a camera property); (3) drift noise grew with every lane change (k x width; now a base fixed at
+  each crossing); (4) lane guidance said "I can't tell" instead of asking the vision model when lane detection's
+  count disagreed with the route's; (5) the old lane won the vote for ~0.35 s after a lane change; (6) the previous
+  segment's road and lane survived a seek/loop. Also: the drift shows on the page for 4 s, config cross-checks, the
+  pedestrian eval replays the app's ~0.1 s mask lag.
   On the V2 page: our lane (lines with a dark halo: they sit on the road's own paint), the other lines dashed
   gray, the drift line red and that screen edge pulsing (checked in the browser). Lane detection's count/lane goes
   to the vision prompt and to lane guidance (`answers/lanes.py: CameraLaneReader`). Drift warnings are SAFETY
   (spoken in quiet mode, pre-rendered).
-- **Pedestrian warnings use YOLOPv2's drivable area** (V2-M5): someone counts as in our path only if >= 30 % of the
-  ground at their feet is road (a sidewalk isn't; stepping off it still warns as "entering"; masks <= 0.3 s old).
-  `scripts/eval_pedestrians.py --road` on cached masks: **crawl clips 12 -> 8 warnings** (removed: a man inside a
-  store seen through glass at night, a glare blob, a hand after the phone was taken off its mount, and a person
-  between parked cars at an aisle edge; one more became "stepping into the road"), **lot clips 6 -> 3** (removed
-  three borderline ones: a man loading his trunk at the aisle edge, a worker beside a truck at the clip's start, a
-  man by a car at a gas station), **dev clips 0 -> 0**; no true warning lost among those looked at.
+- **Pedestrian warnings use YOLOPv2's drivable area** (V2-M5): someone at least 0.9 m from the path's middle counts
+  as in our path only if the ground beside their feet is road (a sidewalk isn't; stepping off it still warns as
+  "entering"; masks <= 0.3 s old). `scripts/eval_pedestrians.py --road` on cached masks: **crawl clips 12 -> 9
+  warnings** (removed: a man inside a store seen through glass at night, a glare blob, a dashboard reflection),
+  **lot clips 6 -> 5** (a worker beside a truck at the clip's start), **dev clips 0 -> 0**. (A first version that
+  read the mask under the feet removed more, 12 -> 8 and 6 -> 3, but also hid people crossing right in front of
+  us: the review's safety finding.)
 - **Crawl clips, labels half B** (`eval/parking_labels_crawl_b.yaml`, a labeling subagent, saved clip by clip: 10/16
   usable, 9 clear + 5 ambiguous open spots, 35 look-alikes): parking tracker **0/6 clear unrestricted spots found,
   2 false spot events in 5.2 min**, lot offer in 8/10 lot clips, 4 false pull-outs; the model check rejected all 5
@@ -496,9 +507,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
-- **Drift warning (V2-M5) below its bars on BDD100K footage:** 2 alerts in 5.7 min of real highway driving, both
-  real slow moves toward a line but not drifts a driver would call one (bar: 0); on the virtual-drift clips 13/18
-  slow drifts on time, 3 late, 2 missed (bar: within 1 s). Learning "our usual place in the lane" needs 8 s at speed
+- **Drift warning (V2-M5) below its bars on BDD100K footage:** 1 alert in 5.7 min of real highway driving, a real
+  slow move toward a line but not a drift a driver would call one (bar: 0); on the virtual-drift clips 13/18 slow
+  drifts on time, 3 late, 2 effectively missed (bar: within 1 s). Learning "our usual place in the lane" needs 8 s at speed
   and absorbs part of a long drift in a 40 s clip (the late ones); a noisy measured position can suppress a real
   drift as a "lane change starting" (the missed ones: the safe side). Tuned on 60° BDD dashcams only; recheck on the
   phone's 114° view (PLAN: undistort or center crop) and our own drives. Drift warnings need GPS speed >= 25 mph.

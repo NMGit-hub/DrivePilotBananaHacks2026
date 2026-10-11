@@ -173,9 +173,22 @@ class Street:
         gps_speed = speed if gps == "speed" else gps
         assert gps_speed is None or isinstance(gps_speed, float | int)
         horizon = HORIZON + self.horizon_error
-        road = None if self.road_half is None else DrivableArea(self.t - self.road_age, road_mask(self.road_half))
+        tracks = self.tracks()
+        road = None
+        if self.road_half is not None:  # as YOLOPv2 draws it: a hole around each person, never under our hood
+            mask = road_mask(self.road_half)
+            rows, cols = mask.shape
+            for tr in tracks:
+                if tr.cls == "person":
+                    x1, y1, x2, y2 = tr.box
+                    w = x2 - x1
+                    c0, c1 = max(0, int((x1 - 0.4 * w) * cols / W)), min(cols, int((x2 + 0.4 * w) * cols / W) + 1)
+                    mask[max(0, int(y1 * rows / H)) : min(rows, int(y2 * rows / H) + 2), c0:c1] = 0
+            if self.hood_row is not None:
+                mask[int(self.hood_row * rows / H) :] = 0
+            road = DrivableArea(self.t - self.road_age, mask)
         events = self.tracker.update(
-            self.t, W, H, self.tracks(), horizon, stopped, hom, gps_speed, self.confident, drivable=road
+            self.t, W, H, tracks, horizon, stopped, hom, gps_speed, self.confident, drivable=road
         )
         self.events += events
         self.t = round(self.t + 1 / FPS, 6)
@@ -724,15 +737,16 @@ def test_world_state_emits_the_warning_once_and_snapshots_the_people() -> None:
 
 
 def test_someone_on_the_sidewalk_beside_a_narrow_road_is_not_in_our_path() -> None:
-    """A narrow street (the road ends 0.7 m right of where we drive): someone standing 1.15 m out is inside the
-    geometric corridor but on the sidewalk. Without the drivable area: warned; with it: not."""
-    walkers = [Walker(1, standing(1.15, 30.0))]
+    """The road ends 0.3 m right of where we head (it bends away; the corridor doesn't know): someone standing 1.4 m
+    out, a metre onto the sidewalk, is inside the geometric corridor. Without the drivable area: warned; with it:
+    not."""
+    walkers = [Walker(1, standing(1.4, 25.0))]
     without = Street(walkers)
-    without.drive(3.0, 8.0)
+    without.drive(4.6, 4.0)
     assert without.kinds() == [(1, IN_PATH, "right")]
     with_road = Street(walkers)
-    with_road.road_half = 0.7
-    with_road.drive(3.0, 8.0)
+    with_road.road_half = 0.3
+    with_road.drive(4.6, 4.0)
     assert with_road.events == []
     people = with_road.tracker.snapshot().people
     assert people and people[0].on_road is False and not people[0].in_path
@@ -755,20 +769,50 @@ def test_stepping_off_the_sidewalk_is_still_warned_about() -> None:
 
 
 def test_a_stale_drivable_area_is_not_used() -> None:
-    street = Street([Walker(1, standing(1.15, 30.0))])
-    street.road_half = 0.7
+    street = Street([Walker(1, standing(1.4, 25.0))])
+    street.road_half = 0.3
     street.road_age = 1.0  # older than road_max_age_s: the corridor alone decides
-    street.drive(3.0, 8.0)
+    street.drive(4.6, 4.0)
     assert street.kinds() == [(1, IN_PATH, "right")]
     assert street.tracker.snapshot().people[0].on_road is None
 
 
-def test_road_share_at_the_feet() -> None:
+def test_road_beside_the_feet() -> None:
     mask = road_mask(2.0)
     area = DrivableArea(0.0, mask)
     on_road = box_of(0.5, 15.0, 0.0, 1.7, 0.5)
     off_road = box_of(3.5, 15.0, 0.0, 1.7, 0.5)
     assert on_road is not None and off_road is not None
-    assert area.share_at_feet(on_road, W, H) > 0.8
-    assert area.share_at_feet(off_road, W, H) < 0.05
-    assert area.share_at_feet((10.0, 700.0, 30.0, 719.0), W, H) == 0.0  # outside the road: none
+    near, far = area.road_beside(on_road, W, H), area.road_beside(off_road, W, H)
+    assert near is not None and near > 0.8
+    assert far is not None and far < 0.05
+    # A hole in the road around the person (YOLOPv2 cuts one, often wider than the box): still on the road.
+    x1, y1, x2, y2 = on_road
+    w = x2 - x1
+    holed = mask.copy()
+    c0, c1 = int((x1 - 0.45 * w) * 640 / W), int((x2 + 0.45 * w) * 640 / W)
+    holed[int(y1 * 360 / H) : int(y2 * 360 / H) + 2, c0:c1] = 0
+    holed_share = DrivableArea(0.0, holed).road_beside(on_road, W, H)
+    assert holed_share is not None and holed_share > 0.8
+    assert area.road_beside((0.0, 0.0, 0.0, 0.0), W, H) is None  # nothing to look at: unknown, not "off the road"
+
+
+def test_someone_right_ahead_behind_our_hood_is_warned_when_we_pull_away() -> None:
+    """Review finding: a person standing dead ahead, feet hidden by our hood line (never road in YOLOPv2's mask)
+    and a hole in the mask around them, was taken for "off the road" and never warned about."""
+    street = Street([Walker(1, standing(0.0, 6.0))], hood_row=620.0)
+    street.road_half = 3.5
+    for _ in range(round(1.0 * FPS)):
+        street.frame(0.0, stopped=True, gps=0.0)
+    street.drive(1.0, 2.0)
+    assert street.kinds() == [(1, IN_PATH, "ahead")]
+
+
+def test_someone_crossing_right_in_front_is_on_the_road() -> None:
+    """Review finding: a man crossing a few metres ahead in a crosswalk read as off the road (the hole around
+    him and the hood line). Right ahead of us the gate never applies; beside us the road next to him counts."""
+    street = Street([Walker(7, walking(3.0, 14.0, -1.4, start=0.5))], hood_row=640.0)
+    street.road_half = 5.0
+    street.drive(3.0, 4.0)
+    assert len(street.events) == 1 and street.events[0].person.track_id == 7
+    assert all(p.on_road is not False for p in street.tracker.snapshot().people)

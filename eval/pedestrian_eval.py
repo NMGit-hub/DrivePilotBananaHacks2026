@@ -72,19 +72,25 @@ def replay(
     cfg: AppConfig,
     gps_speed: Callable[[float], float | None] | None = None,
     road: list[DrivableArea] | None = None,
+    road_lag_s: float = 0.1,
 ) -> Replay:
     """Run the clip's cached perception through WorldState + AlertEngine (see the module docstring). `road`: the
-    clip's YOLOPv2 drivable areas in time order (each frame gets the newest one at or before it, as in the app)."""
+    clip's YOLOPv2 drivable areas in time order (each frame gets the newest one at least `road_lag_s` older)."""
     out = Replay()
     if not frames:
         return out
     current = {"index": 0}
     now = {"t": 0.0}
 
+    road_times = [r.t for r in road] if road else []
+
     def drivable() -> DrivableArea | None:
+        # The newest mask at least `road_lag_s` old: in the app the lanes thread finishes a frame ~0.1 s after the
+        # world thread saw it (12 fps on the newest frame + the model's time), so the band beside someone's feet
+        # looks at a slightly older view.
         if not road:
             return None
-        k = bisect.bisect_right([r.t for r in road], now["t"] + 1e-6) - 1
+        k = bisect.bisect_right(road_times, now["t"] - road_lag_s + 1e-6) - 1
         return road[k] if k >= 0 else None
 
     world_events: list[WorldEvent] = []

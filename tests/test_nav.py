@@ -289,11 +289,11 @@ def test_lane_questions_with_and_without_a_lane_count() -> None:
     gps.fix = at(1500.0)
     text = nav.answer(ask("Which lane for 520 east?"), empty_snapshot())
     assert text == "For SR 520 in a mile, use the two right lanes."
-    nav.lane_reader = lambda: (4, 1)
+    nav.lane_reader = lambda expected: (4, 1)
     assert nav.answer(ask("Am I in the right lane?"), empty_snapshot()).endswith(
         "You're in lane 1 from the left, so move two lanes right."
     )
-    nav.lane_reader = lambda: (3, 1)  # the camera saw 3 lanes, the route says 4: don't guess
+    nav.lane_reader = lambda expected: (3, 1)  # the camera saw 3 lanes, the route says 4: don't guess
     assert "I can't tell exactly which lane you're in" in nav.answer(ask("Am I in the right lane?"), empty_snapshot())
 
 

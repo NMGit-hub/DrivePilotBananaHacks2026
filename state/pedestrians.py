@@ -54,8 +54,9 @@ detection says nothing. Once per track; a new track of the same kind appearing w
 
 On the road. With the lanes model running (V2-M5), YOLOPv2's drivable area of a recent frame (`DrivableArea`, at
 most `road_max_age_s` old) also has a say: someone counts as in the path only if at least `road_min_share` of the
-ground around their feet is road (a band at the foot row, half a box wider on each side), so a man walking along
-the sidewalk next to our corridor isn't "ahead". Someone on the sidewalk moving into the path is still "entering":
+ground beside their feet is road (strips left and right of the box: `DrivableArea.road_beside`), and only at least
+`road_gate_min_offset_m` from the path's centreline, so a man walking along the sidewalk next to our corridor isn't
+"ahead" while someone right in front of us always is. Someone on the sidewalk moving into the path is still "entering":
 stepping off the curb is exactly what that warning is for. Without a mask (lanes off, a stale one) the zone alone
 decides.
 
@@ -131,21 +132,33 @@ class DrivableArea:
 
     t: float  # media time of the frame it was computed on
     mask: np.ndarray
+    segment: int = 0  # the video segment of that frame (a seek or a loop starts a new one)
 
-    def share_at_feet(self, box: Box, width: int, height: int) -> float:
-        """Share of road in a band at the box's foot row, half a box wider on each side (the person's own pixels
-        aren't road, so on a road it is well above zero, on a sidewalk near zero)."""
+    def road_beside(self, box: Box, width: int, height: int) -> float | None:
+        """The share of road beside the box's feet: the more of two strips left and right of the box (from half a
+        box width to 1.5 box widths out, just above its bottom edge), or None if neither strip is in the frame.
+
+        Not under the box: YOLOPv2 leaves a hole in the road around a person (often wider than their box), and
+        for someone close in front of us the bottom edge is our hood line, which is never road (review: people
+        crossing a few metres ahead read as off the road). Someone standing in the road has road on at least one
+        side; someone on a sidewalk has none within reach unless they stand right at the curb (then: on the road,
+        the safe answer)."""
         rows, cols = self.mask.shape
         x1, y1, x2, y2 = box
         w, h = x2 - x1, y2 - y1
         sy, sx = rows / height, cols / width
-        r0 = max(0, math.floor((y2 - 0.04 * h) * sy) - 1)
-        r1 = min(rows, math.ceil((y2 + 0.06 * h) * sy) + 1)
-        c0 = max(0, math.floor((x1 - 0.5 * w) * sx))
-        c1 = min(cols, math.ceil((x2 + 0.5 * w) * sx))
-        if r1 <= r0 or c1 <= c0:
-            return 0.0
-        return float(self.mask[r0:r1, c0:c1].mean())
+        r0 = max(0, math.floor((y2 - 0.12 * h) * sy))
+        r1 = min(rows, math.ceil(y2 * sy))
+        if r1 <= r0:
+            return None
+        best: float | None = None
+        for lo, hi in ((x1 - 1.5 * w, x1 - 0.5 * w), (x2 + 0.5 * w, x2 + 1.5 * w)):  # (the hole is nearest)
+            c0, c1 = max(0, math.floor(lo * sx)), min(cols, math.ceil(hi * sx))
+            if c1 - c0 < 2:
+                continue  # this side is out of the frame
+            share = float(self.mask[r0:r1, c0:c1].mean())
+            best = share if best is None else max(best, share)
+        return best
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,7 +349,8 @@ class PedestrianTracker:
             placed = self._place(box, body_h, cam, aim_x, horizon, width, height)
             if placed is None:
                 continue
-            on_road = None if road is None else road.share_at_feet(box, width, height) >= cfg.road_min_share
+            share = None if road is None else road.road_beside(box, width, height)
+            on_road = None if share is None else share >= cfg.road_min_share
             view = self._observe(t, track_id, kind, box, placed, zone, turning, still is None, present, events, on_road)
             views.append(view)
         self._drop_stale(t)
@@ -541,7 +555,10 @@ class PedestrianTracker:
         approach = 0.0 if person.vz is None else max(0.0, -person.vz)
         closing = min(zone.speed, approach + cfg.closing_margin_mps)
         offset = zone.offset(x, z)
-        in_path = zone.contains(x, z, closing) and on_road is not False  # (on a sidewalk: not in our path)
+        # Off the road (a sidewalk) is not our path, except near the path's middle: the gate is for people at
+        # the corridor's edges, and someone right ahead of us is warned about whatever the mask says.
+        off_road = on_road is False and abs(zone.offset(x, z)) >= cfg.road_gate_min_offset_m
+        in_path = zone.contains(x, z, closing) and not off_road
         entering = False
         vx = person.vx
         predict_z = max(cfg.predict_max_z_m, cfg.predict_max_s * zone.speed)

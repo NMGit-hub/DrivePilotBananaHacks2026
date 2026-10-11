@@ -529,17 +529,19 @@ def test_lanes_packet_for_the_page() -> None:
 def test_lane_guidance_uses_lane_detection_when_it_is_sure() -> None:
     from answers.lanes import CameraLaneReader
 
-    asked: list[int] = []
+    asked: list[int | None] = []
 
-    def model() -> tuple[int, int] | None:
-        asked.append(1)
+    def model(expected: int | None) -> tuple[int, int] | None:
+        asked.append(expected)
         return 4, 3
 
     snap = _lanes_snapshot()
-    assert CameraLaneReader(lambda: snap, model)() == (3, 2) and asked == []
-    assert CameraLaneReader(lambda: replace(snap, lane_count=None), model)() == (4, 3)  # not sure: the model
-    assert CameraLaneReader(lambda: None, model)() == (4, 3)  # stale or no lanes
-    assert CameraLaneReader(lambda: None, None)() is None
+    assert CameraLaneReader(lambda: snap, model)(3) == (3, 2) and asked == []
+    assert CameraLaneReader(lambda: replace(snap, lane_count=None), model)(4) == (4, 3)  # not sure: the model
+    assert CameraLaneReader(lambda: None, model)(4) == (4, 3)  # stale or no lanes
+    # Review finding: the route says 4 lanes, lane detection counted 3: the model is asked (it was "I can't tell").
+    assert CameraLaneReader(lambda: snap, model)(4) == (4, 3) and asked[-1] == 4
+    assert CameraLaneReader(lambda: None, None)(3) is None
 
 
 def _app(tmp_path: Path, **kwargs: Any) -> Any:
@@ -640,3 +642,111 @@ def test_the_green_target_lane() -> None:
     assert packet is not None and packet["target"] == {"lane": "right", "moves": 1}
     assert packet["left_next"] is not None and packet["right_next"] is not None  # the lanes beside ours
     assert packet["right_next"][0][0] > packet["right"][0][0]
+
+
+# ----------------------------------------------------------------------------- review findings (V2-M5)
+
+
+def test_a_wide_first_lane_does_not_lock_out_normal_lanes() -> None:
+    """Review: a new width had to be within 0.72-1.28x the median of the widths seen so far, and rejected widths
+    never joined them: 1 s of a 5.4 m lane first, and normal 3.6 m lanes were rejected for the whole session."""
+    tracker = LaneTracker(cfg_lanes(), HFOV)
+    wide = Road(lines=[-2.7, 2.7], drivable=(-3.2, 3.2))
+    for i in range(int(1.0 * FPS)):
+        tracker.update(i / FPS, Masks(*render(wide)), FAST)
+    seen = []
+    for i in range(int(1.0 * FPS), int(9.0 * FPS)):
+        road = three_lanes()
+        road.phase = FAST * i / FPS
+        tracker.update(i / FPS, Masks(*render(road)), FAST)
+        seen.append(tracker.snapshot().valid)
+    assert all(seen[int(3.0 * FPS) :])  # the width history relearned within ~2 s; tracked ever since
+    assert tracker.snapshot().lane_width_m == pytest.approx(LANE, abs=0.15)
+
+
+def test_lane_changes_do_not_amplify_width_noise() -> None:
+    """Review: the position was d + k * width_now, so after k lane changes each frame's width wobble moved it by k
+    times as much. Two lane changes, then a straight stretch: the lateral speed stays as calm as before them."""
+    tracker = LaneTracker(cfg_lanes(), HFOV)
+    rng = np.random.default_rng(4)
+    speeds = []
+    for i in range(int(20 * FPS)):
+        t = i / FPS
+        lateral = -LANE + min(max(0.0, t - 3.0), 2 * LANE)  # left lane, then two lanes right at 1 m/s from 3 s
+        road = three_lanes(offset=lateral)
+        road.lines = [x * (1.0 + rng.normal(0.0, 0.03)) for x in road.lines]  # the measured width wobbles ~0.1 m
+        road.phase = FAST * t
+        tracker.update(t, Masks(*render(road)), FAST)
+        if t > 14.0 and tracker.snapshot().lateral_speed_mps is not None:
+            speeds.append(tracker.snapshot().lateral_speed_mps)
+    assert [k for _, k in tracker.lane_changes] == [1, 1]
+    assert speeds and float(np.std(speeds)) < 0.04  # (the old k * width: 0.069 m/s)
+
+
+def test_the_lane_index_follows_a_lane_change_at_once() -> None:
+    """Review: the votes kept the old lane for ~0.35 s after crossing (lane 2 shown while in lane 3)."""
+    tracker = LaneTracker(cfg_lanes(), HFOV)
+    crossed = None
+    for i in range(int(10 * FPS)):
+        t = i / FPS
+        lateral = min(max(0.0, t - 4.0), LANE)  # middle lane, then one lane right at 1 m/s
+        road = three_lanes(offset=lateral)
+        road.phase = FAST * t
+        tracker.update(t, Masks(*render(road)), FAST)
+        snap = tracker.snapshot()
+        if crossed is None and lateral > LANE / 2 + 0.3:
+            crossed = t
+        if crossed is not None and t >= crossed and snap.lane_index is not None:
+            assert snap.lane_index == 3, f"t={t:.2f}: lane {snap.lane_index}"
+
+
+def test_the_drift_shows_on_the_page_for_a_few_seconds() -> None:
+    cfg = cfg_lanes()
+    tracker = LaneTracker(cfg, HFOV)
+    alerts = run(Drive(slide(12.0, 0.15, stop=17.0), 26.0), cfg, tracker)  # drifts, then stays near the line
+    assert len(alerts) == 1
+    assert 26.0 - alerts[0][0] > cfg.drift_show_s
+    assert tracker.snapshot().drift_side is None and tracker.snapshot().drift_line is None
+
+
+def test_more_config_validation() -> None:
+    with pytest.raises(ValueError):
+        LanesConfig(rearm_gap_m=0.1, drift_gap_m=0.2)
+    with pytest.raises(ValueError):
+        LanesConfig(quick_window_s=2.0, velocity_window_s=1.5)
+
+
+def test_lane_results_from_before_a_new_segment_are_dropped(tmp_path: Path) -> None:
+    """Review: after a seek or loop restart, the lanes thread's frame from the old segment still set the drivable
+    area and our lane, and the new segment's first pedestrian check used the old road."""
+    from perception.ego_motion import NOT_MEASURED, EgoMotion
+    from perception.pipeline import PerceptionResult
+
+    app, _ = _app(tmp_path)
+    lines, drivable = render(three_lanes())
+    old = Frame(np.zeros((H, W, 3), np.uint8), t=39.9, index=1197, captured_at=time.perf_counter(), segment=0)
+    app._on_lanes(old, LaneMasks(39.9, 1197, (W, H), lines, drivable, {}))
+    assert app._current_drivable() is not None
+    new = Frame(np.zeros((H, W, 3), np.uint8), t=40.0, index=0, captured_at=time.perf_counter(), segment=1)
+    seen: list[object] = []
+    app.world.on_perception = lambda result: seen.append(app._current_drivable())  # type: ignore[method-assign]
+    ego = EgoMotion(40.0, NOT_MEASURED, NOT_MEASURED, 5.0, False, None, True, None, 0.0)
+    app._world_update(PerceptionResult(new, [], ego, {}, new_segment=True))
+    assert seen == [None]  # the new segment's first frame: no road from the old one
+    app._on_lanes(old, LaneMasks(39.9, 1197, (W, H), lines, drivable, {}))  # the old frame finishing late
+    assert app._current_drivable() is None and app.lanes_view(40.0) is None
+
+
+def test_a_lane_narrowing_beside_us_is_not_a_drift() -> None:
+    """A highway clip (ae3733cf) where a lane splits off: the right line curves in toward us while we hold our line.
+    Our lane narrows, its center moves left, so our offset grows: not a drift (the lane's width isn't steady)."""
+    cfg = cfg_lanes()
+    tracker = LaneTracker(cfg, HFOV)
+    alerts = []
+    for i in range(int(22 * FPS)):
+        t = i / FPS
+        squeeze = min(max(0.0, t - 12.0) * 0.3, 0.9)  # the right line moves 0.9 m in over 3 s
+        road = Road(lines=[-1.5 * LANE, -0.5 * LANE, 0.5 * LANE - squeeze, 1.5 * LANE], drivable=(-5.9, 5.9))
+        road.phase = FAST * t
+        alerts += tracker.update(t, Masks(*render(road)), FAST)
+    assert alerts == []

@@ -446,6 +446,9 @@ class PedestriansConfig(_Strict):
         "of the ground around their feet is road (on a sidewalk they can still be stepping into the road).",
     )
     road_max_age_s: float = Field(0.3, gt=0.0, description="A drivable-area mask older than this isn't used.")
+    road_gate_min_offset_m: float = Field(
+        0.9, ge=0.0, description="Nearer than this to the path's centreline, someone is in our path whatever the mask."
+    )
     max_gap_s: float = Field(0.3, gt=0.0, description="A track unseen for longer starts its streak over.")
     fit_s: float = Field(0.6, gt=0.0, description="Speeds are fitted over this much track history...")
     fit_min_samples: int = Field(6, ge=3, description="...with at least this many samples.")
@@ -657,7 +660,9 @@ class LanesConfig(_Strict):
     lane_width_max_m: float = Field(4.6, gt=0.0, description="...(after the scale is set).")
     scale_min: float = Field(0.6, gt=0.0, description="The measured scale (camera height error) is kept within...")
     scale_max: float = Field(1.7, gt=0.0, description="...these factors of the prior.")
-    scale_window: int = Field(60, ge=1, description="Lane widths (frames) the scale is the median of.")
+    scale_window: int = Field(
+        600, ge=1, description="Lane widths (frames: ~50 s) the scale is the median of (a camera property: slow)."
+    )
     gap_min: float = Field(0.75, gt=0.0, description="A neighbouring lane is this to...")
     gap_max: float = Field(1.3, gt=0.0, description="...this many of our lane's widths wide.")
     edge_drivable_max: float = Field(
@@ -687,12 +692,16 @@ class LanesConfig(_Strict):
     lane_change_mps: float = Field(0.5, gt=0.0, description="...but slower than this (faster: a lane change)...")
     drift_window_s: float = Field(2.5, gt=0.0, description="...having moved toward it steadily for this long...")
     drift_min_shift_m: float = Field(0.2, ge=0.0, description="...by at least this much...")
+    drift_max_width_std_m: float = Field(
+        0.25, gt=0.0, description="...while our lane's measured width varied at most this much (std) in that window."
+    )
     drift_steady_share: float = Field(
         0.8, ge=0.0, le=1.0, description="...moving toward it in this share of that window (not a sudden move)."
     )
     lane_change_quiet_s: float = Field(4.0, ge=0.0, description="No drift alert this long after a lane change.")
     rearm_gap_m: float = Field(0.55, ge=0.0, description="After an alert: re-armed once the gap is this big again.")
     cooldown_s: float = Field(10.0, ge=0.0, description="At most one drift alert in this long.")
+    drift_show_s: float = Field(4.0, ge=0.0, description="The page shows the drift (red line) this long after it.")
     lost_s: float = Field(1.0, gt=0.0, description="No lane for this long: the tracked position is forgotten.")
 
     @model_validator(mode="after")
@@ -707,6 +716,10 @@ class LanesConfig(_Strict):
             raise ValueError("scale_max must be greater than scale_min")
         if self.lane_change_mps <= self.drift_min_mps:
             raise ValueError("lane_change_mps must be greater than drift_min_mps")
+        if self.rearm_gap_m <= self.drift_gap_m:
+            raise ValueError("rearm_gap_m must be greater than drift_gap_m (else a drift re-arms at once)")
+        if self.quick_window_s >= self.velocity_window_s:
+            raise ValueError("quick_window_s must be shorter than velocity_window_s")
         return self
 
 

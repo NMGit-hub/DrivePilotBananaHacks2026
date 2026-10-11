@@ -62,7 +62,8 @@ QUICK_REROUTE_S = 90.0  # another reroute this soon doubles the wait before the 
 MAX_REROUTE_WAIT_S = 120.0
 LEFT_ROUTE_SHARE = 0.5  # asked "did I miss my turn?": this share of the off-route distance already counts
 ROUNDABOUT_ANNOUNCE_M = 150.0  # "At the roundabout, take the 2nd exit..." when the roundabout is this close
-LaneReader = Callable[[], tuple[int, int] | None]  # -> (lanes counted in our direction, our lane from the left)
+# (the route's lane count at the maneuver) -> (lanes counted in our direction, our lane from the left), or None
+LaneReader = Callable[[int], tuple[int, int] | None]
 _MATCH_STOPWORDS = {
     "which", "what", "lane", "lanes", "for", "the", "to", "i", "should", "be", "in", "am", "get", "take", "is",
     "are", "a", "an", "my", "our", "we", "this", "that", "it", "on", "at", "of", "do", "need", "go", "right",
@@ -333,7 +334,7 @@ class NavHandler:
         lanes = describe_lanes(step.lanes) or "the marked lanes"
         road = road_name(step) or "the next turn"
         text = f"For {road} {when}, use {lanes}."
-        reading = self.lane_reader() if self.lane_reader is not None else None
+        reading = self.lane_reader(len(step.lanes)) if self.lane_reader is not None else None
         if reading is not None:
             counted, ours = reading
             if counted == len(step.lanes) and 1 <= ours <= counted:

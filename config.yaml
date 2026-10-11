@@ -125,7 +125,8 @@ pedestrians:                # "Pedestrian stepping into the road on your right."
   min_speed_mps: 0.5        # GPS slower than this = not moving (people crossing while we wait are normal)
   confirm_frames: 3         # in (or stepping into) the path 3 observations in a row before a warning
   road_min_share: 0.3       # with the lanes model on: "in our path" only if >= 30 % of the ground at their feet is
-  road_max_age_s: 0.3       #   drivable (a sidewalk isn't; stepping off it still warns), masks <= 0.3 s old
+  road_max_age_s: 0.3       #   drivable (a sidewalk isn't; stepping off it still warns), masks <= 0.3 s old,
+  road_gate_min_offset_m: 0.9  #   and only >= 0.9 m from the path's middle (right ahead of us: always warned)
   predict_s: 1.2          # "stepping into the road": inside the path within 1.2 s at their sideways speed,
   predict_max_z_m: 15.0     #   predicted only within 15 m (further out, sideways speeds are mostly depth noise)
   height_weight: 0.5        # distance = box height and ground contact combined (the latter breaks on hills)
@@ -182,6 +183,7 @@ lanes:                      # V2 YOLOPv2 lanes (perception/lanes.py) + lane trac
   drift_window_s: 2.5       # ...steadily for 2.5 s (toward it in 80 % of it), by at least 0.2 m
   drift_min_shift_m: 0.2
   cooldown_s: 10.0          # once per drift; re-armed back near the lane center or after a lane change
+  drift_show_s: 4.0         # the page shows the drift (red line, edge pulse) this long after the alert
 
 vision_model: claude       # scene-question provider: claude (Haiku, default) | gemini | ollama | mock
 vision:
