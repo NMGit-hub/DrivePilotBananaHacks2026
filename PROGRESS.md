@@ -8,36 +8,53 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **Wake modes** (`voice.wake_mode`, `--wake`, Settings on the page while running): `hey_drivepilot` (default,
   unchanged), `hey`, `none`. In the two open modes a second Silero VAD watches the idle microphone; 0.15 s of
   speech starts a question (0.4 s pre-roll, no wake-phrase tail), and Whisper's transcript decides whether it was
-  meant for us (`router.strip_hey`: starts with "hey"; a lone "hey" opens the listening window like the wake word,
-  with the blip; `router.meant_for_us`: commands, or anything phrased as a question/request). DrivePilot's own voice
-  never starts one: ignored while the speaker plays or has something queued, and for `open_mic.echo_tail_s` (0.6 s)
-  after. The "Hey DrivePilot" model keeps running in every mode ("Hey DrivePilot, stop"). **Verified:** 12 pipeline
-  tests with fake VAD/STT (`tests/test_wake_modes.py`) and `scripts/wake_modes_check.py` with the real models
-  (Silero, the wake-word model, Whisper on the GPU) on the six Piper test voices: **153/156 as expected**, clean and
-  in car noise at 10 dB (every "Hey, ..." question heard, "Hey." + pause + question heard, talk without "hey"
-  ignored; no-wake-word mode: questions heard, "I love this song" / "we're almost there" ignored); the 3 misses are
-  one voice (reza_ibrahim) saying "Hey Drive Pilot", which the wake-word model and Whisper miss for that voice (a
-  known synthetic-voice limit, see the wake-word notes). **2 min of car noise alone in "none" mode: 0 speech
-  starts, 0 answers.**
+  meant for us. `router.strip_hey`: starts with "hey"; a transcript that is only a lone "hey" (or Whisper's "Say.",
+  "Hi." for it) opens the listening window like the wake word, with the blip; an empty transcript (noise) opens
+  nothing. `router.meant_for_us`: commands, or anything phrased as a question/request; in "hey" mode after the
+  "hey" (and after a lone "hey"), so "Hey, I'm so hungry" isn't answered; with no wake word a destination must be an
+  instruction ("take me to ...", not "we're going to grandma's") and bare "never mind" / "what?" are ignored (they
+  would cancel the driver's watch / repeat). DrivePilot's own voice never starts a question: ignored while the
+  speaker plays or has something queued and for `open_mic.echo_tail_s` (0.6 s) after, counting the microphone's
+  backlog; a failing check counts as talking. The "Hey DrivePilot" model keeps running in every mode ("Hey
+  DrivePilot, stop"). **Verified:** pipeline tests with fake VAD/STT (`tests/test_wake_modes.py`, incl. noise then
+  talk, live and batch) and `scripts/wake_modes_check.py` with the real models (Silero, the wake-word model,
+  Whisper on the GPU) on the six Piper test voices, clean and in car noise at 10 dB: **197/204 as expected**. Every
+  one-breath "Hey, ..." question heard (incl. "Hey there, ..."), talk without "hey" and "Hey, I'm so hungry"
+  ignored; no wake word: questions heard, "I love this song" / "we're almost there" / "we're going to grandma's
+  house later" / "never mind" ignored. Misses: "Hey." + a pause + the question in car noise, 3/6 (Whisper hears
+  nothing for the lone word in noise, and noise must not open a window; clean 6/6); one voice (reza_ibrahim)
+  saying "Hey Drive Pilot" (3, a known synthetic-voice limit of the wake word). **2 min of car noise alone in
+  "none" mode: 0 speech starts, 0 answers.**
 - **Said without asking** (`alerts.auto`, each switchable in config and under Settings on the page):
-  "Light's green." (INFO; the full "check the intersection and go" sentence stays for "tell me when it's green"),
+  "Light's green. Check before you go." (INFO; PLAN.md: never a bare "go"; "tell me when it's green" keeps its
+  own sentence),
   "The car ahead is moving.", turn-by-turn ("In half a mile, take exit 14 onto SR 520 East toward Redmond.", at
   `nav.turn_prompts_m` 800 m / 150 m; not roundabouts, which have their own; the first maneuver isn't repeated after
   the destination answer named it), "You're in the wrong lane for your turn. Move one lane left." (lane detection +
   the route's lanes, the same match the overlay's target lane uses; after 2 s in a wrong lane within 800 m; once
-  more within 250 m; "That's the right lane." after moving over), "You're over the limit. It's 30 here." (GPS speed
-  over the sign detector's limit by 5 mph for 4 s; never a school limit; not a limit read more than 10 min ago),
-  "Stop sign ahead." Quiet mode mutes the INFO ones (turn-by-turn and wrong lane are guidance the driver asked
-  for by setting a destination). All fixed texts are pre-rendered.
+  more within 250 m; "That's the right lane." after 2 s in a good lane; keyed by route, so a reroute's maneuvers are
+  new), "You're over the limit. It's 30 here." (GPS speed over the sign detector's limit by 5 mph for 4 s; never a
+  school limit; not one read more than 5 min ago or before a turn onto another road: heading 60° away for 3 s),
+  "Stop sign ahead." (3 frames in a row). Quiet mode mutes the INFO ones (turn-by-turn and wrong lane are guidance
+  the driver asked for by setting a destination). The last turn prompt is said down to 20 m (a maneuver right after
+  another, or a GPS gap). All fixed texts are pre-rendered.
   **Found live on the SF red-light replay and fixed:** (1) "Stop sign ahead." for the grey *back* of the cross
   street's sign: now the box must be about square and its middle redder than green (median R - G >= 8; faces on
   earlier runs' frames, washed-out pink to maroon at dawn, measured +15..+77, backs -16..-5). (2) "The car ahead is
   moving." while we waited first at a red light, for a car that crossed in front of us and drove off up the street:
-  now the car must itself have been stopped in front of us for 2 s, and nothing is said at a stop where our light
-  read red or yellow at any time ("Light's green." is the alert there; a car pulling away on red may be turning
-  right, and the alert must never sound like "go"). After the fixes the same replay says "School zone ahead." and
-  "Light's green." at 36.56 s (the light's change) and nothing else; switching "Light's green" off on the page and
-  seeking back: the light change is logged, nothing is said.
+  now the car must itself have been stopped in front of us for 2 s and the motion tracker must see it moving (a
+  steady, gentle departure is announced ~3 s after it starts), and nothing is said at a stop where our light read
+  red or yellow during the stop or in the 15 s before it (on the approach: a truck may hide it once we stop; a frame
+  where ego motion can't tell keeps that). ("Light's green." is the alert there; a car pulling away on red may be
+  turning right, and the alert must never sound like "go".) After the fixes the same replay says "School zone
+  ahead." and "Light's green." at 36.56 s (the light's change) and nothing else; switching "Light's green" off on
+  the page and seeking back: the light change is logged, nothing is said.
+  **Independent review** (13 findings, all checked and fixed with tests): the car-ahead red-light gaps above, a
+  noise blip opening a hidden listening window in "hey" mode (and the race behind it, found again on real voices),
+  overheard destinations / "never mind" in "none" mode, the bare "Light's green.", the right-lane confirmation
+  without a hold, wrong-lane state across reroutes, a stale limit after a turn, close maneuvers without a prompt,
+  single-frame stop signs and a hue check for warm light, the echo guard ignoring the microphone's backlog, "hey
+  there", hotkeys after clicking a setting, and ranking half-typed names ("costc" -> Costco before Cost Plus).
 - **Destination box** on the V2 page: "Where to?" with suggestions as you type (`/api/places`: Mapbox Search Box +
   Geocoding v6 with autocomplete, merged, best match first by the same scoring as spoken destinations), Enter or a
   click navigates (`/api/destination`; a picked suggestion's coordinates are used as is, a typed one is geocoded
@@ -46,9 +63,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   one at start once there's a GPS fix. **Verified in the browser** on the SF replay with its GPX: typed "ferry
   build" -> Ferry Building first of the suggestions -> "Okay, Ferry Building: 26 minutes, 3.4 miles. First, turn
   right onto 15th Street now." and the route card.
-- Tests: `tests/test_wake_modes.py` (38), `tests/test_auto_alerts.py` (33: watches, engine, turn-by-turn on the
-  fixture route, the page's endpoints, the app's wiring, Mapbox search on a mock transport, the world raising both
-  events); four alert-engine tests now switch the unrequested green off (they test the watch).
+- Tests: `tests/test_wake_modes.py`, `tests/test_auto_alerts.py` (watches, engine, turn-by-turn on the fixture
+  route, the page's endpoints, the app's wiring, Mapbox search on a mock transport, the world raising both events);
+  four alert-engine tests now switch the unrequested green off (they test the watch). Full suite: 1476 passed.
 
 ### V2 (2026-10-10/11): V2-M0..M6 and M8 done (M1 parking and M5 drift below their accuracy bars on public footage; M7 RF-DETR cut)
 - **Vision answers improved without training (2026-10-11, the user's go-ahead):** a second ("reading") model, the
@@ -681,13 +698,16 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   the full wake word, passengers' questions are answered too ("none" mode answers any question; "hey" mode any
   that starts with "hey"), and every utterance in the car is transcribed (Whisper on the GPU, ~0.1-0.3 s each).
   While DrivePilot talks (and 0.6 s after) speech is ignored in these modes, so stopping an answer needs "Hey
-  DrivePilot, stop". In "none" mode, "I'm going to call mom" still routes as a destination ("Sorry, I couldn't
-  find call mom.").
+  DrivePilot, stop". In "hey" mode, say the question in one breath in a noisy car ("Hey, is it my turn?"): a lone
+  "Hey." and a pause works clean but only 3/6 synthetic voices in car noise (Whisper hears nothing for one short
+  word, and noise must not open a window).
 - **Unrequested alerts are checked on public replays, not our own drives:** "The car ahead is moving." has no
   positive case on our clips (the SF one is at a red light, where it is now suppressed by design); the wrong-lane
   warning needs lane detection's count to match the route's lanes (untested on the phone's 114° view, like lanes in
-  general); speeding uses the last limit the sign detector read, which can be stale after a turn onto another road
-  for up to 10 min; "Stop sign ahead." needs a visible red face, so a sign in deep shadow at night may not count.
+  general); speeding uses the last limit the sign detector read (forgotten after 5 min or a turn, but a road whose
+  limit changes without a sign isn't noticed); "Stop sign ahead." needs a visible red face, so a sign in deep shadow
+  at night may not count, and backs in warm evening light are rejected by hue only in theory (no golden-hour
+  footage).
 - **`align_gpx.py` is untested on a real OnePlus + GPSLogger pair** (none exists yet): whether OnePlus writes
   `creation_time` at the start or the end is detected, not known; GPSLogger's speed field placement is handled in
   every form seen in GPX files; the 0.25 s pull-away bias and the thresholds come from BDD100K's iPhone data. A drive

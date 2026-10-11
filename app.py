@@ -602,8 +602,7 @@ class DrivePilotApp:
         self.voice.set_mode(mode)
         if self.recorder is not None:
             self.recorder.event("wake_mode", t=self.media_time(), mode=mode)
-        self._publish_status()
-        return True
+        return True  # (the page sees it in the next status, within STATUS_INTERVAL_S)
 
     def set_alert(self, name: str, on: bool) -> None:
         """The page's switch for one unrequested alert (answers/auto_alerts.py: AUTO_NAMES)."""
@@ -611,7 +610,6 @@ class DrivePilotApp:
         log.info("alert switch", alert=name, on=on)
         if self.recorder is not None:
             self.recorder.event("alert_switch", t=self.media_time(), alert=name, on=on)
-        self._publish_status()
 
     def suggest_places(self, query: str) -> list[dict[str, Any]]:
         """Places for the page's destination box as the driver types (best match first)."""
@@ -638,7 +636,6 @@ class DrivePilotApp:
         if self.nav is None:
             return False
         self._say_answer(self.nav.cancel())
-        self._publish_status()
         return True
 
     def _destination(self, query: str, place: Place | None) -> None:
@@ -666,7 +663,6 @@ class DrivePilotApp:
         if self.recorder is not None:
             self.recorder.event("answer", t=t, qid=qid, text=answer, route=record.route, source="nav")
         self._say_answer(answer)
-        self._publish_status()
 
     def _say_answer(self, text: str) -> None:
         self.assistant.say(Utterance(text, "answer", Priority.ANSWER, t=self.media_time()))
@@ -684,8 +680,10 @@ class DrivePilotApp:
                     self._feed_gps()
                     if self.location is not None:
                         self.location.update()
-                    self._auto_alerts()
-                    self._start_pending_destination()
+                    try:
+                        self._auto_alerts()
+                    finally:
+                        self._start_pending_destination()
                 if now >= next_status:
                     next_status = now + STATUS_INTERVAL_S
                     self._publish_status()
@@ -700,12 +698,20 @@ class DrivePilotApp:
         nav = self.nav
         progress = nav.progress if nav is not None and nav.route is not None and fix is not None else None
         target = lane_target(self.lanes_view(t), progress)
-        step = progress.next_step.index if progress is not None and progress.next_step is not None else None
+        route = nav.route if nav is not None else None
+        # (keyed by the route too: after a reroute, its step 3 is a new maneuver)
+        step = (id(route), progress.next_step.index) if progress is not None and progress.next_step else None
         text = self.wrong_lane.update(t, target, step, progress.to_next_m if progress is not None else None)
         if text is not None and self.switches.enabled("wrong_lane"):
             self._say_auto("wrong_lane", text, Priority.REQUESTED)  # (guidance for the route the driver set)
         signs = self.signs.snapshot()
-        text = self.speeding.update(t, fix.speed_mps if fix is not None else None, signs.limit, signs.limit_t)
+        text = self.speeding.update(
+            t,
+            fix.speed_mps if fix is not None else None,
+            signs.limit,
+            signs.limit_t,
+            fix.heading if fix is not None else None,
+        )
         if text is not None and self.switches.enabled("speeding"):
             self._say_auto("speeding", text, Priority.INFO)
 

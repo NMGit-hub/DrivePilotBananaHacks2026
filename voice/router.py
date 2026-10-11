@@ -630,20 +630,31 @@ def _route_once(text: str) -> Route:
 # ------------------------------------------------------------------------------- without the wake word
 
 # `voice.wake_mode: hey`: the question starts with "hey" (Whisper also writes it "Hay", "Hey there", "Heya").
-_HEY = re.compile(r"^\W*(?:hey|hay|heya|hey there|hey hey)\b[\s,.!?:;-]*", re.IGNORECASE)
+_HEY = re.compile(r"^\W*(?:hey there|hey hey|heya|hey|hay)\b[\s,.!?:;-]*", re.IGNORECASE)
+# A lone "hey" that Whisper wavers on (one short word: "Say.", "Hi.", "Eh." for the same "Hey." from run to run).
+_LONE_HEY = re.compile(r"^\W*(?:hey|hay|heya|hi|say|eh|ay|heh)\W*$", re.IGNORECASE)
 # `voice.wake_mode: none`: a question or a request, not a remark ("we're almost there", "I love this song").
 _QUESTION_START = re.compile(
     r"^(?:what|which|who|whose|where|when|why|how|is|are|am|was|were|can|could|should|shall|would|will|do|does|did|"
     r"have|has|may|might|must|any|tell me|tell us|describe|read|look|check|show me|explain|help|find|let me know|"
     r"remind me|keep an eye)\b"
 )
-# Control words that a passenger says to anyone ("what?", "huh?", "sorry?"): with no wake word, not a "repeat that".
+# Words a passenger says to anyone: with no wake word, not "repeat that" ("what?") or "cancel" ("never mind": it
+# would drop the driver's "tell me when it's green").
 _VAGUE_CONTROLS = re.compile(r"^(?:what|huh|sorry(?: what)?|pardon(?: me)?|come again)$")
+_VAGUE_CANCELS = re.compile(r"^(?:cancel|cancel that|cancel it|never ?mind|forget it|forget that|no need)$")
+# Destinations said as a plan, not an instruction ("we're going to grandma's", "let's go to the park"): with no
+# wake word, they would replace the driver's route.
+_DESTINATION_REMARK = re.compile(
+    r"^(?:(?:i|we|they|you|he|she) (?:am|are|is) )?(?:going|heading|headed|driving) |^let us "
+)
 
 
 def strip_hey(text: str) -> str | None:
     """`wake_mode: hey`: the text after a leading "hey" (and the rest of a "Hey DrivePilot"), "" if it was only
     "hey", or None if it doesn't start with "hey" (not meant for us)."""
+    if _LONE_HEY.match(text):
+        return ""
     match = _HEY.match(text.replace("’", "'"))
     if match is None:
         return None
@@ -651,16 +662,21 @@ def strip_hey(text: str) -> str | None:
     return rest if strip_wake_word(rest) else ""
 
 
-def meant_for_us(text: str) -> bool:
-    """`wake_mode: none`: was this (heard without any wake word) said to DrivePilot? Commands count (controls
-    except a bare "what?", destinations, watches, parking); anything else must be phrased as a question or a
-    request ("what does that sign say?", "tell me about the road ahead"), so remarks between passengers ("we're
-    almost there") aren't answered."""
+def meant_for_us(text: str, called: bool = False) -> bool:
+    """Was this, heard without the "Hey DrivePilot" wake word, said to DrivePilot? Commands count (controls, watches,
+    parking, destinations); anything else must be phrased as a question or a request ("what does that sign say?",
+    "tell me about the road ahead"), so remarks between passengers ("we're almost there") aren't answered.
+
+    `called`: it started with "hey" (`wake_mode: hey`), so the driver spoke to us: "Hey, I'm going to Costco" and
+    "hey, never mind" count. Without it (`wake_mode: none`), a destination must be an instruction ("take me to
+    ...", not "we're going to grandma's house") and bare "what?" / "never mind" are a passenger talking."""
     result = route(text)
     if result.kind is RouteKind.EMPTY:
         return False
     if result.kind is RouteKind.CONTROL:
-        return not _VAGUE_CONTROLS.match(result.text)
-    if result.kind in (RouteKind.DESTINATION, RouteKind.WATCH, RouteKind.PARKING):
+        return called or not (_VAGUE_CONTROLS.match(result.text) or _VAGUE_CANCELS.match(result.text))
+    if result.kind is RouteKind.DESTINATION:
+        return called or not _DESTINATION_REMARK.match(result.text)
+    if result.kind in (RouteKind.WATCH, RouteKind.PARKING):
         return True
     return text.rstrip().endswith("?") or bool(_QUESTION_START.match(result.text))

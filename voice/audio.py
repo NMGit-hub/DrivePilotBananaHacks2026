@@ -108,6 +108,11 @@ class MicStream:
         except queue.Full:
             self.dropped += 1  # the consumer is stuck; keep the newest audio flowing
 
+    @property
+    def backlog_s(self) -> float:
+        """Audio captured but not read yet (s): how far behind the reader is."""
+        return self._queue.qsize() * CHUNK / SAMPLE_RATE + len(self._pending) / SAMPLE_RATE
+
     def read(self, timeout: float = 1.0) -> np.ndarray | None:
         """The next 80 ms chunk (int16, 16 kHz), or None on timeout."""
         while True:

@@ -373,6 +373,11 @@ class AutoAlertsConfig(_Strict):
     car_ahead_delay_s: float = Field(
         1.5, ge=0.0, description="...and still be stopped this long after it started moving (no nagging)."
     )
+    car_ahead_red_memory_s: float = Field(
+        15.0,
+        ge=0.0,
+        description="Our light read red or yellow this soon before we stopped (or during the stop): silent.",
+    )
     car_ahead_shrink: float = Field(
         0.15, gt=0.0, lt=1.0, description="The car ahead counts as pulling away once its box is this much smaller."
     )
@@ -389,10 +394,17 @@ class AutoAlertsConfig(_Strict):
         120.0, gt=0.0, description="Not said again for the same limit until this long after we slowed down."
     )
     speeding_limit_max_age_s: float = Field(
-        600.0,
+        300.0,
         gt=0.0,
         description="A limit read longer ago than this isn't used (we may be on another road). School limits are "
         "never used: they depend on the hours.",
+    )
+    speeding_turn_deg: float = Field(
+        60.0,
+        gt=0.0,
+        le=180.0,
+        description="Heading this far from when the limit was read for 3 s: another road, "
+        "the limit is forgotten until a new sign is read.",
     )
     stop_sign_min_speed_mps: float = Field(
         4.0, ge=0.0, description="Only while driving at least this fast (GPS; without GPS: ego motion moving)."
@@ -406,6 +418,7 @@ class AutoAlertsConfig(_Strict):
     stop_sign_min_redness: float = Field(
         8.0, description="...and facing us: its middle this much redder than green (median R - G; a back is grey: ~0)."
     )
+    stop_sign_frames: int = Field(3, ge=1, description="...in this many observations of the sign in a row.")
     stop_sign_repeat_s: float = Field(20.0, ge=0.0, description="Another stop sign this soon is not announced.")
 
 

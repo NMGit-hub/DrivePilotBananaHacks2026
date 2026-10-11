@@ -64,17 +64,52 @@ def run_car_ahead(frames: Frames, red_at: set[float] | None = None) -> list[floa
     ]
 
 
-def frames_of(heights: list[float], dt: float = 0.1, track: int = 7, since: float | None = 0.0) -> Frames:
-    """The car ahead's box height per frame; it has been stopped in front of us since `since` (None: moving)."""
-    return [(round(i * dt, 2), True, (track, h, since)) for i, h in enumerate(heights)]
+def frames_of(
+    heights: list[float], dt: float = 0.1, track: int = 7, since: float | None = 0.0, moves_at: float | None = None
+) -> Frames:
+    """The car ahead's box height per frame; it has been stopped in front of us since `since` (None: moving), until
+    the vehicle-motion tracker sees it move at `moves_at`."""
+    out: Frames = []
+    for i, h in enumerate(heights):
+        t = round(i * dt, 2)
+        out.append((t, True, (track, h, None if moves_at is not None and t >= moves_at else since)))
+    return out
+
+
+PULL_AWAY = [200.0] * 30 + [200.0 - 10 * k for k in range(1, 15)] + [60.0] * 30  # pulls away from 3.0 s
 
 
 def test_the_car_ahead_pulling_away_is_announced_once_after_the_delay() -> None:
-    # Stopped behind it from t=0 (height 200 px); at 3.0 s it starts pulling away (shrinks 10 px every 0.1 s).
-    heights = [200.0] * 30 + [200.0 - 10 * k for k in range(1, 15)] + [60.0] * 30
-    fired = run_car_ahead(frames_of(heights))
+    # Stopped behind it from t=0 (height 200 px); at 3.0 s it starts pulling away (shrinks 10 px every 0.1 s), and
+    # the motion tracker sees it moving from 3.4 s.
+    fired = run_car_ahead(frames_of(PULL_AWAY, moves_at=3.4))
     # 15 % smaller (170 px) at 3.3 s, plus the 1.5 s delay
     assert fired == [pytest.approx(3.3 + CFG.car_ahead_delay_s, abs=0.11)]
+
+
+def test_a_shrinking_box_the_motion_tracker_calls_standing_is_not_a_car_pulling_away() -> None:
+    # (a car creeping a little closer to the line and stopping again, a box that tightened on the car)
+    assert run_car_ahead(frames_of(PULL_AWAY)) == []
+
+
+def test_a_red_light_on_the_approach_or_a_blind_frame_still_keeps_it_quiet() -> None:
+    # Review findings: the light read red while we drove up behind a truck, which hides it once we stop; and a
+    # frame where ego motion can't tell must not wipe the red seen during the stop.
+    watch = CarAheadWatch(CFG)
+    fired = []
+    for i in range(120):
+        t = round(i * 0.1, 2)
+        stopped = t >= 2.0
+        lead = (7, PULL_AWAY[i - 20] if stopped and i - 20 < len(PULL_AWAY) else 200.0, 2.0 if t < 5.4 else None)
+        if watch.update(t, stopped, 2.0 if stopped else None, True, lead if stopped else None, red_light=t < 1.5):
+            fired.append(t)
+    assert fired == []
+    watch = CarAheadWatch(CFG)
+    for i, (t, _, lead) in enumerate(frames_of(PULL_AWAY, moves_at=3.4)):
+        confident = i != 20  # one blind frame at 2.0 s
+        if watch.update(t, True, 0.0, confident, lead, red_light=t < 1.0):
+            fired.append(t)
+    assert fired == []
 
 
 def test_box_jitter_is_not_a_car_pulling_away() -> None:
@@ -91,22 +126,20 @@ def test_a_short_wait_or_moving_off_ourselves_says_nothing() -> None:
 
 
 def test_a_car_that_drives_out_of_view_after_pulling_away_still_counts() -> None:
-    frames = frames_of([200.0] * 30 + [160.0] * 3) + [(3.3 + 0.1 * k, True, None) for k in range(1, 30)]
+    frames = frames_of([200.0] * 30 + [160.0] * 3, moves_at=3.1) + [(3.3 + 0.1 * k, True, None) for k in range(1, 30)]
     assert len(run_car_ahead(frames)) == 1
 
 
 def test_cross_traffic_driving_off_ahead_of_us_is_not_the_car_ahead() -> None:
     # Seen on the SF replay: first at a red light, a car crossed in front, turned up the street and drove off. It
     # was never stopped in front of us: not "the car ahead".
-    heights = [200.0] * 30 + [200.0 - 10 * k for k in range(1, 15)] + [60.0] * 30
-    assert run_car_ahead(frames_of(heights, since=None)) == []
+    assert run_car_ahead(frames_of(PULL_AWAY, since=None)) == []
 
 
 def test_never_at_a_red_light() -> None:
     # Stopped behind a car at a red light; it pulls away (turning right on red?) while the light still reads red,
     # and the reading drops out afterwards: nothing is said at this stop.
-    heights = [200.0] * 30 + [200.0 - 10 * k for k in range(1, 15)] + [60.0] * 30
-    frames = frames_of(heights)
+    frames = frames_of(PULL_AWAY, moves_at=3.4)
     assert run_car_ahead(frames, red_at={t for t, _, _ in frames if t < 2.0}) == []
 
 
@@ -141,29 +174,39 @@ def seen(*tracks: Track, color: tuple[int, int, int] = SIGN_RED) -> tuple[list[T
     return list(tracks), street_with(*((t, color) for t in tracks))
 
 
+def looks(watch: StopSignWatch, t: float, moving: bool, speed: float | None, *view: Any) -> list[int | None]:
+    """The same view for `stop_sign_frames` frames in a row (one frame alone is never enough)."""
+    return [watch.update(t + k / 30, moving, speed, *view) for k in range(CFG.stop_sign_frames)]
+
+
 def test_a_stop_sign_ahead_on_our_side_is_announced_once() -> None:
     watch = StopSignWatch(CFG)
-    assert watch.update(0.0, True, 10.0, *seen(sign(1, 1500.0, 15.0))) is None  # far off (small)
-    assert watch.update(0.5, True, 10.0, *seen(sign(1, 1500.0, 40.0))) == 1
-    assert watch.update(1.0, True, 10.0, *seen(sign(1, 1550.0, 60.0))) is None  # same sign
-    assert watch.update(2.0, True, 10.0, *seen(sign(2, 1600.0, 40.0))) is None  # the corner's other sign: too soon
-    assert watch.update(30.0, True, 10.0, *seen(sign(3, 1600.0, 40.0))) == 3  # the next intersection
+    assert looks(watch, 0.0, True, 10.0, *seen(sign(1, 1500.0, 15.0)))[-1] is None  # far off (small)
+    assert looks(watch, 0.5, True, 10.0, *seen(sign(1, 1500.0, 40.0))) == [None] * (CFG.stop_sign_frames - 1) + [1]
+    assert looks(watch, 1.0, True, 10.0, *seen(sign(1, 1550.0, 60.0)))[-1] is None  # same sign
+    assert looks(watch, 2.0, True, 10.0, *seen(sign(2, 1600.0, 40.0)))[-1] is None  # the corner's other sign: soon
+    assert looks(watch, 30.0, True, 10.0, *seen(sign(3, 1600.0, 40.0)))[-1] == 3  # the next intersection
 
 
 def test_stop_signs_are_not_announced_when_slow_stopped_or_across_the_road() -> None:
     watch = StopSignWatch(CFG)
-    assert watch.update(0.0, True, 2.0, *seen(sign(1, 1500.0, 40.0))) is None  # creeping up to it
-    assert watch.update(0.1, False, None, *seen(sign(2, 1500.0, 40.0))) is None  # stopped, no GPS
-    assert watch.update(0.2, True, 10.0, *seen(sign(3, 300.0, 40.0))) is None  # far left: not ours
-    assert watch.update(0.3, True, None, *seen(sign(4, 1500.0, 40.0))) == 4  # no GPS: ego motion says moving
+    assert looks(watch, 0.0, True, 2.0, *seen(sign(1, 1500.0, 40.0)))[-1] is None  # creeping up to it
+    assert looks(watch, 1.0, False, None, *seen(sign(2, 1500.0, 40.0)))[-1] is None  # stopped, no GPS
+    assert looks(watch, 2.0, True, 10.0, *seen(sign(3, 300.0, 40.0)))[-1] is None  # far left: not ours
+    assert looks(watch, 3.0, True, None, *seen(sign(4, 1500.0, 40.0)))[-1] == 4  # no GPS: ego motion says moving
 
 
-def test_the_back_of_a_stop_sign_or_a_sliver_is_not_announced() -> None:
+def test_the_back_of_a_stop_sign_a_sliver_or_a_single_frame_is_not_announced() -> None:
     # Seen on the SF replay: YOLO found the grey back of the cross street's sign (30 x 60 px with its pole).
     watch = StopSignWatch(CFG)
-    assert watch.update(0.0, True, 10.0, *seen(sign(1, 1500.0, 40.0), color=SIGN_BACK)) is None
-    assert watch.update(0.1, True, 10.0, *seen(sign(2, 1500.0, 60.0, width=28.0))) is None  # tall and thin
-    assert watch.update(0.2, True, 10.0, *seen(sign(3, 1500.0, 40.0))) == 3  # a red face, about square
+    assert looks(watch, 0.0, True, 10.0, *seen(sign(1, 1500.0, 40.0), color=SIGN_BACK))[-1] is None
+    assert looks(watch, 1.0, True, 10.0, *seen(sign(2, 1500.0, 60.0, width=28.0)))[-1] is None  # tall and thin
+    orange = (40, 120, 200)  # BGR: a grey back in warm evening light is orange-ish, not red
+    assert looks(watch, 2.0, True, 10.0, *seen(sign(5, 1500.0, 40.0), color=orange))[-1] is None
+    # a red face seen once, then missed: starts over
+    assert watch.update(3.0, True, 10.0, *seen(sign(3, 1500.0, 40.0))) is None
+    assert watch.update(3.03, True, 10.0, [], street_with()) is None
+    assert looks(watch, 3.1, True, 10.0, *seen(sign(3, 1500.0, 40.0)))[-1] == 3  # about square, red
 
 
 # ------------------------------------------------------------------------------------------ wrong lane
@@ -181,8 +224,19 @@ def test_the_wrong_lane_is_said_after_the_hold_within_range_then_once_more_and_c
     assert watch.update(3.0, wrong, 3, 600.0) is None  # once
     assert watch.update(20.0, wrong, 3, 240.0) == "You're still in the wrong lane. Move one lane left."
     assert watch.update(21.0, wrong, 3, 200.0) is None
-    assert watch.update(22.0, {"lane": "ours"}, 3, 180.0) == RIGHT_LANE
-    assert watch.update(23.0, {"lane": "ours"}, 3, 160.0) is None
+    assert watch.update(22.0, {"lane": "ours"}, 3, 180.0) is None  # one reading mid lane change isn't enough
+    assert watch.update(22.5, wrong, 3, 175.0) is None
+    assert watch.update(23.0, {"lane": "ours"}, 3, 170.0) is None
+    assert watch.update(25.0, {"lane": "ours"}, 3, 150.0) == RIGHT_LANE  # in it for the hold time
+    assert watch.update(26.0, {"lane": "ours"}, 3, 140.0) is None
+
+
+def test_a_reroute_makes_new_maneuvers() -> None:
+    watch = WrongLaneWatch(CFG)
+    wrong = {"lane": "left", "moves": 1}
+    assert [watch.update(t, wrong, ("route A", 3), 600.0) for t in (0.0, 2.0)][-1] is not None
+    # rerouted: the new route's step 3 is another maneuver, warned about on its own
+    assert [watch.update(t, wrong, ("route B", 3), 600.0) for t in (3.0, 5.0)][-1] is not None
 
 
 def test_a_lane_change_in_progress_or_an_unknown_lane_says_nothing() -> None:
@@ -224,6 +278,20 @@ def test_speeding_is_said_again_only_after_slowing_down_for_a_while() -> None:
     assert speeding_text(30) in [watch.update(t, 40 * MPH, 30, 0.0) for t in range(6)]
     assert all(watch.update(t, 28 * MPH, 30, 0.0) is None for t in range(6, 6 + round(CFG.speeding_repeat_s) + 1))
     assert speeding_text(30) in [watch.update(t, 40 * MPH, 30, 0.0) for t in range(200, 206)]
+
+
+def test_a_limit_is_forgotten_after_turning_onto_another_road() -> None:
+    # Review finding: a 25 limit read on a side street, then a turn onto a 45 mph road with no sign yet.
+    watch = SpeedingWatch(CFG)
+    assert all(watch.update(t, 24 * MPH, 25, 0.0, heading=90.0) is None for t in range(5))
+    assert all(watch.update(5 + t, 40 * MPH, 25, 0.0, heading=0.0) is None for t in range(20))  # turned north
+    assert speeding_text(35) in [watch.update(30 + t, 45 * MPH, 35, 30.0, heading=0.0) for t in range(6)]
+
+
+def test_a_bend_in_the_road_does_not_forget_the_limit() -> None:
+    watch = SpeedingWatch(CFG)
+    said = [watch.update(t, 40 * MPH, 30, 0.0, heading=90.0 + (70.0 if 3 <= t < 5 else 0.0)) for t in range(12)]
+    assert speeding_text(30) in said  # 2 s at 70 degrees off: a bend, not another road
 
 
 def test_no_speed_no_limit_or_an_old_limit_says_nothing() -> None:
@@ -329,6 +397,18 @@ def test_turn_by_turn_prompts_along_the_route() -> None:
     ]
     assert (800 - 150) / 15 - 1 <= turns[0][0] <= (800 - 75) / 15 + 1  # within 150 m of the turn at 15 m/s
     assert sum(1 for _, kind, _ in said if kind == "nav_roundabout") == 1
+
+
+def test_a_maneuver_right_after_another_still_gets_its_prompt() -> None:
+    # Review finding: a maneuver that becomes next under 75 m away (turn right, then left 60 m later), or a GPS gap
+    # over the 75-150 m window, was never announced. The last prompt now goes down to 20 m.
+    nav, gps, said = nav_handler({"on": True})
+    nav.set_destination("Redmond Town Center")
+    track = fixes()
+    skip = [f for f in track if not 640.0 <= f.t * 15.0 <= 760.0]  # no fix from 160 m to 40 m before the turn
+    drive(nav, gps, skip)
+    first = next(text for _, kind, text in said if kind == "nav_turn")
+    assert first.endswith("turn left onto 148th Avenue Northeast.") and first.startswith("In 1")
 
 
 def test_turn_by_turn_can_be_switched_off_while_driving() -> None:
@@ -545,6 +625,15 @@ def test_mapbox_place_search_merges_both_services_best_match_first() -> None:
         down.search("costco")
 
 
+def test_suggestions_rank_a_half_typed_name() -> None:
+    from nav.mapbox import rank_places
+
+    near = START
+    cost_plus = Place("Cost Plus World Market", "Bellevue, WA", (47.62, -122.2), "poi")
+    costco = Place("Costco", "Kirkland, WA", (47.62, -122.2), "poi")
+    assert [p.name for p in rank_places("costc", [cost_plus, costco], near)] == ["Costco", "Cost Plus World Market"]
+
+
 def test_navigation_suggestions_survive_a_search_failure() -> None:
     from nav.mapbox import NavError
 
@@ -572,10 +661,11 @@ def test_the_world_raises_car_ahead_and_stop_sign_events() -> None:
     # Then stopped behind a car (the lead: centered, big) that pulls away at 4 s (its box shrinks).
     for i in range(30, 300):
         t = i / 30
-        shrink = 0.0 if t < 4.0 else min(150.0, (t - 4.0) * 300.0)
+        shrink = 0.0 if t < 4.0 else min(250.0, (t - 4.0) * 60.0)  # drives off, receding for ~4 s
         box = (470.0 + shrink / 2, 350.0 + shrink / 3, 810.0 - shrink / 2, 640.0 - shrink / 3)
         world.on_perception(result(i, [Track(9, "car", 0.9, box)], True, 1.0))
     kinds = [e.kind for e in events]
     assert kinds.count("stop_sign_ahead") == 1 and kinds.count("car_ahead_moving") == 1
     moved = next(e for e in events if e.kind == "car_ahead_moving")
-    assert 4.0 + CFG.car_ahead_delay_s <= moved.t <= 4.0 + CFG.car_ahead_delay_s + 0.5
+    # (a steady, gentle recede: the motion tracker calls it moving after ~2 s, then the 1.5 s delay)
+    assert 4.0 + CFG.car_ahead_delay_s <= moved.t <= 4.0 + 4.0

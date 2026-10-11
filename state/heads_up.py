@@ -4,17 +4,21 @@
   `car_ahead_wait_s`, it pulls away (its box shrinks by `car_ahead_shrink` from the biggest it was while we
   waited), and we are still stopped `car_ahead_delay_s` later: "The car ahead is moving." Once per stop. A car that
   left the lead zone after it started moving still counts (it drove off); a different car becoming the lead before
-  ours moved (a cut-in, a lost track) starts over. Never at a red light: if our light read red or yellow at any time
-  during this stop, nothing is said ("Light's green." is the alert there; a car pulling away on red may be turning
-  right, and "the car ahead is moving" must not sound like "go"). Seen on the SF replay before these two rules: a
-  car that crossed in front of us and drove off up the street was announced while we waited first at a red light.
+  ours moved (a cut-in, a lost track) starts over; the vehicle-motion tracker must also see it moving (not just its
+  box shrink). Never at a red light: if our light read red or yellow during this stop, or within
+  `car_ahead_red_memory_s` before it (on the approach: once we stop behind a truck it may hide the light), nothing
+  is said ("Light's green." is the alert there; a car pulling away on red may be turning right, and "the car ahead
+  is moving" must not sound like "go"). A frame where ego motion can't tell keeps the state (it doesn't forget the
+  red). Seen on the SF replay before these rules: a car that crossed in front of us and drove off up the street was
+  announced while we waited first at a red light.
 - `StopSignWatch`: driving (GPS speed at least `stop_sign_min_speed_mps`, or ego motion moving when there's no
   GPS) toward a stop sign that is close (`stop_sign_min_height` of the frame), on our side of the road (right
   of `stop_sign_min_x`) and facing us: its box about square, and its face red (`face_redness`: the middle of
-  the box clearly redder than green). YOLO also finds the grey backs of the cross street's signs (seen on the SF
-  replay: "Stop sign ahead." for a sign that wasn't ours). Faces on earlier runs' frames, washed-out pink to
-  maroon at dawn, measured +15..+77; backs -16..-5. "Stop sign ahead." Once per sign, and not again within
-  `stop_sign_repeat_s`.
+  the box clearly redder than green, and its hue red to magenta, not orange as a grey back in warm evening light
+  would be). YOLO also finds the grey backs of the cross street's signs (seen on the SF replay: "Stop sign ahead."
+  for a sign that wasn't ours). Faces on earlier runs' frames, washed-out pink to maroon at dawn, measured
+  +15..+77 (hue 144-167 or 5); backs -16..-5. All of it on `stop_sign_frames` observations of the sign in a row.
+  "Stop sign ahead." Once per sign, and not again within `stop_sign_repeat_s`.
 
 Both are fed by `WorldState.on_perception` and tested on their own.
 """
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import cv2
 import numpy as np
 
 from core.config import AutoAlertsConfig
@@ -32,16 +37,26 @@ MIN_SIGN_ASPECT, MAX_SIGN_ASPECT = 0.65, 1.5  # width / height of an octagon's b
 
 
 def face_redness(image: np.ndarray, box: tuple[float, float, float, float]) -> float:
-    """How much redder than green the middle of a sign's box is (median R - G, 0-255 scale; BGR image). A stop
-    sign's face is red (pink when washed out, maroon at dawn: still red above green); its back is grey (about 0)."""
+    """How much redder than green the middle of a sign's box is (median R - G, 0-255 scale; BGR image), or 0 if its
+    colored pixels aren't red to magenta (hue <= 10 or >= 135 of 180). A stop sign's face is red (pink when washed
+    out, maroon or purple-ish at dawn: still red above green); its back is grey (about 0; orange-ish in warm
+    light)."""
     h, w = image.shape[:2]
     bw, bh = box[2] - box[0], box[3] - box[1]
     x1, y1 = max(0, int(box[0] + bw / 5)), max(0, int(box[1] + bh / 5))  # the middle 60 %: no sky or pole
     x2, y2 = min(w, round(box[2] - bw / 5)), min(h, round(box[3] - bh / 5))
     if x2 - x1 < 2 or y2 - y1 < 2:
         return 0.0
-    inner = image[y1:y2, x1:x2].astype(np.int16)
-    return float(np.median(inner[..., 2] - inner[..., 1]))
+    inner = np.ascontiguousarray(image[y1:y2, x1:x2])
+    hsv = cv2.cvtColor(inner, cv2.COLOR_BGR2HSV)
+    colored = hsv[..., 1] >= 25
+    if not colored.any():
+        return 0.0
+    hue = float(np.median(hsv[..., 0][colored]))
+    if 10.0 < hue < 135.0:
+        return 0.0
+    signed = inner.astype(np.int16)
+    return float(np.median(signed[..., 2] - signed[..., 1]))
 
 
 class CarAheadWatch:
@@ -49,6 +64,7 @@ class CarAheadWatch:
 
     def __init__(self, cfg: AutoAlertsConfig) -> None:
         self.cfg = cfg
+        self._last_red_t: float | None = None  # our light last read red or yellow (kept across stops: the approach)
         self.reset()
 
     def reset(self) -> None:
@@ -57,7 +73,6 @@ class CarAheadWatch:
         self._tallest = 0.0  # the lead car's biggest box height while we waited (px)
         self._moving_since: float | None = None
         self._fired = False
-        self._red_seen = False  # our light read red or yellow during this stop
 
     def update(
         self,
@@ -71,11 +86,15 @@ class CarAheadWatch:
         """One frame. `lead`: (track id, box height px, since when it has been stopped or None while it moves) of
         the car ahead in our lane, or None; `red_light`: our light reads red or yellow now. True when the alert is
         due (once per stop)."""
-        if not stopped or not confident or stopped_since is None:
+        if red_light:
+            self._last_red_t = t
+        if not stopped:
             self.reset()
             return False
-        self._red_seen = self._red_seen or red_light
-        if self._fired or self._red_seen:
+        if not confident or stopped_since is None:
+            return False  # ego motion can't tell this frame: hold (don't forget the red, don't start over)
+        red = self._last_red_t
+        if self._fired or (red is not None and red >= stopped_since - self.cfg.car_ahead_red_memory_s):
             return False
         wait = self.cfg.car_ahead_wait_s
         if lead is not None and lead[0] != self._track and self._moving_since is None:
@@ -89,6 +108,8 @@ class CarAheadWatch:
         if self._track is None:
             return False
         if lead is not None and lead[0] == self._track:
+            if lead[2] is not None and self._moving_since is not None:
+                return False  # its box shrank, but the motion tracker still sees it standing: not yet
             height = lead[1]
             if height > self._tallest:
                 self._tallest = height
@@ -114,6 +135,7 @@ class StopSignWatch:
         """Forget announced signs (new segment)."""
         self._announced: set[int] = set()
         self._last: float | None = None
+        self._passes: dict[int, int] = {}  # track id -> observations in a row that passed every check
 
     def update(
         self,
@@ -128,7 +150,10 @@ class StopSignWatch:
         height, width = image.shape[:2]
         fast_enough = speed_mps >= cfg.stop_sign_min_speed_mps if speed_mps is not None else moving
         if not fast_enough or width <= 0 or height <= 0:
+            self._passes.clear()
             return None
+        passes: dict[int, int] = {}
+        due: Track | None = None
         for sign in signs:
             if sign.track_id in self._announced:
                 continue
@@ -138,6 +163,12 @@ class StopSignWatch:
                 continue  # a sign with its pole, a sliver: not a clear view of the face
             if face_redness(image, sign.box) < cfg.stop_sign_min_redness:
                 continue  # the back of a sign (grey), facing the cross street
+            passes[sign.track_id] = self._passes.get(sign.track_id, 0) + 1
+            if due is None and passes[sign.track_id] >= cfg.stop_sign_frames:
+                due = sign
+        self._passes = passes  # (a sign that failed or wasn't seen this frame starts over)
+        if due is not None:
+            sign = due
             self._announced.add(sign.track_id)
             if len(self._announced) > 200:
                 self._announced = {sign.track_id}

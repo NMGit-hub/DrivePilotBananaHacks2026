@@ -61,6 +61,7 @@ HOME_WORDS = {"home", "my home", "my house", "the house"}
 EXIT_TYPES = {"off ramp", "fork", "roundabout", "rotary", "roundabout turn"}
 # Steps that aren't a choice of lane by themselves (unless Mapbox gives lane data for them).
 NOT_LANE_MANEUVERS = {"depart", "new name", "continue", "notification", "exit roundabout", "exit rotary", "arrive"}
+TURN_PROMPT_FLOOR_M = 20.0  # the last turn-by-turn prompt is still said this close to the maneuver
 # Steps that need no action from the driver: no turn-by-turn prompt.
 NOT_TURN_MANEUVERS = {"depart", "new name", "continue", "notification", "exit roundabout", "exit rotary"}
 REROUTED_RECENTLY_S = 60.0  # "did I miss my turn?" → "Yes, so I've rerouted." within this long of a reroute
@@ -426,9 +427,12 @@ class NavHandler:
         step, distance = progress.next_step, progress.to_next_m
         if step is None or distance is None or step.is_roundabout or step.maneuver in NOT_TURN_MANEUVERS:
             return []
-        for threshold in sorted(self.cfg.turn_prompts_m):
-            # Said once as we come within the threshold (not if we were already much closer when it became next).
-            if threshold * 0.5 <= distance <= threshold:
+        thresholds = sorted(self.cfg.turn_prompts_m)
+        for k, threshold in enumerate(thresholds):
+            # Said once as we come within the threshold (not if we were already much closer when it became next),
+            # except the last one: a maneuver right after another (or after a GPS gap) still gets it, down to 20 m.
+            low = TURN_PROMPT_FLOOR_M if k == 0 else threshold * 0.5
+            if low <= distance <= threshold:
                 if self._once("turn", step.index, threshold):
                     return [("nav_turn", f"{_cap(in_distance(distance))}, {maneuver_phrase(step)}.")]
                 break

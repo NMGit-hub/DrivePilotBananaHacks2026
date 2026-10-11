@@ -6,24 +6,27 @@
 - `WrongLaneWatch`: navigating, lane detection puts us in a lane that doesn't work for the next maneuver
   (`ui.overlay.lane_target`: the route's lane data and lane detection agree on the lane count) for
   `wrong_lane_hold_s`, within `wrong_lane_within_m` of it: "You're in the wrong lane for your turn. Move one lane
-  left." Said once per maneuver, once more if we're still in a wrong lane within `wrong_lane_repeat_m`; after a
-  warning, moving into a good lane gets "That's the right lane." (once).
+  left." Said once per maneuver (of this route: a reroute's steps are new), once more if we're still in a wrong
+  lane within `wrong_lane_repeat_m`; after a warning, `wrong_lane_hold_s` in a good lane gets "That's the right
+  lane." (once; one frame read mid lane change isn't enough).
 - `SpeedingWatch`: GPS speed over the posted limit the sign detector read (not a school limit: those depend on
-  the hours; not one older than `speeding_limit_max_age_s`) by `speeding_margin_mph` for `speeding_hold_s`:
-  "You're over the limit. It's 30 here." Once per limit, again only after we slowed to the limit for
-  `speeding_repeat_s` or a new limit is read.
+  the hours; not one older than `speeding_limit_max_age_s`, nor one read before we turned onto another road:
+  heading `speeding_turn_deg` away for 3 s) by `speeding_margin_mph` for `speeding_hold_s`: "You're over the
+  limit. It's 30 here." Once per limit, again only after we slowed to the limit for `speeding_repeat_s` or a new
+  limit is read.
 """
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from typing import Any
 
 from core.config import AutoAlertsConfig
 
 AUTO_NAMES = ("light_green", "car_ahead", "turns", "wrong_lane", "speeding", "stop_sign")
-LIGHT_GREEN_AUTO = "Light's green."
+LIGHT_GREEN_AUTO = "Light's green. Check before you go."  # (PLAN.md: never a bare "go")
 CAR_AHEAD_MOVING = "The car ahead is moving."
 STOP_SIGN_AHEAD = "Stop sign ahead."
 RIGHT_LANE = "That's the right lane."
@@ -92,27 +95,34 @@ class WrongLaneWatch:
 
     def __init__(self, cfg: AutoAlertsConfig) -> None:
         self.cfg = cfg
-        self._step: int | None = None
+        self._step: Hashable | None = None
         self._wrong_since: float | None = None
+        self._ours_since: float | None = None
         self._warned = 0  # warnings given for this maneuver
         self._first_at_m: float | None = None  # distance to the maneuver at the first warning
         self._confirmed = True  # "That's the right lane." said (or not owed)
 
-    def update(self, t: float, target: dict[str, Any] | None, step: int | None, to_next_m: float | None) -> str | None:
+    def update(
+        self, t: float, target: dict[str, Any] | None, step: Hashable | None, to_next_m: float | None
+    ) -> str | None:
         """One tick. `target`: `lane_target`'s answer ({"lane": "ours"} or {"lane": side, "moves": n}, None when it
-        can't tell); `step`: the next maneuver's index; `to_next_m`: our distance to it. What to say, or None."""
+        can't tell); `step`: the next maneuver, as a key unique to its route (a reroute's step 3 isn't the old step
+        3); `to_next_m`: our distance to it. What to say, or None."""
         if target is None or step is None or to_next_m is None:
-            self._wrong_since = None
+            self._wrong_since = self._ours_since = None
             return None
         if step != self._step:
             self._step, self._warned, self._first_at_m, self._confirmed = step, 0, None, True
-            self._wrong_since = None
+            self._wrong_since = self._ours_since = None
         if target.get("lane") == "ours":
             self._wrong_since = None
-            if not self._confirmed:
+            if self._ours_since is None:
+                self._ours_since = t
+            if not self._confirmed and t - self._ours_since >= self.cfg.wrong_lane_hold_s:
                 self._confirmed = True
                 return RIGHT_LANE
             return None
+        self._ours_since = None
         side, moves = str(target.get("lane")), int(target.get("moves") or 1)
         if self._wrong_since is None:
             self._wrong_since = t
@@ -139,16 +149,33 @@ class SpeedingWatch:
         self._over_since: float | None = None
         self._slow_since: float | None = None
         self._said = False
+        self._limit_t: float | None = None
+        self._heading: float | None = None  # our heading when the limit was read (or first seen with a heading)
+        self._turned_since: float | None = None
+        self._forgotten = False  # we turned onto another road since the limit was read
 
-    def update(self, t: float, speed_mps: float | None, limit: int | None, limit_t: float | None) -> str | None:
-        """One tick: our GPS speed, the last limit the sign detector read and when (media time). What to say, or
-        None."""
+    def update(
+        self,
+        t: float,
+        speed_mps: float | None,
+        limit: int | None,
+        limit_t: float | None,
+        heading: float | None = None,
+    ) -> str | None:
+        """One tick: our GPS speed and heading (degrees), the last limit the sign detector read and when (media
+        time). What to say, or None."""
         cfg = self.cfg
         if limit is None or limit_t is None or t - limit_t > cfg.speeding_limit_max_age_s:
             self._limit, self._over_since, self._slow_since, self._said = None, None, None, False
             return None
-        if limit != self._limit:
-            self._limit, self._over_since, self._slow_since, self._said = limit, None, None, False
+        if limit != self._limit or limit_t != self._limit_t:  # a sign was read: a fresh limit for this road
+            if limit != self._limit:
+                self._over_since, self._slow_since, self._said = None, None, False
+            self._limit, self._limit_t = limit, limit_t
+            self._heading, self._turned_since, self._forgotten = heading, None, False
+        if self._turned_onto_another_road(t, heading):
+            self._over_since = None
+            return None
         if speed_mps is None:
             self._over_since = None
             return None
@@ -168,3 +195,21 @@ class SpeedingWatch:
             if self._said and t - self._slow_since >= cfg.speeding_repeat_s:
                 self._said = False
         return None
+
+    def _turned_onto_another_road(self, t: float, heading: float | None) -> bool:
+        if self._forgotten:
+            return True
+        if heading is None:
+            return False
+        if self._heading is None:
+            self._heading = heading
+            return False
+        off = abs((heading - self._heading + 180.0) % 360.0 - 180.0)
+        if off < self.cfg.speeding_turn_deg:
+            self._turned_since = None
+            return False
+        if self._turned_since is None:
+            self._turned_since = t
+        if t - self._turned_since >= 3.0:
+            self._forgotten = True
+        return self._forgotten

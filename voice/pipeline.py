@@ -20,10 +20,13 @@ Without the full wake word (`voice.wake_mode` "hey" or "none", switchable while 
 itself starts a question: a second VAD watches the idle microphone, and `open_mic.onset_s` of speech starts the
 endpointer (with a little pre-roll, no wake-phrase tail to wait out). Whisper's transcript then decides whether it
 was meant for us: "hey" mode needs it to start with "hey" (a lone "hey" opens the listening window like the wake
-word, and the question can follow), "none" mode takes questions and requests (`router.meant_for_us`). Anything
-else is dropped silently (a passenger talking). While DrivePilot speaks, and for `echo_tail_s` after, speech
-doesn't start a question (its own voice comes back through the microphone). The "Hey DrivePilot" model keeps
-running in every mode, so "Hey DrivePilot, stop" still interrupts an answer.
+word, and the question can follow), "none" mode takes questions and requests (`router.meant_for_us`; "hey" mode
+applies it too, after the "hey"). Anything else is dropped silently (a passenger talking), and so is an empty
+transcript (noise, a cough): only a lone "hey" opens a listening window. While DrivePilot speaks, and for
+`echo_tail_s` after, speech doesn't start a question (its own voice comes back through the microphone); the
+microphone's backlog is counted, so audio of our own voice read late still counts as ours, and a failing
+`speaking` check counts as talking. The "Hey DrivePilot" model keeps running in every mode, so "Hey DrivePilot,
+stop" still interrupts an answer.
 """
 
 from __future__ import annotations
@@ -109,6 +112,9 @@ class VoicePipeline:
         self._onset_vad = onset_vad  # created on first use (only the open modes need it)
         self._onset_run = 0  # VAD frames of speech in a row while idle
         self._last_spoke_t = -1e9  # stream time DrivePilot was last heard talking
+        self.backlog_s = (
+            0.0  # audio captured but not fed yet (set by the live loop): the newest audio is that far ahead
+        )
         self._open = False  # the question being collected was started by speech, not the wake word
         self.open_starts = 0
         self.ignored = 0  # open-mode transcripts that weren't meant for us
@@ -201,13 +207,14 @@ class VoicePipeline:
             talking = self.speaking is not None and self.speaking()
         except Exception:
             log.exception("speaking check failed")
-            talking = False
+            talking = True  # (fail closed: never answer what may be our own voice)
         if talking:
-            self._last_spoke_t = t
+            # Talking now, i.e. in the newest audio captured, which is `backlog_s` ahead of this chunk.
+            self._last_spoke_t = max(self._last_spoke_t, t + self.backlog_s)
         if self._onset_vad is None:
             self._onset_vad = StreamingVad()
         probs = self._onset_vad.process(chunk)  # (fed while DrivePilot talks too: its state follows the audio)
-        if talking or t - self._last_spoke_t < self.cfg.open_mic.echo_tail_s:
+        if talking or t < self._last_spoke_t + self.cfg.open_mic.echo_tail_s:
             self._onset_run = 0
             return False
         for prob in probs:
@@ -386,6 +393,11 @@ class VoicePipeline:
                 open_,
             )
             log.info("heard", text=text, stt_ms=round(stt_ms), speculative=speculative, reason=event.reason, open=open_)
+            if not text and open_ and not called:
+                # Noise or a cough, and nobody called us: no listening window. (Decided before the held audio can be
+                # marked for resuming: the feeding thread picks that up at once.)
+                release()
+                return
             if not text:
                 with self._lock:
                     resume = superseded = False
@@ -416,12 +428,16 @@ class VoicePipeline:
 
     def _addressed(self, text: str, resumed: bool) -> str | None:
         """An open-mode transcript: the question meant for us, "" for a lone "hey", or None if it wasn't for us."""
-        if resumed:
-            return text  # the question after a lone "hey"
+        strict = self.cfg.open_mic.only_questions
+        if resumed:  # the question after a lone "hey": the driver called us (but "Say." + a remark isn't a question)
+            return text if not strict or meant_for_us(text, called=True) else None
         if self._mode == "hey":
-            return strip_hey(text)
+            rest = strip_hey(text)
+            if not rest:
+                return rest  # not for us (None), or a lone "hey" ("")
+            return rest if not strict or meant_for_us(rest, called=True) else None
         if self._mode == "none":
-            return text if not self.cfg.open_mic.only_questions or meant_for_us(text) else None
+            return text if not strict or meant_for_us(text) else None
         return None  # switched back to the wake word meanwhile
 
     def _nothing(self, reason: str) -> None:
@@ -461,6 +477,7 @@ class VoicePipeline:
     def _run(self, mic: MicStream) -> None:
         while not self._stop.is_set():
             chunk = mic.read(timeout=0.5)
+            self.backlog_s = mic.backlog_s
             if chunk is not None:
                 try:
                     self.feed(chunk)

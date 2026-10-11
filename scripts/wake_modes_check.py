@@ -53,11 +53,15 @@ CASES = [
     Case("hey", ("Hey Drive Pilot, can I go?",), "can i go"),
     Case("hey", ("What does that sign say?",), None),
     Case("hey", ("We're almost there, I think.",), None),
+    Case("hey", ("Hey, I'm so hungry.",), None),
+    Case("hey", ("Hey there, which lane should I be in?",), "which lane should i be in"),
     Case("none", ("What does that sign say?",), "what does that sign say"),
     Case("none", ("Is it my turn?",), "is it my turn"),
     Case("none", ("Tell me when the light is green.",), "tell me when the light is green"),
     Case("none", ("I love this song.",), None),
     Case("none", ("We're almost there, I think.",), None),
+    Case("none", ("We're going to grandma's house later.",), None),
+    Case("none", ("Never mind.",), None),
     Case("hey_drivepilot", ("What does that sign say?",), None),
     Case("hey_drivepilot", ("Hey Drive Pilot, what does that sign say?",), "what does that sign say"),
 ]
@@ -75,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--data", type=Path, default=REPO_ROOT / "data", help="folder with wakeword/ test data")
     parser.add_argument("--snr", type=float, default=10.0, help="car-noise SNR (dB) for the noisy condition")
-    parser.add_argument("--noise-minutes", type=float, default=2.0, help="car noise alone, \"none\" mode")
+    parser.add_argument("--noise-minutes", type=float, default=2.0, help='car noise alone, "none" mode')
     args = parser.parse_args(argv)
 
     setup_logging("WARNING")

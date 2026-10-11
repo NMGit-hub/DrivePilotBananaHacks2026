@@ -654,7 +654,7 @@ function showRecent() {
   recentBox.replaceChildren(...loadRecent().map(place => {
     const b = document.createElement("button");
     b.type = "button"; b.className = "chip"; b.textContent = place.name; b.title = place.address || place.name;
-    b.addEventListener("click", () => go(place.name, place));
+    b.addEventListener("click", () => { b.blur(); go(place.name, place); });
     return b;
   }));
 }
@@ -724,7 +724,7 @@ async function go(query, place) {
   const r = await post("/api/destination", place ? {query, place} : {query});
   if (!r || !r.ok) note("Navigation isn't available right now.");
 }
-$("end-route").addEventListener("click", () => post("/api/route", {action: "cancel"}));
+$("end-route").addEventListener("click", ev => { post("/api/route", {action: "cancel"}); ev.currentTarget.blur(); });
 
 function showDrive(s) {
   const route = s.route;
@@ -756,6 +756,7 @@ const AUTO_LABELS = {
   stop_sign: "\"Stop sign ahead\"",
 };
 const autoBox = $("auto");
+const switchedAt = {};
 function showSettings(s) {
   const mode = s.wake_mode;
   document.querySelectorAll("#wake button").forEach(b => {
@@ -774,15 +775,19 @@ function showSettings(s) {
       label.className = "switch";
       box = document.createElement("input");
       box.type = "checkbox"; box.dataset.name = name;
-      box.addEventListener("change", () => post("/api/alerts", {name, on: box.checked}));
+      box.addEventListener("change", () => {
+        switchedAt[name] = Date.now(); // a status already on its way still has the old value: don't flip it back
+        post("/api/alerts", {name, on: box.checked});
+        box.blur(); // (Space pauses again, instead of toggling this switch)
+      });
       label.append(box, document.createTextNode(AUTO_LABELS[name]));
       autoBox.appendChild(label);
     }
-    if (document.activeElement !== box && name in auto) box.checked = !!auto[name];
+    if (name in auto && Date.now() - (switchedAt[name] || 0) > 1500) box.checked = !!auto[name];
   });
 }
 document.querySelectorAll("#wake button").forEach(b =>
-  b.addEventListener("click", () => post("/api/wake", {mode: b.dataset.mode})));
+  b.addEventListener("click", () => { post("/api/wake", {mode: b.dataset.mode}); b.blur(); }));
 
 $("ask").addEventListener("submit", ev => {
   ev.preventDefault();
@@ -798,7 +803,7 @@ document.addEventListener("keydown", ev => {
     if (ev.key === "Escape") { input.value = ""; input.blur(); }
     return;
   }
-  if (ev.target instanceof HTMLInputElement || ev.target instanceof HTMLButtonElement) return;
+  if (ev.target instanceof HTMLInputElement && ev.target.type !== "checkbox") return; // typing somewhere
   if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
   if (ev.code === "Space") { ev.preventDefault(); post("/api/control", {action: "pause"}); }
   else if (ev.key === "ArrowLeft") { ev.preventDefault(); post("/api/control", {action: "seek", delta_s: -5}); }

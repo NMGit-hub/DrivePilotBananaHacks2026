@@ -80,10 +80,16 @@ def _tokens(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9']+", text.lower().replace("'s", "")) if w not in _STOPWORDS}
 
 
-def _match_score(query: str, place: Place, near: LatLon | None) -> float:
-    """How well a place's name matches the words said (or typed), weighed against distance from us."""
+def _match_score(query: str, place: Place, near: LatLon | None, typing: bool = False) -> float:
+    """How well a place's name matches the words said (or typed), weighed against distance from us. `typing`: the
+    last word may be unfinished ("cost" for Costco), so a name word it starts counts as a match."""
     spoken = _tokens(query)
     name = _tokens(place.name)
+    if typing and spoken:
+        last = re.findall(r"[a-z0-9']+", query.lower().replace("'s", ""))[-1:]
+        partial = last[0] if last else ""
+        if partial and partial not in name and any(word.startswith(partial) for word in name):
+            spoken = (spoken - {partial}) | {next(w for w in sorted(name) if w.startswith(partial))}
     overlap = len(spoken & name) / max(len(spoken), 1)  # share of the spoken words in the name
     extra = len(name - spoken) / max(len(name), 1)  # words in the name nobody said
     value = overlap - 0.2 * extra + (0.5 if name == spoken else 0.0)
@@ -96,7 +102,7 @@ def _match_score(query: str, place: Place, near: LatLon | None) -> float:
 
 def rank_places(query: str, candidates: list[Place], near: LatLon | None) -> list[Place]:
     """Candidates best match first (a stable sort: the services' own order breaks ties)."""
-    return sorted(candidates, key=lambda place: -_match_score(query, place, near))
+    return sorted(candidates, key=lambda place: -_match_score(query, place, near, typing=True))
 
 
 def pick_place(query: str, candidates: list[Place], near: LatLon | None) -> Place:
