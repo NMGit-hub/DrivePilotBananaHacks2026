@@ -222,7 +222,10 @@ def test_snapshot_polygon_and_context() -> None:
     assert min(xs) >= 0.0 and max(xs) <= 1.0 and min(ys) > 0.5 and max(ys) <= 1.0  # below the horizon
     roles = [line.role for line in snap.lines]
     assert roles.count("left") == 1 and roles.count("right") == 1
-    assert tracker.context() == ["Lane detection: 3 lanes in our direction; we are in lane 2 from the left."]
+    assert tracker.context() == [
+        "Lane detection: we are in lane 2 counted from the left edge of our direction (1 lane(s) to our left). "
+        "It can't count the lanes to our right: count those in the image."
+    ]  # (not the count: lanes to our right are often undercounted)
 
 
 # --------------------------------------------------------------------------------------------- drift

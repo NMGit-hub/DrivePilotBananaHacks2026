@@ -934,18 +934,17 @@ class LaneTracker:
             return self._snapshot
 
     def context(self) -> list[str]:
-        """Lines for the vision model's prompt: what lane detection sees (only what is clear)."""
+        """Lines for the vision model's prompt: what lane detection is sure of. Only our lane counted from the left:
+        on the labeled highway frames it was right 55 times of 56, while the lanes to our right (and so the total)
+        were undercounted (traffic hides the right edge; 17 of 24 counts right), and a count in the prompt is
+        repeated by the model ("two lanes" where there were three)."""
         snap = self.snapshot()
-        if snap.lane_count is not None and snap.lane_index is not None:
-            return [
-                f"Lane detection: {snap.lane_count} lanes in our direction; "
-                f"we are in lane {snap.lane_index} from the left."
-            ]
-        if snap.lanes_left is not None:
-            return [f"Lane detection: {snap.lanes_left} lane(s) to our left (the count to the right is unclear)."]
-        if snap.lanes_right is not None:
-            return [f"Lane detection: {snap.lanes_right} lane(s) to our right (the count to the left is unclear)."]
-        return []
+        if snap.lanes_left is None or snap.lane_index is None:
+            return []
+        return [
+            f"Lane detection: we are in lane {snap.lane_index} counted from the left edge of our direction "
+            f"({snap.lanes_left} lane(s) to our left). It can't count the lanes to our right: count those in the image."
+        ]
 
 
 __all__ = [

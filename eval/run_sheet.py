@@ -35,6 +35,7 @@ import re
 import statistics
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -52,10 +53,14 @@ from capture.file_source import FileSource  # noqa: E402
 from core.config import AppConfig, load_config  # noqa: E402
 from core.logging_setup import get_logger, setup_logging  # noqa: E402
 from core.runlog import RunRecorder  # noqa: E402
+from core.types import Frame  # noqa: E402
 from perception.detector import Detector  # noqa: E402
 from perception.ego_motion import EgoMotionEstimator  # noqa: E402
+from perception.lanes import LaneMasks  # noqa: E402
 from perception.pipeline import PerceptionResult, PerceptionWorker  # noqa: E402
+from state.lanes import LaneTracker  # noqa: E402
 from state.memory import SceneMemory  # noqa: E402
+from state.pedestrians import DrivableArea  # noqa: E402
 from state.world import WorldState  # noqa: E402
 
 log = get_logger("eval.sheet")
@@ -216,19 +221,26 @@ def run_clip(
     tts: Any,
     voice: SpokenQuestions | None,
     out_dir: Path | None = None,
+    lane_model: Callable[[Frame], LaneMasks] | None = None,
 ) -> None:
     """Play the clip frame by frame and answer its rows at their times (`out_dir`: where to save the marked
-    image of answers that pointed at an object)."""
+    image of answers that pointed at an object). `lane_model`: YOLOPv2, run as the app's lanes thread does (at
+    lanes.fps, here in lock-step): lane detection's context for the vision model, the drivable area for
+    pedestrian warnings."""
     speaker = TextSpeaker()
     world_holder: list[WorldState] = []
     memory = SceneMemory(cfg.memory)  # as in the app: "what was that sign?" and numbered objects
     latest_tracks: list[Any] = [()]
+    lanes = LaneTracker(cfg.lanes, cfg.effective_hfov_deg)
+    drivable: list[DrivableArea | None] = [None]
+    lane_t = [-1e9]
     tags: list[str] = []
     scene = (
         SceneHandler(
             cfg,
             vision,
             lambda n, s: world_holder[0].recent_frames(n, s),
+            lambda: lanes.context() if lanes.snapshot().valid else [],
             tracks=lambda: latest_tracks[0],
             memory=memory,
             on_highlight=lambda track_id: tags.append(f"track {track_id}"),
@@ -239,11 +251,17 @@ def run_clip(
     )
     assistant = Assistant(cfg, lambda: world_holder[0].snapshot(), speaker, model=scene)
     assistant.on_highlight = lambda track_id: tags.append(f"track {track_id}")
-    world = WorldState(cfg, on_event=assistant.on_world_event)
+    world = WorldState(cfg, on_event=assistant.on_world_event, drivable_source=lambda: drivable[0])
     world_holder.append(world)
     pending = sorted(rows, key=lambda r: r.time_s)
 
     def on_result(result: PerceptionResult) -> None:
+        frame = result.frame
+        if lane_model is not None and frame.t - lane_t[0] >= 1.0 / cfg.lanes.fps - 1e-6:
+            lane_t[0] = frame.t
+            masks = lane_model(frame)
+            lanes.update(frame.t, masks, None)
+            drivable[0] = DrivableArea(masks.t, masks.drivable)
         world.on_perception(result)
         latest_tracks[0] = tuple(result.tracks)
         memory.add(result.frame, result.tracks)
@@ -442,6 +460,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--voice-name", default="en_US-joe-medium")
     parser.add_argument("--previous", type=Path, default=None, help="An earlier results.csv: keep its manual verdicts.")
     parser.add_argument("--no-judge", action="store_true")
+    parser.add_argument("--no-lanes", action="store_true", help="Without YOLOPv2 lane detection (V2-M5).")
     parser.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument("--hfov", type=float, default=60.0, help="Field of view of the clips (BDD100K: ~60°).")
     args = parser.parse_args(argv)
@@ -481,13 +500,18 @@ def main(argv: list[str] | None = None) -> int:
             tts = None
         voice = SpokenQuestions(cfg, args.voice_name) if args.voice else None
         detector = Detector(cfg.perception, cfg.root)
+        lane_model = None
+        if cfg.lanes.enabled and cfg.resolve_path(cfg.lanes.weights).is_file() and not args.no_lanes:
+            from perception.lanes import LaneModel
+
+            lane_model = LaneModel(cfg.lanes, cfg.root)
         clips: dict[str, list[Row]] = {}
         for row in rows:
             clips.setdefault(row.clip, []).append(row)
         for name, clip_rows in clips.items():
             path = find_clip(name)
             print(f"{path.name}: {len(clip_rows)} question(s)", flush=True)
-            run_clip(cfg, path, clip_rows, detector, vision, tts, voice, out_dir=recorder.dir)
+            run_clip(cfg, path, clip_rows, detector, vision, tts, voice, out_dir=recorder.dir, lane_model=lane_model)
         judge_model = None if args.no_judge else vision
         for row in rows:
             judge(judge_model, row, cfg.vision.temperature)

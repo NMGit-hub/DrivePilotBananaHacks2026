@@ -4,7 +4,50 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
-### V2 (in progress, 2026-10-10): 5A, V2-M0 done; V2-M1 parking measured (below the bar); V2-M2, M4 built
+### V2 (in progress, 2026-10-10): 5A, V2-M0 done; V2-M1 parking measured (below the bar); V2-M2, M3, M4, M5 built
+- **V2-M5 YOLOPv2 lanes and drift warning** (2026-10-10 evening; part 1 by an agent, finished, reviewed and integrated
+  here). `perception/lanes.py`: the official YOLOPv2 TorchScript in FP16 on its own CUDA stream, the forward pass
+  replayed as a CUDA graph (captured thread-locally: in the default global mode the detector thread's GPU work broke
+  the capture in the app and lost one of its frames; the app now also waits for the sign/lane models before
+  perception starts), 12 fps on the newest frame (`perception/frame_worker.py`, shared with the sign thread).
+  `state/lanes.py`: lane lines as parallel curves in the top-down view, horizon from the lines' vanishing point,
+  metric scale from our lane's width; lane count and our lane counted against the drivable area (None when not
+  clear). **Lane index on 65 hand-labeled highway frames (11 BDD clips): right on 55 of 56 answered (98 %),
+  answered 56/65 (86 % of all frames right: bar 85 %); lane count 17/24 answered** (it undercounts lanes on the
+  right, so lane guidance needs the count to match the route's, else falls back to the vision model). Found and
+  fixed by the new tests (`tests/test_lanes.py`, rendered masks) and the clips: the heading/curvature search was
+  biased by histogram bin phase (lines 0.15 m off; now scored on smoothed histograms with a wider fine search);
+  the vanishing-row vote was won by a curved line's own segments (0.67 instead of 0.47 on a 1250 m curve; now both
+  sides' lines must meet) and a curvy start locked in a wrong horizon (an outlier gate; now a running median).
+  **Drift** (`scripts/eval_lanes.py drift`, the 11 highway clips with their GPS, 5.7 min above 25 mph): measured
+  from the absolute offset it gave **10 false alerts**: the camera's mount + the driver's habit put the measured
+  offset at -0.5..+0.2 m. Now drift is measured from our usual place (median offset over 2 min at speed, after 8 s
+  of it), must be steady (toward the line in 80 % of 2.5 s) and not a lane change starting (a 0.6 s speed check:
+  the 1.5 s fit lags a quick move): **2 alerts left at the chosen 0.2 m gap, both borderline, real slow moves**
+  (night, easing 0.8 m right while a car passes close on the left; after a turn-lane split on a curve, ending near
+  the yellow line); 3 at 0.3 m. **Virtual drift** (`eval_lanes.py virtual`: a straight clip warped into a slow
+  sideways slide, the lane model run on the warped frames; 3 clips, both sides, at the 0.2 m gap): **full lane
+  changes (0.8 and 1.2 m/s) 12/12 quiet; slow drifts (0.12-0.3 m/s) 13/18 alerted within 1 s of the expected time,
+  3 late (1.4-3.2 s), 2 missed** (552991d2 leftward: the car started 0.4 m right of its usual place, so the slide had
+  to reach ~1.1 m, where the warped frames distort; a jump in the measured position then reads as a lane change
+  starting). At 0.1 m: 2 missed + 3 late; at 0.3 m: 17/18 on time but 3 alerts on the real clips. So the plan's bars
+  (0 alerts on straight driving / lane changes; within 1 s on the virtual clip) are not fully met: see Known issues.
+  On the V2 page: our lane (lines with a dark halo: they sit on the road's own paint), the other lines dashed
+  gray, the drift line red and that screen edge pulsing (checked in the browser). Lane detection's count/lane goes
+  to the vision prompt and to lane guidance (`answers/lanes.py: CameraLaneReader`). Drift warnings are SAFETY
+  (spoken in quiet mode, pre-rendered).
+- **Pedestrian warnings use YOLOPv2's drivable area** (V2-M5): someone counts as in our path only if >= 30 % of the
+  ground at their feet is road (a sidewalk isn't; stepping off it still warns as "entering"; masks <= 0.3 s old).
+  `scripts/eval_pedestrians.py --road` on cached masks: **crawl clips 12 -> 8 warnings** (removed: a man inside a
+  store seen through glass at night, a glare blob, a hand after the phone was taken off its mount, and a person
+  between parked cars at an aisle edge; one more became "stepping into the road"), **lot clips 6 -> 3** (removed
+  three borderline ones: a man loading his trunk at the aisle edge, a worker beside a truck at the clip's start, a
+  man by a car at a gas station), **dev clips 0 -> 0**; no true warning lost among those looked at.
+- **Crawl clips, labels half B** (`eval/parking_labels_crawl_b.yaml`, a labeling subagent, saved clip by clip: 10/16
+  usable, 9 clear + 5 ambiguous open spots, 35 look-alikes): parking tracker **0/6 clear unrestricted spots found,
+  2 false spot events in 5.2 min**, lot offer in 8/10 lot clips, 4 false pull-outs; the model check rejected all 5
+  spot events of both crawl halves (all 5 false). Same picture as half A.
+- **Sign alerts were spoken in quiet mode** (INFO alerts bypassed the alert engine's quiet check): fixed, tested.
 - **V2-M1 parking on real footage** (`scripts/cache_perception.py` caches tracks + ego motion per clip once;
   `scripts/eval_parking.py` replays `ParkingTracker` with GPS speed and scores it against `eval/parking_labels.yaml`,
   `--sweep` for tuning). First run: 0 spot events. Fixed: the self-measured scale ran to its 2.5x clamp in sparse lots
@@ -453,6 +496,14 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
+- **Drift warning (V2-M5) below its bars on BDD100K footage:** 2 alerts in 5.7 min of real highway driving, both
+  real slow moves toward a line but not drifts a driver would call one (bar: 0); on the virtual-drift clips 13/18
+  slow drifts on time, 3 late, 2 missed (bar: within 1 s). Learning "our usual place in the lane" needs 8 s at speed
+  and absorbs part of a long drift in a 40 s clip (the late ones); a noisy measured position can suppress a real
+  drift as a "lane change starting" (the missed ones: the safe side). Tuned on 60° BDD dashcams only; recheck on the
+  phone's 114° view (PLAN: undistort or center crop) and our own drives. Drift warnings need GPS speed >= 25 mph.
+- **Lane count from lane detection is weaker than our lane's index** (17/24 vs 55/56 on labeled frames): it misses
+  lanes on the right; lane guidance only uses it when it matches the route's count.
 - **"Find me a parking spot" finds few spots on real footage: 1 of 30 labeled clear spots on BDD100K lots** (0.7
   false per 10 min; plan bar >= 70 % recall). Precise but rarely fires; a Claude Haiku scan was measured instead and
   is far worse on false alarms (see Done, V2-M1). Causes: fast through-aisle driving in the clips, parked rows not
@@ -463,11 +514,12 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   which 8 were drawn and looked at: 3 look right (people walking in the lot aisle ahead), 1 borderline (someone at a
   curb's edge), 4 false (two on unusable footage: sun glare and a dark interior shot; a windshield reflection; a man
   walking along a sidewalk beside parked cars). Dev clips stay at 0. False warnings are the safe mistake but they
-  interrupt; drivable-area knowledge (YOLOPv2) should remove the sidewalk case.
-- **Pedestrian alerts (V2-M3) have no drivable-area knowledge yet** (YOLOPv2, V2-M5): the path is a geometric
-  corridor from where we're heading, so people at the edge of a narrow aisle, by a pump island, or beyond a planter
-  we are about to turn around can be called "in our path" (3 borderline alerts on 29 lot clips), and a curb close to
-  our car isn't known. Turns are read from the frame homography (~1°/s off on straight roads, so gentle curves are
+  interrupt. **With the drivable area (lanes on): 8**; removed were the dark-interior one (a man inside a store seen
+  through its glass doors), the glare blob, a hand after the phone was taken off its mount, and a person between
+  parked cars at an aisle edge. Still there: the dashboard reflection on 2f4afe73 (it lies over the road).
+- **Pedestrian alerts (V2-M3): the path is a geometric corridor from where we're heading, gated by YOLOPv2's
+  drivable area when the lanes model runs** (V2-M5: removed 3 false + 4 borderline warnings on the lot and crawl
+  clips); with lanes off, people at the edge of a narrow aisle or by a pump island can be called "in our path". Turns are read from the frame homography (~1°/s off on straight roads, so gentle curves are
   only partly bent). Further limits: no prediction while turning hard (≥ 10°/s) or for boxes cut off at a frame edge;
   boxes cut off at a side edge never alert (on a 60° camera that hides someone within ~2.6 m of the bumper's
   corners; the phone's 114° lens sees them); the first ~1.5 s after a reset use the image centre as our heading
