@@ -184,7 +184,22 @@ speed limit); "what does the overhead sign say?" (too far) → nothing ✓; "can
   announcing them on one detection.
 
 ## Delivery
-PENDING
+Copied on 2026-10-10 ~21:50 PDT with `scripts/signs/export_engines.py --deliver` (it refuses a missing, stale or
+sidecar-less engine) to `C:\ClaudeProjects\DrivePilot_BananaHacks2026\models\signs\` (gitignored there):
+
+| File | Size | What |
+| --- | --- | --- |
+| `signs_yolo26s.pt` | 20.33 MB | detector weights (fine-tune `det_ft`, sha256 8db6751c2bd3...) |
+| `signs_yolo26s_736x1280_fp16.engine` | 215.10 MB | detector TensorRT FP16 engine |
+| `signs_yolo26s_736x1280_fp16.engine.json` | 253 B | sidecar: weights sha256, imgsz, TensorRT version |
+| `speed_value_cls.pt` | 3.23 MB | value classifier weights (`cls5`, sha256 0081abaf84ae...) |
+| `speed_value_cls_96x96_fp16.engine` | 4.73 MB | classifier TensorRT FP16 engine |
+| `speed_value_cls_96x96_fp16.engine.json` | 252 B | sidecar |
+
+TensorRT 11.4.0.106 (built in `.venv-trtbuild`, the same version as the app's `.venv`). Smoke-tested from the
+main checkout: `SignDetector` loads both engines (no fallback), passes the CUDA/FP16 checks and finds the two DO
+NOT ENTER signs on the school-zone dev clip at 25 s. `metrics.json` comes with the branch merge (tracked); the
+settings it was measured with (`value_views: 5`, `value_conf: 0.9`) are in the branch's `config.yaml`.
 
 ## Known issues / compromises
 - **Training labels are Claude pseudo-labels, not hand labels.** BDD100K boxes many signs by hand but not their
