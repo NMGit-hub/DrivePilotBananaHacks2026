@@ -10,9 +10,11 @@ to be in, which roundabout exit, what a sign means, whether you can park here.
   model (Claude Haiku by default; Gemini Flash or a local Ollama model via `config.yaml`) with the latest frames.
 - **Navigation:** Mapbox route + phone GPS for lane guidance, roundabout exits and route questions.
 - **V2 (in progress):** an overlay screen (car badges for the 4-way stop, the light's state, pedestrians, the
-  navigation banner with lanes, speed and speed limit), "what was that sign?" with the frame it answered from,
-  the object an answer is about pulsing on screen, "find me a parking spot", and the fine-tuned US sign detector
-  ("Speed limit is now 35."). Pedestrian alerts and YOLOPv2 lanes/drift are being built.
+  navigation banner with lanes, speed and speed limit, our lane), "what was that sign?" with the frame it answered
+  from, the object an answer is about pulsing on screen, "find me a parking spot", pedestrian and cyclist warnings
+  ("Pedestrian stepping into the road on your right."), YOLOPv2 lane detection (which lane we're in, for lane
+  guidance) with a drift warning ("Careful, you're drifting right." above 25 mph), and the fine-tuned US sign
+  detector ("Speed limit is now 35.").
 
 See [PLAN.md](PLAN.md) for the full design, [V2_BUILD_PLAN.md](V2_BUILD_PLAN.md) for V2 and
 [PROGRESS.md](PROGRESS.md) for current status, measurements and known limits.
@@ -100,6 +102,11 @@ For drives: plug the laptop into its own charger and set Windows to **Best perfo
 .venv/Scripts/python eval/run_sheet.py                 # the test sheet: every question at its moment, judged
 .venv/Scripts/python scripts/cache_perception.py --labels eval/parking_labels.yaml --videos data/videos/parking_lot
 .venv/Scripts/python scripts/eval_parking.py           # parking spots vs hand-labeled lot clips (cached perception)
+.venv/Scripts/python scripts/eval_pedestrians.py --road  # pedestrian warnings on cached clips (+ YOLOPv2 road)
+.venv/Scripts/python scripts/eval_lanes.py cache --clip data/videos/highway/<id>.mov   # YOLOPv2 masks, once
+.venv/Scripts/python scripts/eval_lanes.py index       # our lane vs hand-labeled highway frames
+.venv/Scripts/python scripts/eval_lanes.py drift       # drift warnings on the highway clips (GPS speed)
+.venv/Scripts/python scripts/eval_lanes.py virtual --clip data/videos/highway/<id>.mov   # a warped slow drift
 .venv/Scripts/python scripts/find_bdd_clips.py --scene "parking lot" --min-crawl-s 15 --max-mph 15 --fetch 10
 ```
 
@@ -117,6 +124,8 @@ Everything lives in [config.yaml](config.yaml); API keys come from `.env`. The m
 | `ui.overlays` | The V2 overlay screen (default) or the plain V1 one. |
 | `vision.mark_objects` | Number the tracked objects on the frame sent to the model, so its answer can point at one. |
 | `parking.*`, `memory.*`, `sign_alerts.*` | V2: the parking spot finder, "what was that sign?", sign alerts. |
+| `lanes.*` | V2: YOLOPv2 lane detection (`enabled`, `fps`; weights `models/lanes/yolopv2.pt` from github.com/CAIC-AD/YOLOPv2) and the drift warning (`drift_gap_m`, `min_speed_mps`). |
+| `pedestrians.*` | V2: the path zone for pedestrian/cyclist warnings; `road_min_share` uses the lanes model's drivable area. |
 
 ## Tests
 

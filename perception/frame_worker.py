@@ -44,6 +44,7 @@ class FrameWorker(Generic[R]):
         self.error: str | None = None
         self.processed = 0
         self.last_ms: float | None = None
+        self.started_at: float | None = None  # perf_counter when the model was ready (rates in summaries)
 
     def start(self) -> Self:
         """Start the thread (returns self)."""
@@ -58,6 +59,13 @@ class FrameWorker(Generic[R]):
             self._cond.notify_all()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+
+    def rate(self) -> float | None:
+        """Frames processed per second since the model was ready (None before)."""
+        if self.started_at is None:
+            return None
+        elapsed = time.perf_counter() - self.started_at
+        return round(self.processed / elapsed, 1) if elapsed > 0 else None
 
     @property
     def running(self) -> bool:
@@ -78,6 +86,7 @@ class FrameWorker(Generic[R]):
             log.exception("model could not start", worker=self.name)
             self.ready.set()
             return
+        self.started_at = time.perf_counter()
         self.ready.set()
         log.info("model ready", worker=self.name)
         next_at = 0.0

@@ -63,6 +63,7 @@ TARGETS = {"local": 1.0, "model": 2.5}
 MATCH_S = 1.0  # a heard question belongs to the spoken one that ended within this of it
 ALERT_TARGET_MS = 300.0
 FPS_TARGET = 25.2
+LANES_FPS_TARGET = 10.0  # V2_BUILD_PLAN M5
 
 
 @dataclass(slots=True)
@@ -292,6 +293,16 @@ def build_report(app: DrivePilotApp, questions: list[Spoken], args: argparse.Nam
             "ok": (perception.get("fps") or 0) >= FPS_TARGET,
         }
     )
+    lanes = summary.get("models", {}).get("lanes")
+    if lanes is not None:  # V2_BUILD_PLAN M5: lanes >= 10 fps with perception still >= 25 fps
+        checks.append(
+            {
+                "name": "lane detection keeps up (V2)",
+                "value": f"{lanes['fps']} fps",
+                "target": f">= {LANES_FPS_TARGET} fps",
+                "ok": (lanes["fps"] or 0) >= LANES_FPS_TARGET,
+            }
+        )
     unplayed = [r["said"] for r in rows if r["first_audio_s"] is None]
     checks.append(
         {

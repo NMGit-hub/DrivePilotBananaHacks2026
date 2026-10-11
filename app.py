@@ -916,6 +916,11 @@ class DrivePilotApp:
             "perception": perception,
             "voice": voice,
             "camera_restarts": self.camera_restarts,
+            "models": {  # the lanes and sign threads: frames a second, last model time
+                name: {"fps": model.rate(), "frames": model.processed, "last_ms": model.last_ms}
+                for name, model in (("lanes", self.lane_worker), ("signs", self.sign_worker))
+                if model is not None
+            },
             "status": self.status,
         }
 
