@@ -87,10 +87,11 @@ HOOD_BOTTOM = 0.97  # a "vehicle" whose box reaches this far down the frame...
 HOOD_WIDTH = 0.45  # ...and is this wide is our own hood / dashboard, not another car
 
 
-def is_own_hood(box: tuple[float, float, float, float], width: int, height: int) -> bool:
-    """The detector sometimes takes our own hood or dashboard for a car: wide, at the bottom of the frame."""
+def is_own_hood(box: tuple[float, float, float, float], width: int, height: int, bottom: float = HOOD_BOTTOM) -> bool:
+    """The detector sometimes takes our own hood or dashboard for a car: wide, at the bottom of the frame
+    (`bottom`: how far down its box must reach, `perception.hood_bottom`)."""
     x1, _, x2, y2 = box
-    return y2 >= HOOD_BOTTOM * height and (x2 - x1) >= HOOD_WIDTH * width
+    return y2 >= bottom * height and (x2 - x1) >= HOOD_WIDTH * width
 
 
 def vehicle_duplicate_mask(xyxy: np.ndarray, conf: np.ndarray, is_vehicle: np.ndarray, iou_thresh: float) -> np.ndarray:

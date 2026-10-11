@@ -203,6 +203,13 @@ class PerceptionConfig(_Strict):
         0.7, gt=0.0, le=1.0, description="Merge overlapping vehicle boxes of different classes (car vs truck)."
     )
     tracker: TrackerConfig = TrackerConfig()
+    hood_bottom: float = Field(
+        0.97,
+        gt=0.5,
+        le=1.0,
+        description="A wide 'vehicle' box reaching this far down the frame is our own hood (not drawn or described); "
+        "lower for a camera whose frame bottom is masked (the car dashcam's text bar: 0.93).",
+    )
 
     @field_validator("imgsz")
     @classmethod

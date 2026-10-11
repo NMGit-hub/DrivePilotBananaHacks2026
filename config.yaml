@@ -59,6 +59,7 @@ perception:
   iou: 0.7
   classes: [car, truck, bus, motorcycle, stop sign, traffic light, person, bicycle]
   vehicle_dedup_iou: 0.7    # one pickup reported as both "car" and "truck" -> keep the more confident box
+  hood_bottom: 0.97         # a wide "vehicle" reaching this far down is our own hood (car dashcam, bar masked: 0.93)
   tracker:                  # ByteTrack
     track_high_thresh: 0.25
     track_low_thresh: 0.1

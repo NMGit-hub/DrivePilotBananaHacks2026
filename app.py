@@ -429,6 +429,7 @@ class DrivePilotApp:
                 highlight=highlight[0] if highlight is not None and left > 0 else None,
                 lanes=lanes,
                 lane_goal=lane_target(lanes, self.nav.progress if self.nav is not None and self.nav.route else None),
+                hood_bottom=self.cfg.perception.hood_bottom,
             )
         except Exception:
             log.exception("overlay failed")

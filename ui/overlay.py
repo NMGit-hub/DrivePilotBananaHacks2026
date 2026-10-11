@@ -22,7 +22,7 @@ import numpy as np
 
 from nav.phrasing import in_distance, maneuver_phrase
 from nav.progress import Progress
-from perception.detector import Track, is_own_hood
+from perception.detector import HOOD_BOTTOM, Track, is_own_hood
 from state.lanes import LanesSnapshot
 from state.world import WorldSnapshot
 
@@ -119,10 +119,12 @@ def frame_packet(
     highlight: int | None = None,
     lanes: LanesSnapshot | None = None,
     lane_goal: dict[str, Any] | None = None,
+    hood_bottom: float = HOOD_BOTTOM,
 ) -> dict[str, Any]:
     """The overlay for one frame: every tracked object with its meaning, the 4-way badges, the light's state,
     open parking spots (while the parking watch is on), the "YOU" badge and our lane (`lanes`: lane detection's
-    latest, if it is recent; `lane_goal`: `lane_target`'s answer). `highlight`: a track id to pulse."""
+    latest, if it is recent; `lane_goal`: `lane_target`'s answer). `highlight`: a track id to pulse. `hood_bottom`:
+    a wide "vehicle" reaching this far down is our own hood (not drawn)."""
     items: list[dict[str, Any]] = []
     if snap is None:
         return {"items": items, "you": None, "lanes": lanes_packet(lanes, lane_goal)}
@@ -139,7 +141,7 @@ def frame_packet(
     parked = {c.track_id for row in snap.parking.rows.values() for c in row}
 
     for v in snap.vehicles:
-        if is_own_hood(v.box, width, height):
+        if is_own_hood(v.box, width, height, hood_bottom):
             continue
         item: dict[str, Any] = {"kind": "vehicle", "id": v.track_id, "box": _norm(v.box, width, height)}
         if v.track_id in queued:

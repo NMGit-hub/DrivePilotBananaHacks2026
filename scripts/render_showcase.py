@@ -100,7 +100,7 @@ DASHCAM_BAR_TOP = 1235  # nav/dashcam_overlay.py OVERLAY_TOP: rows from here dow
 DASHCAM_DIR = Path("D:/Dashcam")
 # The dashcam's camera (PROGRESS.md "own dashcam footage"): ~96° across (scripts/dashcam_calibrate.py, 18 turns), and
 # pitched up (horizon ~70 % down the frame), so the lane model's crop sits low.
-DASHCAM_OVERRIDES = ("video.file.hfov_deg=96", "lanes.view_center_y=0.65")
+DASHCAM_OVERRIDES = ("video.file.hfov_deg=96", "lanes.view_center_y=0.65", "perception.hood_bottom=0.93")
 VIDEOS = REPO_ROOT / "data" / "videos"
 GPS_DIR = REPO_ROOT / "data" / "gps"
 OUT_DIR = REPO_ROOT / "runs" / "showcase"
@@ -512,6 +512,7 @@ def run_pass(
                 parking_active=parking.active,
                 lanes=view,
                 lane_goal=lane_target(view, progress),
+                hood_bottom=cfg.perception.hood_bottom,
             )
             fix = fix_now()
             sign_snap = signs.snapshot()

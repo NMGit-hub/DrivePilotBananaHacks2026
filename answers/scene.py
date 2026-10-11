@@ -46,7 +46,7 @@ from answers.vision import (
 from core.config import AppConfig
 from core.logging_setup import get_logger
 from core.types import Frame
-from perception.detector import Track, is_own_hood
+from perception.detector import HOOD_BOTTOM, Track, is_own_hood
 from state.memory import SceneMemory
 from state.signs import box_iou
 from state.stop_queue import Approach
@@ -281,14 +281,19 @@ class Mark:
 
 
 def pick_marks(
-    snapshot: WorldSnapshot, tracks: Sequence[Track], limit: int, width: int = 0, height: int = 0
+    snapshot: WorldSnapshot,
+    tracks: Sequence[Track],
+    limit: int,
+    width: int = 0,
+    height: int = 0,
+    hood_bottom: float = HOOD_BOTTOM,
 ) -> list[Mark]:
     """The objects worth numbering on the latest frame: vehicles (not our own hood), people and stop signs
     (nearest = largest first), then the lights; at most `limit`."""
     Obj = tuple[float, str, int | None, tuple[float, float, float, float], str, str]
     objects: list[Obj] = []
     for v in snapshot.vehicles:
-        if width and height and is_own_hood(v.box, width, height):
+        if width and height and is_own_hood(v.box, width, height, hood_bottom):
             continue
         area = (v.box[2] - v.box[0]) * (v.box[3] - v.box[1])
         objects.append((area, "vehicle", v.track_id, v.box, v.cls, v.color))
@@ -607,7 +612,9 @@ class SceneHandler:
             now_image = latest.image
             if vcfg.mark_objects and latest is snapshot.frame:  # (the boxes are from this very frame)
                 tracks = self._tracks() if self._tracks is not None else ()
-                marks = pick_marks(snapshot, tracks, vcfg.max_marks, latest.width, latest.height)
+                marks = pick_marks(
+                    snapshot, tracks, vcfg.max_marks, latest.width, latest.height, self.cfg.perception.hood_bottom
+                )
                 if marks:
                     now_image = draw_marks(now_image, marks)
             images.append(ImagePart(encode_jpeg(now_image, vcfg.latest_width, vcfg.jpeg_quality), "Now"))

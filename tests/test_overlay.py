@@ -78,6 +78,13 @@ def test_boxes_are_normalized_to_the_frame_and_keep_their_ids() -> None:
     assert items(frame_packet(snap, [], W, H), "vehicle")[0]["box"] == [0.0, 0.8333, 0.2344, 1.0]  # clamped
 
 
+def test_the_hood_threshold_follows_a_masked_frame_bottom() -> None:
+    """The car dashcam's text bar is blacked out, so its hood box ends ~96 % down: perception.hood_bottom 0.93."""
+    snap = snapshot((vehicle(8, (300.0, 600.0, 1000.0, 0.96 * H)),))
+    assert [i["id"] for i in items(frame_packet(snap, [], W, H), "vehicle")] == [8]  # default 0.97: drawn
+    assert items(frame_packet(snap, [], W, H, hood_bottom=0.93), "vehicle") == []
+
+
 def test_four_way_badges_say_the_order_the_next_car_is_amber_and_you_turn_green() -> None:
     order = (
         QueueEntry("track:3", Approach.LEFT, arrived=4.0, label="white SUV", track_id=3),
