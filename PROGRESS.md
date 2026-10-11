@@ -5,6 +5,17 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 ## Done
 
 ### V2 (in progress, 2026-10-10): V2-M0..M6 built (M1 parking below the bar; M5 drift below its bars); M8 partly
+- **Sign alerts once per zone / per new limit** (2026-10-10 23:15, HANDOFF 2.1). Cause, from the detector's own
+  detections on the school-zone dev clip (dumped at the app's 4 fps): the street has a school sign on each side
+  (two sightings in the first frame), the right one's AHEAD plaque is boxed as a second "school zone" at 1.6 s and
+  2.4 s and the sign itself jumps once (a new sighting), and at 12.2-12.5 s a worker's hi-vis vest reads as a school
+  sign (0.72). Each sighting was announced on its own. Now a confirmed school-zone sign starts a zone only after
+  `sign_alerts.repeat_s` (300 s) without any school-zone sign, and every one seen meanwhile extends it (a one-frame
+  look-alike never starts one). Re-run through the app (`runs/20261010-231342_red_light_rain_school_zone_*`):
+  **"School zone ahead." once, at 0.25 s** (was 4 times). Speed limits were already once per new value; the SPEED
+  LIMIT 30 sign on ego_holdout_long_stop is read from 8.74 s and **"Speed limit is now 30." said once at 8.65 s**
+  in the app (`runs/20261010-231438_ego_holdout_long_stop_*`). 3 regression tests (the two zone tests fail on the
+  old code). `sign_alerts:` is now spelled out in config.yaml.
 - **V2-M6 sign detector merged** (2026-10-10 ~21:40; the sign session's branch `v2-signs`, its STATUS in
   `scripts/signs/STATUS.md`: fresh BDD held-out 69/77 clearly readable speed limits right, 0 values contradicting a
   label, 6.6-7.1 ms a frame as TensorRT FP16). The app injects it like the lane model (`sign_model_factory`); the
@@ -515,8 +526,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
-- **Sign alerts repeat with the real detector:** "School zone ahead." 4 times on one clip (two signs in one frame,
-  then again 2 s and 12 s later); the once-per-zone rule needs fixing (HANDOFF 2.1).
+- **The sign detector takes a hi-vis vest for a school sign** (school-zone dev clip, 12.2-12.5 s, conf 0.72, two
+  frames): inside a zone that's quiet now, but on its own it would say "School zone ahead." once. Not tuned away
+  (one case; raising `signs.class_conf.school_zone` would cost real distant signs, which score 0.66-0.9).
 - **Drift warning (V2-M5) below its bars on BDD100K footage:** 1 alert in 5.7 min of real highway driving, a real
   slow move toward a line but not a drift a driver would call one (bar: 0); on the virtual-drift clips 13/18 slow
   drifts on time, 3 late, 2 effectively missed (bar: within 1 s). Learning "our usual place in the lane" needs 8 s at speed

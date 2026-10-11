@@ -273,3 +273,14 @@ signs:                      # V2-M6 fine-tuned US sign detector (perception/sign
   value_edge_px: 2.0        # and not for signs touching the frame border (the number may be cut off)
   duplicate_iou: 0.6        # one sign reported as two kinds (speed_limit + school_speed_limit): keep the surer one
   value_views: 5            # crops of a speed sign (shifted/scaled) that must all read the same value, each >= value_conf
+
+sign_alerts:                # what the sign detector's readings turn into (state/signs.py)
+  enabled: true             # run the sign detector (if its models are installed) and announce
+  fps: 4.0                  # on the latest frame, this often
+  min_conf: 0.5             # weaker detections are ignored
+  link_s: 1.0               # a sign seen again within this long is the same sign
+  keep_s: 60.0
+  agree_frames: 2           # frames that must agree on a limit (or see a school-zone sign) before it is said...
+  agree_window_s: 2.0       # ...within this long (one frame can be a look-alike)
+  repeat_s: 300.0           # school zone: once until this long without a school-zone sign; same school limit: quiet
+  recent: 6

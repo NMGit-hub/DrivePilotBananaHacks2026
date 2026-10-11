@@ -64,6 +64,7 @@ MATCH_S = 1.0  # a heard question belongs to the spoken one that ended within th
 ALERT_TARGET_MS = 300.0
 FPS_TARGET = 25.2
 LANES_FPS_TARGET = 10.0  # V2_BUILD_PLAN M5
+SIGNS_FPS_SHARE = 0.75  # the sign thread keeps up: >= 75 % of sign_alerts.fps (V2_BUILD_PLAN: "a few fps")
 
 
 @dataclass(slots=True)
@@ -301,6 +302,17 @@ def build_report(app: DrivePilotApp, questions: list[Spoken], args: argparse.Nam
                 "value": f"{lanes['fps']} fps",
                 "target": f">= {LANES_FPS_TARGET} fps",
                 "ok": (lanes["fps"] or 0) >= LANES_FPS_TARGET,
+            }
+        )
+    signs = summary.get("models", {}).get("signs")
+    if signs is not None:
+        target = round(SIGNS_FPS_SHARE * app.cfg.sign_alerts.fps, 1)
+        checks.append(
+            {
+                "name": "sign detection keeps up (V2)",
+                "value": f"{signs['fps']} fps",
+                "target": f">= {target} fps",
+                "ok": (signs["fps"] or 0) >= target,
             }
         )
     unplayed = [r["said"] for r in rows if r["first_audio_s"] is None]

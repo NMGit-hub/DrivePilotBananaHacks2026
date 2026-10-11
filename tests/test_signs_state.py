@@ -94,6 +94,57 @@ def test_school_zone_and_school_limits() -> None:
     assert run(SignTracker(SignAlertsConfig()), approach("school_zone", [None])) == []  # one frame: not yet
 
 
+def test_a_school_zone_is_said_once_per_zone() -> None:
+    """Regression (school-zone dev clip, 2026-10-10: said 4 times): a sign on each side of the road in the same
+    frame, the right one's plaque detected as a second box, the right sign lost for a frame and found again as a new
+    sighting, then a look-alike (a worker's hi-vis vest) for two frames 8 s later: one alert."""
+    tracker = SignTracker(SignAlertsConfig())
+    said = []
+    for k in range(18):  # 0-4.5 s at 4 fps, as the detector saw them on the clip
+        t = k * 0.25
+        dets = [Det("school_zone", None, 0.75, (250.0 - 12 * k, 300.0, 280.0 - 12 * k, 335.0))]  # left sign
+        if k != 7:  # the right sign is missed in one frame...
+            x = 640.0 + 20 * k + (200.0 if k > 7 else 0.0)  # ...and jumps farther than "near" allows: a new sighting
+            dets.append(Det("school_zone", None, 0.85, (x, 290.0 - 8 * k, x + 50 + 4 * k, 355.0 - 8 * k)))
+            if k in (6, 9):  # its AHEAD plaque as a second box
+                dets.append(Det("school_zone", None, 0.66, (x, 356.0 - 8 * k, x + 50 + 4 * k, 380.0 - 8 * k)))
+        said += [e.text for e in tracker.update(t, dets)]
+    for t in (12.2, 12.45):  # the vest
+        said += [e.text for e in tracker.update(t, [Det("school_zone", None, 0.72, (586.0, 414.0, 618.0, 453.0))])]
+    assert said == [SCHOOL_ZONE_TEXT]
+    assert len({v.id for v in tracker.snapshot().recent}) >= 3  # (several sightings, one zone)
+
+
+def test_a_new_school_zone_after_repeat_s_without_one_is_said_again() -> None:
+    cfg = SignAlertsConfig(repeat_s=60.0)
+    tracker = SignTracker(cfg)
+    said = run(tracker, approach("school_zone", [None, None, None]))
+    said += run(tracker, approach("school_zone", [None, None], start=50.0))  # the same zone: 40 s since the last one
+    said += run(tracker, approach("school_zone", [None, None], start=105.0))  # 55 s since: still the same zone
+    assert said == [SCHOOL_ZONE_TEXT]
+    said += run(tracker, approach("school_zone", [None, None], start=170.0))  # 65 s without one: a new zone
+    assert said == [SCHOOL_ZONE_TEXT, SCHOOL_ZONE_TEXT]
+    # One-frame look-alikes keep an announced zone alive but never start one.
+    tracker = SignTracker(cfg)
+    assert run(tracker, approach("school_zone", [None], start=0.0)) == []
+    assert run(tracker, approach("school_zone", [None, None], start=30.0)) == [SCHOOL_ZONE_TEXT]
+    for t in (80.0, 130.0, 180.0):  # one frame each, 50 s apart
+        assert run(tracker, approach("school_zone", [None], start=t)) == []
+    assert run(tracker, approach("school_zone", [None, None], start=235.0)) == []  # 55 s after the last look-alike
+    tracker.update(10.0, [])  # a seek back forgets the zone
+    assert run(tracker, approach("school_zone", [None, None], start=12.0)) == [SCHOOL_ZONE_TEXT]
+
+
+def test_a_speed_limit_seen_twice_in_one_frame_or_lost_and_found_is_said_once() -> None:
+    """The SPEED LIMIT 30 sign on ego_holdout_long_stop (read at 8.74-10.33 s on the clip), here also seen by a
+    second detection in one frame and lost for 2 s mid-approach: one "Speed limit is now 30."."""
+    tracker = SignTracker(SignAlertsConfig())
+    said = run(tracker, approach("speed_limit", [None, None, None, 30, 30, 30], start=7.95))
+    said += [e.text for e in tracker.update(9.5, [Det("speed_limit", 30, 0.8, (860.0, 280.0, 897.0, 314.0))] * 2)]
+    said += run(tracker, approach("speed_limit", [30, 30, 30], start=11.6))
+    assert said == ["Speed limit is now 30."]
+
+
 def test_weak_detections_are_ignored_and_a_seek_forgets() -> None:
     tracker = SignTracker(SignAlertsConfig())
     for k in range(4):

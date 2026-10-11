@@ -7,8 +7,10 @@ box, confidence and, for speed limits, a value only when it is sure. This tracke
 - announces a speed limit only when two frames of the same sighting agree on its value (`agree_frames` within
   `agree_window_s`) and it differs from the limit announced last ("Speed limit is now 35."): one frame can be a
   look-alike, and a wrong limit is worse than none (V2_BUILD_PLAN.md V2-M6, "0 wrong values");
-- does the same for school speed limits ("School speed limit 20.") and announces a school-zone sign once per
-  sighting ("School zone ahead.");
+- does the same for school speed limits ("School speed limit 20.") and announces a school zone once per zone
+  ("School zone ahead."): a zone often has a sign on each side of the road, and one sign can be lost and found
+  again as a new sighting (its plaque detected apart, a gap of a few frames), so a confirmed school-zone sign
+  starts a zone only after `repeat_s` without any school-zone sign; every one seen meanwhile extends the zone;
 - keeps the current limit (for the page's badge and the vision model's context) and the recent sightings.
 Detections are duck-typed (`SignLike`: kind, value, conf, box) so this module doesn't need the GPU stack.
 Called from the sign thread only (`update`); `snapshot` is safe from any thread.
@@ -149,6 +151,7 @@ class SignTracker:
             self._sightings: list[Sighting] = []
             self._limit: tuple[int, float] | None = None
             self._school: tuple[int, float] | None = None
+            self._zone_t: float | None = None  # a school-zone sign of the current zone was last seen then
             self._last_t: float | None = None
             self._snapshot = EMPTY
             self.last_frame: list[SignView] = []  # this frame's detections as sightings (memory close-ups)
@@ -160,7 +163,7 @@ class SignTracker:
         seen: list[SignView] = []
         with self._lock:
             if self._last_t is not None and t < self._last_t:  # time went backwards: another moment
-                self._sightings, self._limit, self._school = [], None, None
+                self._sightings, self._limit, self._school, self._zone_t = [], None, None, None
             self._last_t = t
             live = [s for s in self._sightings if t - s.last_t <= cfg.link_s]
             for det in sorted(detections, key=lambda d: -d.conf):
@@ -186,13 +189,17 @@ class SignTracker:
     def _decide(self, s: Sighting, t: float) -> list[SignEvent]:
         """An alert for this sighting, if it has earned one (caller holds the lock)."""
         cfg = self.cfg
+        if s.kind == "school_zone":
+            in_zone = self._zone_t is not None and t - self._zone_t <= cfg.repeat_s
+            if in_zone:
+                self._zone_t = t  # any school-zone sign extends the zone we are in (even one seen once)
+            if s.announced or s.frames < cfg.agree_frames:
+                return []
+            s.announced = True  # (confirmed: said, or quiet because its zone was said)
+            self._zone_t = t
+            return [] if in_zone else [SignEvent("school_zone", t, SCHOOL_ZONE_TEXT, None, s.id, s.box)]
         if s.announced:
             return []
-        if s.kind == "school_zone":
-            if s.frames < cfg.agree_frames:
-                return []
-            s.announced = True
-            return [SignEvent("school_zone", t, SCHOOL_ZONE_TEXT, None, s.id, s.box)]
         if s.kind not in VALUE_KINDS:
             return []
         value = s.agreed_value(t, cfg.agree_frames, cfg.agree_window_s)
