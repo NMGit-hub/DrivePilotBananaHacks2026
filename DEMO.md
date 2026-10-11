@@ -71,6 +71,12 @@ each with Ctrl+C.
 - ~3 s: **"what did that yellow sign say?"** → children walking, "AHEAD". ~9 s **"what's going on on the right?"** →
   construction.
 
+## Recording it (OBS, PLAN.md "Demo video")
+- OBS: a Window Capture of the browser with the page full screen (F11), plus Desktop Audio so the spoken answers
+  and alerts are in the video. Run without `--no-audio` (and with voice, so the wake word is heard).
+- Keep the run folders (`runs/<time>_<clip>/`): they log every question, answer, alert and latency for the
+  "Results" part of the video.
+
 ## If something goes wrong
 - No answer from the model: the page's status line says "vision off": check the internet and `.env`.
 - The page shows "lanes off" or "signs off": a model didn't start; restart the replay (the log says why).

@@ -101,6 +101,37 @@ def test_a_model_answer_that_says_our_light_is_green_reminds_to_check(
     assert said[0].endswith(".") and ",." not in said[0]
 
 
+ROW_45 = (
+    "There are pedestrians in the crosswalk ahead of us, and vehicles are still moving through the intersection, "
+    "so you need to wait until they clear and check both ways yourself."
+)
+
+
+def test_waiting_until_people_clear_is_not_vouching() -> None:
+    """Test sheet row 45 (2026-10-11): the strict net took "until they clear" for "it's clear" and replaced the whole
+    warning about the pedestrians with the generic sentence."""
+    said = spoken_by_assistant(ROW_45, "Can I pull out now?", ego_stopped=True, ego_stopped_since=10.0)
+    assert said == [ROW_45, NO_VOUCH]
+    for reply in ("Wait until it's clear, then check both ways yourself.", "Wait for the crosswalk to clear."):
+        assert spoken_by_assistant(reply, "Can I pull out now?", ego_stopped=True, ego_stopped_since=10.0)[0] == reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "It's clear, but check both ways.",
+        "It looks clear until the next light.",
+        "Once the truck passes, it's safe.",
+        "Pull out when it's safe.",
+        "Once the pedestrians clear, check both ways yourself.",  # (conservative: only "until ... clear" is exempt)
+        "Wait until the bus moves, it's safe after that.",
+    ],
+)
+def test_conditions_that_still_say_clear_are_vouching(reply: str) -> None:
+    said = spoken_by_assistant(reply, "Can I pull out now?", ego_stopped=True, ego_stopped_since=10.0)
+    assert said == [NO_VOUCH]
+
+
 def test_negated_safety_words_are_not_vouching() -> None:
     assert not VOUCHING.search("The light is red, so it's not safe to go yet.")
     assert not VOUCHING.search("I can't tell; the left side isn't clear from here.")

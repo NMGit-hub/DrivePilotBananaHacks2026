@@ -172,6 +172,21 @@ VOUCHING = re.compile(
     r"no traffic)\b",
     re.IGNORECASE,
 )
+# A condition to wait for isn't vouching: "...so wait until they clear and check both ways yourself" (test sheet row
+# 45: the net replaced that whole warning about pedestrians). Only "until/till ... clear" within one clause and "(for
+# them) to clear" are exempt: "It's clear until the light", "Once the truck passes, it's safe" and "Pull out when
+# it's safe" still count as vouching.
+CONDITIONAL_CLEAR = re.compile(
+    r"\b(?:until|till)\b[^.;:,]*?\b(?:clear|clears|cleared|safe|empty)\b|\bto (?:clear|be clear)\b",
+    re.IGNORECASE,
+)
+
+
+def vouches(sentence: str) -> bool:
+    """A sentence that says or implies the way is clear (for go questions), conditions to wait for left out."""
+    return bool(VOUCHING.search(CONDITIONAL_CLEAR.sub(" ", sentence)))
+
+
 WHERE = {Approach.LEFT: "on the left", Approach.AHEAD: "across the intersection", Approach.RIGHT: "on the right"}
 
 
@@ -702,7 +717,7 @@ class SceneHandler:
                     log.warning("school bus in a passing answer: replaced by the rule", sentence=sentence)
                     yield SCHOOL_BUS_RULE
                     return
-                if any(PERMISSION.search(p) or (strict and VOUCHING.search(p)) for p in pieces):
+                if any(PERMISSION.search(p) or (strict and vouches(p)) for p in pieces):
                     log.warning("replaced a sentence that vouched for traffic", sentence=sentence, strict=strict)
                     replaced = True
                     if no_vouch_said:
