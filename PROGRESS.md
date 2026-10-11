@@ -68,6 +68,11 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   four alert-engine tests now switch the unrequested green off (they test the watch). Full suite: 1476 passed.
 
 ### V2 (2026-10-10/11): V2-M0..M6 and M8 done (M1 parking and M5 drift below their accuracy bars on public footage; M7 RF-DETR cut)
+- **The user's own dashcam footage (2026-10-11, in progress, HANDOFF.md section 2):** 950 Mercedes dashcam clips
+  (30.2 h, D:\Dashcam). Their burned-in GPS/speed line is read into GPX (`nav/dashcam_overlay.py`,
+  `scripts/dashcam_gpx.py`): 97.7 % of 1 Hz samples read on 837 clips, the time field agrees with the file name on
+  99.6 %; 4.3 h of highway, 9.2 h city, 1.9 h lot-speed crawl, 111 night clips. Horizontal FOV ~97 deg from 6 turns
+  (`scripts/dashcam_calibrate.py`, to firm up). Next: clip selection, evals on this footage, showcase videos.
 - **Vision answers improved without training (2026-10-11, the user's go-ahead):** a second ("reading") model, the
   place from GPS, and parking guidance in the prompt. (1) `vision.reading`: Claude Haiku 5.5 (thinking off, effort
   low) answers sign, parking and scene-description questions; Claude Haiku 4.5 keeps lights, lanes, memory and go
