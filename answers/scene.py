@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 import threading
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 import cv2
@@ -60,7 +60,7 @@ SYSTEM_PROMPT = """You are DrivePilot, a voice co-pilot riding in a car. You see
 windshield, looking forward. The driver asks you questions out loud while driving, and your answer is read aloud.
 
 Rules:
-- Answer in one or two short sentences of plain spoken English. No lists, markdown, or emojis.
+- Answer in one or two short sentences of plain spoken English, about 30 words at most. No lists, markdown, or emojis.
 - Left and right are from the driver's seat (image left is the driver's left).
 - You cannot judge moving traffic or gaps. Never say or imply that it is safe or clear to go, turn, merge, pull \
 out, cross or change lanes, and never say "go", "go ahead", "you're good to go", "you can go" or "you're clear". \
@@ -79,6 +79,12 @@ and the cars in them; say which one you are in, counted from the left. If the ed
 you see. It reads only the main color of the light facing us; it cannot read arrows. Don't guess why we are \
 stopped (traffic, a light, a sign) unless you can see it.
 - Don't mention images, frames, cameras or the tracker; speak as if you are looking at the road.
+- For parking, look at what decides it: markings on the stall itself (a wheelchair symbol or blue paint means \
+disabled permit only; EV, reserved, compact), curb paint, hydrants, driveways, crosswalks, bus stops, meters and \
+parking signs. Signs about traffic (STOP, DO NOT ENTER, ONE WAY) don't decide parking. Answer about the spot the \
+driver asks about; if what decides it isn't visible, say what you can see and to check the posted signs.
+- Rules that depend on the place (turning on red, parking, school zones) follow the Location line when there \
+is one. In New York City, turning right on red is illegal unless a sign allows it.
 - Use US units (mph, feet, miles)."""
 
 MARKS_PROMPT = (
@@ -519,6 +525,23 @@ def describe_world(snapshot: WorldSnapshot) -> list[str]:
     return lines
 
 
+# The reading model (vision.reading) answers questions that read or describe the scene; the main model keeps lights,
+# lanes, memory and go questions. Measured 2026-10-11 (eval/test_sheet.csv + a held-out sheet): Claude Haiku 5.5
+# read more signs and parking rules and described scenes better, while Claude Haiku 4.5 was better at counting lanes
+# and at "what did we just pass?", and Haiku 5.5 once called a red light yellow.
+_LANES = re.compile(r"\blanes?\b", re.IGNORECASE)
+LIGHT_NAMED = re.compile(r"\b(?:light|lights|signal|signals|arrow|arrows)\b", re.IGNORECASE)
+_COLORS = re.compile(r"\b(?:green|red|yellow|amber)\b", re.IGNORECASE)
+
+
+def uses_reading_model(route: Route) -> bool:
+    """True for questions the reading model answers (see above)."""
+    text = route.text
+    if route.intent == "memory" or is_go_question(route) or LIGHT_NAMED.search(text) or _LANES.search(text):
+        return False
+    return not (_COLORS.search(text) and not SIGN_WORDS.search(text))  # "is it green yet?" is about the light
+
+
 def is_go_question(route: Route) -> bool:
     """Questions where vouching for traffic is dangerous: gap checks, "should I wait", go/turn/merge wording."""
     return route.kind is RouteKind.GAP_CHECK or route.intent == "should_wait" or bool(GO_QUESTION.search(route.text))
@@ -538,11 +561,14 @@ class SceneHandler:
         memory: SceneMemory | None = None,
         on_highlight: Callable[[int], None] | None = None,
         on_image: Callable[[Frame], None] | None = None,
+        reading_model: VisionModel | None = None,
     ) -> None:
         """`tracks`: the latest frame's tracks (people, signs to number); `memory`: for "what was that?";
-        `on_highlight(track_id)` / `on_image(frame)`: what an answer's hidden tag points at (the page shows it)."""
+        `on_highlight(track_id)` / `on_image(frame)`: what an answer's hidden tag points at (the page shows it);
+        `reading_model`: answers sign, parking and scene-description questions (`uses_reading_model`)."""
         self.cfg = cfg
         self.model = model
+        self.reading_model = reading_model
         self._frames = frames
         self._extra = extra_context
         self._now = now
@@ -676,7 +702,11 @@ class SceneHandler:
         planned = self.plan(route.question or route.text, snapshot, memory=route.intent == "memory")
         self.last_plan = planned
         vcfg = self.cfg.vision
-        pieces = guarded_stream(self.model, planned.request, vcfg.first_token_timeout_s, vcfg.total_timeout_s, cancel)
+        model, request = self.model, planned.request
+        if self.reading_model is not None and uses_reading_model(route):
+            model, request = self.reading_model, replace(request, temperature=vcfg.reading.temperature)
+        log.info("vision model for this question", model=getattr(model, "model", model.name))
+        pieces = guarded_stream(model, request, vcfg.first_token_timeout_s, vcfg.total_timeout_s, cancel)
         passing = bool(PASS_QUESTION.search(route.text))
         # "It's green" gets "check the intersection" while we wait at the light (not a memory answer about the past)
         green_check = route.intent != "memory" and snapshot.ego_stopped

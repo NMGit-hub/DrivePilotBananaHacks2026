@@ -499,10 +499,7 @@ class NavHandler:
         fix = self._gps()
         if navigating and fix is None:
             return ["Navigation: the GPS signal is lost."]
-        lines = []
-        speed = fix.speed_mps if fix is not None else None
-        if speed is not None and math.isfinite(speed):
-            lines.append(f"Speed: {speed * 2.23694:.0f} mph.")
+        lines = speed_lines(fix)
         if not navigating or progress is None:
             return lines
         if progress.next_step is not None and progress.to_next_m is not None:
@@ -512,6 +509,14 @@ class NavHandler:
             if lanes:
                 lines.append(f"For that maneuver, use {lanes} (left to right, {len(step.lanes)} lanes).")
         return lines
+
+
+def speed_lines(fix: GpsFix | None) -> list[str]:
+    """["Speed: 17 mph."] for the vision model's prompt when the fix has a speed, else []."""
+    speed = fix.speed_mps if fix is not None else None
+    if speed is None or not math.isfinite(speed):
+        return []
+    return [f"Speed: {speed * 2.23694:.0f} mph."]
 
 
 def _new_fix(fix: GpsFix, progress: Progress | None) -> bool:

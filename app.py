@@ -51,6 +51,7 @@ from core.runlog import RunRecorder
 from core.types import Frame
 from nav.gps import GpsFix, GpsSource, PhoneGps
 from nav.handler import FIXED_ALERTS, NavHandler
+from nav.location import LocationContext, Reverser, mapbox_reverser
 from nav.mapbox import RoutingClient
 from nav.phrasing import in_distance, maneuver_phrase
 from perception.detector import Detector, Track
@@ -190,6 +191,8 @@ class DrivePilotApp:
         exit_at_end: bool = False,
         lane_model: LaneModelFactory | None = None,
         sign_model: Callable[[], Any] | None = None,
+        location: Reverser | None = None,
+        reading_vision: VisionModel | None = None,
     ) -> None:
         self.cfg = cfg
         self._make_source = make_source
@@ -247,6 +250,10 @@ class DrivePilotApp:
         self._image_ids = itertools.count(1)
         self._world_thread = AsyncListener(self._world_update, name="world", max_pending=2)
         self.screen = ScreenSpeaker(speaker, self.latency, hub, recorder)
+        # Where we are, for the vision model (looked up in the background from the GPS; see nav/location.py)
+        self.location = (
+            LocationContext(location, self.gps_fix, cfg.vision.location_refresh_m) if location is not None else None
+        )
         self.nav: NavHandler | None = None
         if routing is not None:
             vision_reader = (
@@ -266,6 +273,7 @@ class DrivePilotApp:
                 memory=self.memory,
                 on_highlight=self.highlight,
                 on_image=self._show_image,
+                reading_model=reading_vision,
             )
             if vision is not None
             else None
@@ -573,6 +581,8 @@ class DrivePilotApp:
                 if now >= next_gps:
                     next_gps = now + GPS_INTERVAL_S
                     self._feed_gps()
+                    if self.location is not None:
+                        self.location.update()
                 if now >= next_status:
                     next_status = now + STATUS_INTERVAL_S
                     self._publish_status()
@@ -658,6 +668,8 @@ class DrivePilotApp:
         """What the vision model's prompt adds: navigation and speed, what the sign detector read, and the lane
         count and our lane from lane detection (when it is sure)."""
         lines = self.nav.extra_context() if self.nav is not None else []
+        if self.location is not None:
+            lines += self.location.context()
         t = self.media_time()
         lanes = self.lanes.context() if self.lanes_view(t) is not None else []
         return lines + self.signs.context(t) + lanes
@@ -1046,7 +1058,7 @@ def sign_model_factory(cfg: AppConfig, status: dict[str, str]) -> Callable[[], A
 
 
 def _vision(cfg: AppConfig, status: dict[str, str]) -> VisionModel | None:
-    from answers.vision import VisionError, VisionRequest, create_vision_model
+    from answers.vision import VisionError, create_vision_model
 
     try:
         model = create_vision_model(cfg)
@@ -1054,24 +1066,47 @@ def _vision(cfg: AppConfig, status: dict[str, str]) -> VisionModel | None:
         log.warning("vision model not available: scene questions will say so", error=str(exc))
         status["vision"] = "off"
         return None
-    status["vision"] = f"{model.name} (checking)"
+    _check_model(model, "vision", cfg.vision.temperature, status)
+    return model
 
-    def check() -> None:  # a tiny request: verifies the key and opens the connection before the first question
+
+def _reading_vision(cfg: AppConfig, status: dict[str, str]) -> VisionModel | None:
+    """The second model for sign, parking and scene-description questions (`vision.reading`), if configured."""
+    from answers.vision import VisionError, create_reading_model
+
+    try:
+        model = create_reading_model(cfg)
+    except VisionError as exc:
+        log.warning("reading model not available: the main vision model answers everything", error=str(exc))
+        return None
+    if model is not None:
+        _check_model(model, "reading", cfg.vision.reading.temperature, status)
+    return model
+
+
+def _check_model(model: VisionModel, key: str, temperature: float | None, status: dict[str, str]) -> None:
+    """A tiny request in the background: verifies the key and the model, and opens the connection before the first
+    question (same settings as real questions). `status[key]` says how it went."""
+    from answers.vision import VisionError, VisionRequest
+
+    label = f"{model.name} {getattr(model, 'model', '')}".strip()
+    status[key] = f"{label} (checking)"
+
+    def check() -> None:
         start = time.perf_counter()
         try:
-            check = VisionRequest(
-                system="Reply with one word.", text="Say OK.", max_tokens=5, temperature=cfg.vision.temperature
+            request = VisionRequest(
+                system="Reply with one word.", text="Say OK.", max_tokens=5, temperature=temperature
             )
-            model.complete(check, 5.0, 10.0)  # same settings as real questions
+            model.complete(request, 5.0, 10.0)
         except VisionError as exc:
-            log.warning("vision model check failed", error=str(exc))
-            status["vision"] = f"{model.name} (failed: {exc})"
+            log.warning("vision model check failed", which=key, error=str(exc))
+            status[key] = f"{label} (failed: {exc})"
             return
-        status["vision"] = model.name
-        log.info("vision model ready", model=model.name, ms=round((time.perf_counter() - start) * 1000))
+        status[key] = label
+        log.info("vision model ready", which=key, model=label, ms=round((time.perf_counter() - start) * 1000))
 
-    threading.Thread(target=check, name="vision-check", daemon=True).start()
-    return model
+    threading.Thread(target=check, name=f"{key}-check", daemon=True).start()
 
 
 def _routing(cfg: AppConfig, status: dict[str, str]) -> RoutingClient | None:
@@ -1083,6 +1118,14 @@ def _routing(cfg: AppConfig, status: dict[str, str]) -> RoutingClient | None:
     from nav.mapbox import MapboxClient
 
     return MapboxClient(token.get_secret_value(), cfg.nav.profile, cfg.nav.timeout_s, cfg.nav.country)
+
+
+def _reverser(cfg: AppConfig) -> Reverser | None:
+    """Reverse geocoding for the vision model's location line (needs the Mapbox token; off in config: None)."""
+    token = cfg.secrets.mapbox_access_token
+    if not cfg.vision.location or token is None:
+        return None
+    return mapbox_reverser(token.get_secret_value(), cfg.nav.timeout_s)
 
 
 def _speaker(cfg: AppConfig, args: argparse.Namespace, status: dict[str, str]) -> Speaker:
@@ -1146,7 +1189,9 @@ def build_app(
         detector,
         speaker,
         vision=_vision(cfg, status),
+        reading_vision=_reading_vision(cfg, status),
         routing=_routing(cfg, status),
+        location=_reverser(cfg),
         gps=_gps_source(cfg),
         recorder=recorder,
         hub=hub,

@@ -49,12 +49,15 @@ from answers.assistant import Assistant  # noqa: E402
 from answers.parking import ParkingWatch  # noqa: E402
 from answers.scene import SceneHandler  # noqa: E402
 from answers.speech import Priority, TextSpeaker  # noqa: E402
-from answers.vision import VisionError, VisionModel, VisionRequest, create_vision_model  # noqa: E402
+from answers.vision import VisionError, VisionModel, VisionRequest, create_reading_model, create_vision_model  # noqa: E402
 from capture.file_source import FileSource  # noqa: E402
 from core.config import AppConfig, load_config  # noqa: E402
 from core.logging_setup import get_logger, setup_logging  # noqa: E402
 from core.runlog import RunRecorder  # noqa: E402
 from core.types import Frame  # noqa: E402
+from nav.gps import GpsFix, GpxReplay  # noqa: E402
+from nav.handler import speed_lines  # noqa: E402
+from nav.location import LocationContext, Reverser, mapbox_reverser  # noqa: E402
 from perception.detector import Detector  # noqa: E402
 from perception.ego_motion import EgoMotionEstimator  # noqa: E402
 from perception.lanes import LaneMasks, lane_view  # noqa: E402
@@ -225,8 +228,13 @@ def run_clip(
     out_dir: Path | None = None,
     lane_model: Callable[[Frame], LaneMasks] | None = None,
     sign_model: Any = None,
+    gps: GpxReplay | None = None,
+    reverser: Reverser | None = None,
+    reading: VisionModel | None = None,
 ) -> None:
-    """Play the clip frame by frame and answer its rows at their times (`out_dir`: where to save the marked
+    """Play the clip frame by frame and answer its rows at their times (`gps`: the clip's GPX, giving the model
+    our speed and, with `reverser`, where we are, and the world state its GPS speed, as in the app; `out_dir`:
+    where to save the marked
     image of answers that pointed at an object). `lane_model`: YOLOPv2, run as the app's lanes thread does (at
     lanes.fps, here in lock-step): lane detection's context for the vision model, the drivable area for
     pedestrian warnings."""
@@ -240,25 +248,43 @@ def run_clip(
     drivable: list[DrivableArea | None] = [None]
     lane_t = [-1e9]
     tags: list[str] = []
+    clock = [0.0]  # media time of the latest frame (the parking watch's clock)
+
+    def fix_now() -> GpsFix | None:
+        return gps.fix_at(clock[0]) if gps is not None else None
+
+    location = (
+        LocationContext(reverser, fix_now, cfg.vision.location_refresh_m) if reverser and cfg.vision.location else None
+    )
+
+    def extra_context() -> list[str]:  # as the app's (navigation's speed line, location, signs, lanes)
+        lines = speed_lines(fix_now()) + (location.context() if location is not None else [])
+        return lines + signs.context(clock[0]) + (lanes.context() if lanes.snapshot().valid else [])
+
     scene = (
         SceneHandler(
             cfg,
             vision,
             lambda n, s: world_holder[0].recent_frames(n, s),
-            lambda: signs.context(clock[0]) + (lanes.context() if lanes.snapshot().valid else []),
+            extra_context,
             tracks=lambda: latest_tracks[0],
             memory=memory,
             on_highlight=lambda track_id: tags.append(f"track {track_id}"),
             on_image=lambda frame: tags.append(f"image at {frame.t:.1f} s"),
+            reading_model=reading,
         )
         if vision
         else None
     )
     assistant = Assistant(cfg, lambda: world_holder[0].snapshot(), speaker, model=scene)
     assistant.on_highlight = lambda track_id: tags.append(f"track {track_id}")
-    world = WorldState(cfg, on_event=assistant.on_world_event, drivable_source=lambda: drivable[0])
+    world = WorldState(
+        cfg,
+        on_event=assistant.on_world_event,
+        speed_source=lambda t: (lambda f: None if f is None else f.speed_mps)(gps.fix_at(t) if gps else None),
+        drivable_source=lambda: drivable[0],
+    )
     world_holder.append(world)
-    clock = [0.0]  # media time of the latest frame (the parking watch's clock)
     parking = ParkingWatch(  # "help me find a parking spot", as in the app
         cfg.parking,
         cfg.vision,
@@ -275,6 +301,8 @@ def run_clip(
     def on_result(result: PerceptionResult) -> None:
         frame = result.frame
         clock[0] = frame.t
+        if location is not None:
+            location.update()
         if lane_model is not None and frame.t - lane_t[0] >= 1.0 / cfg.lanes.fps - 1e-6:
             lane_t[0] = frame.t
             masks = lane_model(frame)
@@ -293,6 +321,8 @@ def run_clip(
             ask(pending.pop(0))
 
     def ask(row: Row) -> None:
+        if location is not None:
+            location.wait_idle()  # (lock-step: a lookup started a few frames ago has had no real time yet)
         text = row.question
         if voice is not None:
             heard, row.endpoint_s, row.stt_wait_s = voice.ask(row.question)
@@ -458,7 +488,7 @@ def write_outputs(folder: Path, rows: list[Row], summary: dict[str, Any], meta: 
     lines = [
         f"# Test sheet: {meta['sheet']}",
         "",
-        f"{meta['mode']} questions, judge: {meta['judge']}, {meta['when']}",
+        f"{meta['mode']} questions, answers: {meta.get('answers', '?')}, judge: {meta['judge']}, {meta['when']}",
         "",
         "| type | n | right | partly | wrong | accuracy | median answer (s) | median first word (s) |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -485,6 +515,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--voice-name", default="en_US-joe-medium")
     parser.add_argument("--previous", type=Path, default=None, help="An earlier results.csv: keep its manual verdicts.")
     parser.add_argument("--no-judge", action="store_true")
+    parser.add_argument(
+        "--judge-model",
+        default="claude-haiku-4-5",
+        help="The judge, fixed whatever model answers (Haiku 4.5 at temperature 0, as in the earlier runs).",
+    )
     parser.add_argument("--no-lanes", action="store_true", help="Without YOLOPv2 lane detection (V2-M5).")
     parser.add_argument("--no-signs", action="store_true", help="Without the fine-tuned sign detector (V2-M6).")
     parser.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
@@ -536,12 +571,17 @@ def main(argv: list[str] | None = None) -> int:
             from perception.lanes import LaneModel
 
             lane_model = LaneModel(cfg.lanes, cfg.root, hfov_deg=cfg.effective_hfov_deg)
+        reading = create_reading_model(cfg) if vision is not None else None  # (as the app: signs, parking, scenes)
+        token = cfg.secrets.mapbox_access_token
+        reverser = mapbox_reverser(token.get_secret_value()) if token is not None and cfg.vision.location else None
         clips: dict[str, list[Row]] = {}
         for row in rows:
             clips.setdefault(row.clip, []).append(row)
         for name, clip_rows in clips.items():
             path = find_clip(name)
-            print(f"{path.name}: {len(clip_rows)} question(s)", flush=True)
+            gpx = REPO_ROOT / "data" / "gps" / f"{path.stem.split('__')[-1]}.gpx"
+            gps = GpxReplay(gpx) if gpx.is_file() else None
+            print(f"{path.name}: {len(clip_rows)} question(s){'' if gps else ' (no GPX)'}", flush=True)
             run_clip(
                 cfg,
                 path,
@@ -553,16 +593,36 @@ def main(argv: list[str] | None = None) -> int:
                 out_dir=recorder.dir,
                 lane_model=lane_model,
                 sign_model=sign_model,
+                gps=gps,
+                reverser=reverser,
+                reading=reading,
             )
-        judge_model = None if args.no_judge else vision
+        judge_model: VisionModel | None = None
+        if not args.no_judge and vision is not None:
+            judge_cfg = cfg.model_copy(
+                update={
+                    "vision": cfg.vision.model_copy(
+                        update={
+                            "claude": cfg.vision.claude.model_copy(
+                                update={"model": args.judge_model, "thinking": "default", "effort": None}
+                            )
+                        }
+                    )
+                }
+            )
+            judge_model = create_vision_model(judge_cfg, "claude")
+        judge_temperature = 0.0 if args.judge_model == "claude-haiku-4-5" else None  # (newer models reject it)
         for row in rows:
-            judge(judge_model, row, cfg.vision.temperature)
+            judge(judge_model, row, judge_temperature)
             print(f"  {row.index:3}. [{row.verdict or '?':6}] {row.question} -> {row.answer}", flush=True)
         summary = summarize(rows)
         meta = {
             "sheet": str(args.sheet),
             "mode": "spoken" if args.voice else "typed",
-            "judge": "none" if judge_model is None else judge_model.name,
+            "judge": "none" if judge_model is None else f"{judge_model.name} {args.judge_model}",
+            "answers": f"{cfg.vision_model} {cfg.vision.claude.model} thinking={cfg.vision.claude.thinking} "
+            f"effort={cfg.vision.claude.effort}"
+            + (f", reading: {cfg.vision.reading.model}" if reading is not None else ""),
             "when": time.strftime("%Y-%m-%d %H:%M"),
         }
         write_outputs(recorder.dir, rows, summary, meta)

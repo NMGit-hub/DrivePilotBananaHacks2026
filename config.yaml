@@ -193,6 +193,8 @@ vision:
   sign_frame_spacing_s: 1.2 # "what did that sign say?": reach further back, at full width
   sign_closeups: 3          # sign questions also get close-ups of the signs the detectors saw in the last...
   sign_closeup_window_s: 5.0  # ...5 s (a 25 px DO NOT ENTER sign in the frame is unreadable; its close-up isn't)
+  location: true            # "Location (from GPS): Bayside, Queens, New York City, New York." (rules depend on the city)
+  location_refresh_m: 400.0 # looked up again (Mapbox reverse geocoding, in the background) after moving this far
   latest_width: 1280
   older_width: 640
   jpeg_quality: 80
@@ -207,6 +209,13 @@ vision:
     model: claude-haiku-4-5
     max_tokens: 300
     max_retries: 0          # a retry can't arrive in time; failures get a spoken fallback instead
+    thinking: default       # default | disabled | adaptive (Haiku 4.5 doesn't think unless asked)
+    effort: null            # low | medium | high (Haiku 4.5 rejects it)
+  reading:                  # a second Claude model for sign, parking and "what's going on" questions; lights, lanes,
+    model: claude-haiku-5-5 #   memory and go questions stay with vision.claude (null: one model for all). Measured
+    thinking: disabled      #   2026-10-11: held-out questions 18/27 right vs 11 (Haiku 4.5) and 15 (Haiku 5.5) alone
+    effort: low
+    temperature: null       # (Haiku 5.5 rejects any but the default)
   gemini:
     model: gemini-3.8-flash
     thinking_level: low

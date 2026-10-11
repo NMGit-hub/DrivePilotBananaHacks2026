@@ -818,6 +818,24 @@ class ClaudeVisionConfig(_Strict):
     model: str = "claude-haiku-4-5"
     max_tokens: int = Field(300, gt=0)
     max_retries: int = Field(0, ge=0, description="A retry can't arrive within the answer budget anyway.")
+    thinking: Literal["default", "disabled", "adaptive"] = Field(
+        "default",
+        description="default: send nothing (Haiku 4.5 doesn't think unless asked; Haiku 5.5 and newer think "
+        "adaptively by default); disabled: no thinking (fastest; accepted at effort high or below); adaptive.",
+    )
+    effort: Literal["low", "medium", "high"] | None = Field(
+        None, description="output_config.effort (Claude 4.6+ / Haiku 5.5; Haiku 4.5 rejects it): None = not sent."
+    )
+
+
+class ReadingModelConfig(_Strict):
+    """A second Claude model for questions that read or describe the scene (signs, parking, "what's going on");
+    lights, lanes, memory and go questions stay with `vision.claude` (answers/scene.py: `uses_reading_model`)."""
+
+    model: str | None = Field(None, description="None: every question goes to vision.claude.model.")
+    thinking: Literal["default", "disabled", "adaptive"] = "disabled"
+    effort: Literal["low", "medium", "high"] | None = "low"
+    temperature: float | None = Field(None, description="Newer Claude models reject any but the default.")
 
 
 class GeminiVisionConfig(_Strict):
@@ -846,6 +864,10 @@ class VisionConfig(_Strict):
         3, ge=0, le=6, description="Sign questions also get close-ups of this many signs seen (V2 sign detector)..."
     )
     sign_closeup_window_s: float = Field(5.0, gt=0.0, description="...in the last this many seconds.")
+    location: bool = Field(
+        True, description="Tell the model where we are (neighborhood, city, state from GPS; Mapbox reverse geocoding)."
+    )
+    location_refresh_m: float = Field(400.0, gt=0.0, description="Look the place up again after moving this far.")
     latest_width: int = Field(1280, ge=320, description="The latest frame is sent at up to this width...")
     older_width: int = Field(640, ge=160, description="...earlier frames smaller (motion, things just passed).")
     jpeg_quality: int = Field(80, ge=30, le=100)
@@ -862,6 +884,7 @@ class VisionConfig(_Strict):
         0.0, ge=0.0, le=1.0, description="0 = most literal; null for Claude models that reject it (after 4.6)."
     )
     claude: ClaudeVisionConfig = ClaudeVisionConfig()
+    reading: ReadingModelConfig = ReadingModelConfig()
     gemini: GeminiVisionConfig = GeminiVisionConfig()
     ollama: OllamaVisionConfig = OllamaVisionConfig()
 

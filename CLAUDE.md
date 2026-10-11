@@ -25,7 +25,9 @@ is the live status. Read both before starting work.
 - **Detection:** YOLO26s + ByteTrack through the `ultralytics` library.
 - **Vision model:** behind one interface (`answers/vision/`); `vision_model` in `config.yaml` picks the
   provider. **Claude Haiku (`claude-haiku-4-5`) is the default** (user switched from Gemini on 2026-10-09);
-  Gemini Flash, Ollama and a mock stay available as drop-ins and never leak into callers.
+  sign, parking and scene-description questions go to a second model, Claude Haiku 5.5 (`vision.reading`, added
+  2026-10-11 when the user asked to improve the vision answers; measured in PROGRESS.md). Gemini Flash, Ollama and a
+  mock stay available as drop-ins and never leak into callers.
 - **Voice input is wake word only:** "Hey DrivePilot" (custom openWakeWord model trained locally, in
   `scripts/wakeword/`). No push-to-talk buttons or extra devices. (Typed questions exist only as
   the replay/dev tool described in PLAN.md "Replay mode".) One exception (user, 2026-10-10): right after
