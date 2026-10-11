@@ -117,6 +117,14 @@ def test_what_was_that_still_repeats_the_last_message() -> None:
         ("The car (marked 4) is parked.", "The car is parked.", []),
         ("The truck tagged 5 is blocking the lane.", "The truck is blocking the lane.", []),
         ("No tags here.", "No tags here.", []),
+        # the punctuation around a removed tag (seen on the page: "...that shows 30 mph,.")
+        (
+            "I can see a sign on the right that shows 30 mph, [ref 3].",
+            "I can see a sign on the right that shows 30 mph.",
+            [("ref", 3)],
+        ),
+        ("The sign, [ref 3], says 30.", "The sign, says 30.", [("ref", 3)]),
+        ("It reads 30 mph; (ref 3)?", "It reads 30 mph?", [("ref", 3)]),
     ],
 )
 def test_tags_and_mark_numbers_are_taken_out_of_what_is_spoken(raw: str, spoken: str, tags: list[Any]) -> None:

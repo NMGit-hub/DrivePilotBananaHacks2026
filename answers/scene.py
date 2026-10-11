@@ -373,7 +373,9 @@ def strip_tags(sentence: str) -> tuple[str, list[tuple[str, int]]]:
         kind = "image" if (kind_a or kind_b).lower() in ("image", "img") else "ref"
         tags += [(kind, int(n)) for n in re.findall(r"\d{1,3}", nums_a or nums_b)]
     text = STRAY_OBJECT.sub("that one", OBJECT_NUMBER.sub(r"\1", STRAY_MARK.sub("", TAG.sub("", sentence))))
-    text = re.sub(r"\s+([.,!?;:])", r"\1", re.sub(r"\s{2,}", " ", text)).strip(" ,")
+    text = re.sub(r"\s+([.,!?;:])", r"\1", re.sub(r"\s{2,}", " ", text))
+    # Punctuation around a removed tag: "30 mph, [ref 3]." -> "30 mph."; "The sign, [ref 3], says" -> "The sign, says"
+    text = re.sub(r"([,;:])[,;:]+", r"\1", re.sub(r"[,;:]+(?=[.!?])", "", text)).strip(" ,")
     if text and text[0].islower() and sentence.lstrip()[:1].isupper():  # ("In Image 2, the sign..." -> "The sign...")
         text = text[0].upper() + text[1:]
     return text, tags

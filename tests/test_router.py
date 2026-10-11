@@ -142,6 +142,12 @@ TABLE: list[tuple[str, RouteKind, str]] = [
     ("What lane should I be in?", L, "lane"),
     ("Is this the right lane for the exit?", L, "lane"),
     ("Should I move over to the left?", G, "gap_check"),  # a lane change now (no route mentioned)
+    ("Which lane am I in?", M, "scene"),  # where we are (camera + lane detection), not route guidance
+    ("What lane are we in right now?", M, "scene"),
+    ("Which lane is my car in?", M, "scene"),
+    ("What lane am I currently in?", M, "scene"),
+    ("Which lane am I in for 520 east?", L, "lane"),
+    ("What lane are we on for the exit?", L, "lane"),
     # --- everything else: the vision model
     ("What's the speed limit?", M, "scene"),
     ("What did that sign say?", M, "memory"),  # V2-M4: a sign we passed: remembered frames + close-ups

@@ -489,6 +489,12 @@ _LANE_FIRST = _rx(
     r"\b(?:change|switch|move|get) (?:over|lanes?|into the \w+ lane)(?: \w+)? (?:for|to get to|to take|to reach)\b",
     r"\blanes? for\b",
 )
+# "Which lane am I in?" asks where we are, not where the route wants us: the camera answers (the vision model, with
+# lane detection's reading in its prompt), with or without a destination. "...in for my exit?" stays guidance.
+_LANE_POSITION = _rx(
+    r"\b(?:which|what) lane (?:am i|are we|is (?:my|our|the) car)(?: (?:driving|currently|now))? (?:in|on)\b"
+    r"(?! (?:for|to get|to take|to reach|if)\b)",
+)
 _LANE = _rx(
     r"\b(?:which|what) lane\b",
     r"\bam i in the (?:right|correct|wrong|proper) lane\b",
@@ -600,6 +606,8 @@ def _route_once(text: str) -> Route:
         if pattern.search(norm):
             return make(RouteKind.RIGHT_OF_WAY, intent)
 
+    if _LANE_POSITION.search(norm):
+        return make(RouteKind.MODEL, "scene")
     if _LANE.search(norm):
         return make(RouteKind.LANE, "lane")
 
