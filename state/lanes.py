@@ -106,6 +106,7 @@ class LaneLine:
     near_m: float  # detected from this far ahead...
     far_m: float  # ...to this far (unscaled)
     points: tuple[Point, ...]  # polyline in normalized frame coordinates (0..1), near to far
+    yellow: float | None = None  # share of its pixels painted yellow (None: color not known)
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,6 +469,11 @@ class LaneTracker:
         rows, c0, c1, widths = _runs(masks.lines, r0, r1)
         if len(rows) < 8:
             return empty
+        yellow_mask = getattr(masks, "yellow", None)  # (optional: test doubles and old caches have no color)
+        yfrac: np.ndarray | None = None
+        if yellow_mask is not None and yellow_mask.shape == masks.lines.shape:
+            counts = np.pad(np.cumsum(yellow_mask.astype(np.int32), axis=1), ((0, 0), (1, 0)))
+            yfrac = (counts[rows, c1] - counts[rows, c0]) / np.maximum(widths, 1)
         xi = (c0 + c1) / 2.0 * sx
         yi = (rows + 0.5) * sy
         x_m, z_m = geo.to_ground(xi, yi)
@@ -476,6 +482,8 @@ class LaneTracker:
             np.abs(x_m) < _X_RANGE_M
         )
         xi, yi, x_m, z_m = xi[keep], yi[keep], x_m[keep], z_m[keep]
+        if yfrac is not None:
+            yfrac = yfrac[keep]
         if len(x_m) < 8:
             return empty
         weight = z_m / cfg.near_m  # rows thin out with distance: far pixels count more
@@ -490,7 +498,7 @@ class LaneTracker:
             b_f = _grid(b0, _FINE_SPAN * _COARSE_B_STEP, _COARSE_B_STEP / _FINE_STEPS)
         heading, curvature, _ = _search(x_m, z_m, weight, a_f, b_f, _FINE_BIN_M)
 
-        lines = self._find_lines(geo, x_m, z_m, weight, heading, curvature)
+        lines = self._find_lines(geo, x_m, z_m, weight, heading, curvature, yfrac)
         self._fan_out(geo, lines, x_m, z_m, heading, curvature)
         return self._lanes(geo, masks, lines, heading, curvature)
 
@@ -542,8 +550,10 @@ class LaneTracker:
         weight: np.ndarray,
         heading: float,
         curvature: float,
+        yfrac: np.ndarray | None = None,
     ) -> list[LaneLine]:
-        """Peaks of the offset histogram at the best heading/curvature, as lines (left to right)."""
+        """Peaks of the offset histogram at the best heading/curvature, as lines (left to right); `yfrac`: each
+        pixel run's yellow share (a line's color is its runs' mean)."""
         cfg = self.cfg
         off = x_m - heading * z_m - curvature * z_m * z_m
         nbins = int(2 * _X_RANGE_M / cfg.bin_m) + 2
@@ -574,7 +584,9 @@ class LaneTracker:
             taken.append(center)
             x0 = float(np.average(off[member], weights=weight[member]))
             near, far = float(zs.min()), float(zs.max())
-            found.append(LaneLine(x0, support, near, far, self._polyline(geo, x0, heading, curvature, near, far)))
+            yellow = None if yfrac is None else float(np.mean(yfrac[member]))
+            polyline = self._polyline(geo, x0, heading, curvature, near, far)
+            found.append(LaneLine(x0, support, near, far, polyline, yellow))
             if len(found) >= 12:
                 break
         found.sort(key=lambda line: line.offset_m)
@@ -693,7 +705,7 @@ class LaneTracker:
         scale = self.scale
         center_u = (lines[left].offset_m + lines[right].offset_m) / 2.0
         v_left, v_right = self._drivable_sides(geo, masks.drivable, center_u, heading, curvature)
-        lanes_left = self._count_side(lines, left, -1, width_u, v_left)
+        lanes_left = self._count_side(lines, left, -1, width_u, v_left, self._yellow_edge(lines))
         lanes_right = self._count_side(lines, right, +1, width_u, v_right)
         d_left = None if v_left is None else -v_left.edge
         d_right = None if v_right is None else v_right.edge
@@ -712,17 +724,42 @@ class LaneTracker:
             drivable_right_m=None if d_right is None else d_right * scale,
         )
 
+    def _yellow_edge(self, lines: list[LaneLine]) -> int | None:
+        """The index of the nearest-to-the-left yellow line, our direction's left edge (US: yellow lines separate
+        opposing traffic or mark the left edge of a one-way roadway), or None. A line is yellow with
+        `yellow_line_share` of its pixels yellow, and only while another line of the frame is white (under orange
+        street lights every line looks yellow)."""
+        cfg = self.cfg
+        shares = [line.yellow for line in lines]
+        if any(s is None for s in shares) or not any(s < cfg.white_line_share for s in shares if s is not None):
+            return None
+        car = -cfg.camera_offset_m / self.scale
+        yellow = [
+            i for i, line in enumerate(lines) if line.offset_m < car and (line.yellow or 0.0) >= cfg.yellow_line_share
+        ]
+        return yellow[-1] if yellow else None
+
     def _count_side(
-        self, lines: list[LaneLine], start: int, step: int, width_u: float, view: _SideView | None
+        self,
+        lines: list[LaneLine],
+        start: int,
+        step: int,
+        width_u: float,
+        view: _SideView | None,
+        edge: int | None = None,
     ) -> int | None:
         """Lanes beyond our lane's line `start` on one side (step -1: left, +1: right), or None if not clear.
 
         Walks outward line by line while each gap is one lane wide and inside the drivable area. It stops at a
         line the drivable area ends at (or at a shoulder narrower than a lane), and only if the camera sees past
-        that edge: otherwise the road may go on out of view, and the answer is None.
+        that edge: otherwise the road may go on out of view, and the answer is None. `edge`: a line known to be
+        the road's edge on this side (the yellow left edge line): counting stops there, whatever the drivable area
+        does beyond it (a paved shoulder as wide as a lane).
         """
         cfg = self.cfg
-        if view is None:
+        if edge is not None and step * (edge - start) <= 0:
+            return 0  # our own line is the edge
+        if view is None and edge is None:
             return None
         slack = cfg.edge_drivable_max * width_u
         count = 0
@@ -731,6 +768,15 @@ class LaneTracker:
             here = step * lines[i].offset_m  # outward-positive, like the view
             j = i + step
             gap = abs(lines[j].offset_m - lines[i].offset_m) if 0 <= j < len(lines) else None
+            if edge is not None and gap is not None and gap <= cfg.gap_max * width_u:
+                if gap >= cfg.gap_min * width_u:
+                    count += 1  # one more lane before the edge line (painted lanes: the drivable area isn't asked)
+                if j == edge:
+                    return count
+                i = j
+                continue
+            if view is None:
+                return None  # (only with an edge line: the lines between don't lead to it lane by lane)
             if gap is not None and gap <= cfg.gap_max * width_u:
                 reach = view.beyond(here, min(gap, slack))  # does the road reach the next line?
                 if reach is not None and reach >= gap - slack:

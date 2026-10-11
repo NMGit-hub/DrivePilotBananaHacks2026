@@ -732,6 +732,25 @@ class LanesConfig(_Strict):
         description="A wider camera (the phone's 114° ultrawide) gives the lane model its center cropped to this field "
         "of view (YOLOPv2 and the tracker are tuned on ~60° dashcams); null: the whole frame.",
     )
+    yellow_hue: Annotated[tuple[int, int], Strict(False)] = Field(
+        (15, 40), description="Lane-line pixels in this OpenCV hue range (0-180)..."
+    )
+    yellow_min_sat: int = Field(70, ge=0, le=255, description="...at least this saturated...")
+    yellow_min_val: int = Field(70, ge=0, le=255, description="...and this bright are yellow paint.")
+    yellow_line_share: float = Field(
+        0.4,
+        gt=0.0,
+        le=1.0,
+        description="A line with this share of yellow pixels is yellow: in the US the left edge of our direction "
+        "(lanes to the left are counted up to it, never past it; a wide paved shoulder isn't a lane)...",
+    )
+    white_line_share: float = Field(
+        0.15,
+        ge=0.0,
+        lt=1.0,
+        description="...but only if another line in the frame is white (below this share): under orange street "
+        "lights every line looks yellow.",
+    )
     view_center_y: float = Field(
         0.5,
         gt=0.0,

@@ -1,0 +1,381 @@
+# Hand-labeled lane position on the user's own Mercedes dashcam highway clips, for scripts/eval_lanes.py index.
+# Labeled 2026-10-11 by a Claude Code subagent, looking at each frame: every 6 s from t=3 s, the road band of the
+# frame (rows ~0.62-0.95 of the 1920x1280 frame, full width, shown at 1200 px wide; zoomed crops where needed).
+#   index: our lane counted from the left (1 = leftmost lane of our direction)
+#   count: lanes in our direction, only where the right edge is clearly visible too (null: not sure)
+# Frames that couldn't be labeled confidently are left out (blocked view, gores/merges, mid lane change, ramps,
+# lines not readable at night or in glare). Videos: data/videos/<file> (folder own/); camera ~96 deg wide,
+# pitched up (road in the lower ~35 % of the frame). Night clips were contrast-stretched before labeling.
+# dm_20260918_203008 (night, rightmost lane of a wide freeway, left edge never readable) has no labels and is
+# left out. Index is the reliable field; count is filled in only where the right edge was clearly visible.
+clips:
+  - id: dm_20260918_184631
+    file: own/dm_20260918_184631.mp4
+    notes: >-
+      freeway, low evening sun (glare); yellow left edge + shoulder + concrete barrier, then guardrail; 3+ lanes,
+      the lane right of the middle lane is often behind a wide solid line (aux lane); moves to the left lane ~66 s
+    frames:
+      - {t: 3.0, index: 2, count: null}
+      - {t: 9.0, index: 2, count: 3}
+      - {t: 15.0, index: 2, count: 3}
+      - {t: 21.0, index: 2, count: null}
+      - {t: 27.0, index: 2, count: null}
+      - {t: 33.0, index: 2, count: null}
+      - {t: 39.0, index: 2, count: null}
+      - {t: 45.0, index: 2, count: null}
+      - {t: 51.0, index: 2, count: null}
+      - {t: 57.0, index: 2, count: null}
+      - {t: 63.0, index: 2, count: null}
+      - {t: 69.0, index: 1, count: null}
+      - {t: 75.0, index: 1, count: null}
+      - {t: 81.0, index: 1, count: null}
+      - {t: 87.0, index: 1, count: null}
+      - {t: 93.0, index: 1, count: null}
+      - {t: 99.0, index: 1, count: null}
+      - {t: 105.0, index: 1, count: null}
+      - {t: 111.0, index: 1, count: null}
+      - {t: 117.0, index: 1, count: null}
+  - id: dm_20260918_202808
+    file: own/dm_20260918_202808.mp4
+    notes: >-
+      night freeway (same road as 184631), labeled on contrast-stretched frames; yellow left edge + barrier;
+      middle lane, the lane to the right ends (wide dotted lane-drop line); takes an exit ramp ~93-105 s
+    frames:
+      - {t: 3.0, index: 2, count: null}
+      - {t: 33.0, index: 2, count: null}
+      - {t: 39.0, index: 2, count: null}
+      - {t: 45.0, index: 2, count: null}
+      - {t: 51.0, index: 2, count: 3}
+      - {t: 57.0, index: 2, count: 3}
+      - {t: 63.0, index: 2, count: 3}
+      - {t: 69.0, index: 2, count: 3}
+      - {t: 75.0, index: 2, count: 3}
+      - {t: 81.0, index: 2, count: null}
+  - id: dm_20260919_082349
+    file: own/dm_20260919_082349.mp4
+    notes: >-
+      day, overcast freeway with a left HOV / express lane (yellow left edge, solid white line to the general
+      lanes); in lane 2 then the HOV lane from ~15 s (briefly 2 express lanes at 27 s); left edge = yellow line +
+      shoulder + barrier or guardrail
+    frames:
+      - {t: 9.0, index: 2, count: null}
+      - {t: 15.0, index: 1, count: null}
+      - {t: 27.0, index: 2, count: null}
+      - {t: 33.0, index: 1, count: null}
+      - {t: 39.0, index: 1, count: null}
+      - {t: 45.0, index: 1, count: null}
+      - {t: 51.0, index: 1, count: null}
+      - {t: 57.0, index: 1, count: null}
+      - {t: 63.0, index: 1, count: null}
+      - {t: 69.0, index: 1, count: null}
+      - {t: 75.0, index: 1, count: null}
+      - {t: 81.0, index: 1, count: null}
+      - {t: 87.0, index: 1, count: null}
+      - {t: 93.0, index: 1, count: null}
+      - {t: 99.0, index: 1, count: null}
+      - {t: 105.0, index: 1, count: null}
+      - {t: 111.0, index: 1, count: null}
+  - id: dm_20260919_082750
+    file: own/dm_20260919_082750.mp4
+    notes: >-
+      day, overcast; I-90-style HOV lane through lidded tunnels (15-39 s, yellow-lit) and across a floating
+      bridge; leftmost lane throughout: yellow left edge + shoulder + barrier, double/solid white line on the right
+    frames:
+      - {t: 3.0, index: 1, count: null}
+      - {t: 9.0, index: 1, count: null}
+      - {t: 15.0, index: 1, count: null}
+      - {t: 21.0, index: 1, count: null}
+      - {t: 27.0, index: 1, count: null}
+      - {t: 33.0, index: 1, count: null}
+      - {t: 39.0, index: 1, count: null}
+      - {t: 45.0, index: 1, count: null}
+      - {t: 51.0, index: 1, count: null}
+      - {t: 57.0, index: 1, count: null}
+      - {t: 63.0, index: 1, count: null}
+      - {t: 69.0, index: 1, count: null}
+      - {t: 75.0, index: 1, count: null}
+      - {t: 81.0, index: 1, count: null}
+      - {t: 87.0, index: 1, count: null}
+      - {t: 93.0, index: 1, count: null}
+      - {t: 99.0, index: 1, count: null}
+      - {t: 105.0, index: 1, count: null}
+      - {t: 111.0, index: 1, count: null}
+      - {t: 117.0, index: 1, count: null}
+  - id: dm_20260919_082950
+    file: own/dm_20260919_082950.mp4
+    notes: >-
+      day, overcast; continues 082750: HOV lane on the bridge, a long tunnel (27-57 s), then the general lanes
+      into the city (left lane, dashed line on the right from ~69 s); yellow left edge + barrier throughout
+    frames:
+      - {t: 3.0, index: 1, count: null}
+      - {t: 9.0, index: 1, count: null}
+      - {t: 15.0, index: 1, count: null}
+      - {t: 21.0, index: 1, count: null}
+      - {t: 27.0, index: 1, count: null}
+      - {t: 33.0, index: 1, count: null}
+      - {t: 39.0, index: 1, count: null}
+      - {t: 45.0, index: 1, count: null}
+      - {t: 51.0, index: 1, count: null}
+      - {t: 57.0, index: 1, count: null}
+      - {t: 63.0, index: 1, count: null}
+      - {t: 69.0, index: 1, count: null}
+      - {t: 75.0, index: 1, count: null}
+      - {t: 81.0, index: 1, count: null}
+      - {t: 87.0, index: 1, count: null}
+      - {t: 93.0, index: 1, count: null}
+      - {t: 99.0, index: 1, count: null}
+      - {t: 105.0, index: 1, count: null}
+      - {t: 111.0, index: 1, count: null}
+      - {t: 117.0, index: 1, count: null}
+  - id: dm_20260919_151629
+    file: own/dm_20260919_151629.mp4
+    notes: >-
+      day, sunny; tunnel then the floating bridge eastbound in the left (HOV) lane, then another tunnel (117 s);
+      yellow left edge + shoulder + barrier, white line on the right
+    frames:
+      - {t: 3.0, index: 1, count: null}
+      - {t: 15.0, index: 1, count: null}
+      - {t: 21.0, index: 1, count: null}
+      - {t: 27.0, index: 1, count: null}
+      - {t: 33.0, index: 1, count: null}
+      - {t: 39.0, index: 1, count: null}
+      - {t: 45.0, index: 1, count: null}
+      - {t: 51.0, index: 1, count: null}
+      - {t: 57.0, index: 1, count: null}
+      - {t: 63.0, index: 1, count: null}
+      - {t: 69.0, index: 1, count: null}
+      - {t: 75.0, index: 1, count: null}
+      - {t: 81.0, index: 1, count: null}
+      - {t: 87.0, index: 1, count: null}
+      - {t: 93.0, index: 1, count: null}
+      - {t: 99.0, index: 1, count: null}
+      - {t: 105.0, index: 1, count: null}
+      - {t: 111.0, index: 1, count: null}
+      - {t: 117.0, index: 1, count: null}
+  - id: dm_20260919_155231
+    file: own/dm_20260919_155231.mp4
+    notes: >-
+      day, sunny; on-ramp and merge (0-21 s, not labeled), rightmost of 3 lanes, then the middle of 3 with a
+      right HOV lane (diamond at 99 s) behind a solid line; yellow left edge + shoulder + barrier or guardrail
+    frames:
+      - {t: 27.0, index: 3, count: 3}
+      - {t: 33.0, index: 3, count: 3}
+      - {t: 39.0, index: 3, count: 3}
+      - {t: 45.0, index: 3, count: null, note: exit lane splitting off on the right}
+      - {t: 51.0, index: 2, count: 3}
+      - {t: 57.0, index: 2, count: null}
+      - {t: 63.0, index: 2, count: null}
+      - {t: 69.0, index: 2, count: 3}
+      - {t: 75.0, index: 2, count: null}
+      - {t: 81.0, index: 2, count: null}
+      - {t: 87.0, index: 2, count: null}
+      - {t: 93.0, index: 2, count: null}
+      - {t: 99.0, index: 2, count: 3}
+      - {t: 105.0, index: 2, count: null}
+      - {t: 111.0, index: 2, count: 3}
+      - {t: 117.0, index: 2, count: 3}
+  - id: dm_20260926_173830
+    file: own/dm_20260926_173830.mp4
+    notes: >-
+      day, low sun, construction zone (cones, temporary barriers, restriped lines); left lane (HOV) bounded by
+      a yellow left edge and a solid white line; lane 2 until ~60 s, then lane 3 of 3 (+ coned right shoulder);
+      exit ramp at the end
+    frames:
+      - {t: 9.0, index: 2, count: null}
+      - {t: 33.0, index: 2, count: null}
+      - {t: 39.0, index: 2, count: 3}
+      - {t: 45.0, index: 2, count: 3}
+      - {t: 51.0, index: 2, count: 3}
+      - {t: 57.0, index: 2, count: 3}
+      - {t: 63.0, index: 3, count: null}
+      - {t: 69.0, index: 3, count: null}
+      - {t: 75.0, index: 3, count: null}
+      - {t: 81.0, index: 3, count: null}
+      - {t: 87.0, index: 3, count: null}
+      - {t: 93.0, index: 3, count: null}
+      - {t: 99.0, index: 3, count: null}
+      - {t: 105.0, index: 3, count: null}
+  - id: dm_20260926_190155
+    file: own/dm_20260926_190155.mp4
+    notes: >-
+      dusk freeway (same road as 184631); yellow left edge + shoulder + barrier or guardrail; lane 2 (right line
+      solid, aux lane beyond), moves to the left lane ~33 s, back to lane 2 ~78 s
+    frames:
+      - {t: 3.0, index: 2, count: null}
+      - {t: 9.0, index: 2, count: null}
+      - {t: 15.0, index: 2, count: null}
+      - {t: 21.0, index: 2, count: null}
+      - {t: 27.0, index: 2, count: null}
+      - {t: 39.0, index: 1, count: null}
+      - {t: 45.0, index: 1, count: null}
+      - {t: 51.0, index: 1, count: null}
+      - {t: 57.0, index: 1, count: null}
+      - {t: 63.0, index: 1, count: null}
+      - {t: 69.0, index: 1, count: null}
+      - {t: 75.0, index: 1, count: null}
+      - {t: 81.0, index: 2, count: null}
+      - {t: 87.0, index: 2, count: null}
+      - {t: 93.0, index: 2, count: null}
+      - {t: 99.0, index: 2, count: null}
+      - {t: 105.0, index: 2, count: null}
+      - {t: 111.0, index: 2, count: 3}
+  - id: dm_20260926_224423
+    file: own/dm_20260926_224423.mp4
+    notes: >-
+      night, labeled on contrast-stretched frames; city streets and ramps (0-39 s) then freeways under orange
+      sodium lights where yellow vs white can't be told apart (most frames left out); left edge line + shoulder
+      + barrier at 69-75 s, yellow left edge at 93-99 s
+    frames:
+      - {t: 69.0, index: 2, count: null}
+      - {t: 75.0, index: 2, count: null}
+      - {t: 93.0, index: 1, count: null}
+      - {t: 99.0, index: 1, count: null}
+  - id: dm_20261003_175025
+    file: own/dm_20261003_175025.mp4
+    notes: >-
+      day, low sun; freeway, middle of 3 lanes (yellow left edge + shoulder + barrier, guardrail on the right)
+      until ~60 s; after that lane changes, solid-line separations, gores and a collector road (left out)
+    frames:
+      - {t: 3.0, index: 2, count: 3}
+      - {t: 9.0, index: 2, count: 3}
+      - {t: 15.0, index: 2, count: 3}
+      - {t: 21.0, index: 2, count: null}
+      - {t: 27.0, index: 2, count: 3}
+      - {t: 33.0, index: 2, count: null}
+      - {t: 39.0, index: 2, count: 3}
+      - {t: 45.0, index: 2, count: 3}
+      - {t: 51.0, index: 2, count: null}
+      - {t: 57.0, index: 2, count: null}
+  - id: dm_20261009_112038
+    file: own/dm_20261009_112038.mp4
+    notes: >-
+      day, heavy rain (spray, wiper at 57 s); 3-lane freeway, we are in the rightmost lane, a right-side HOV
+      lane (diamonds at 39 and 105 s) mostly behind a solid line; yellow left edge + shoulder + barrier far left,
+      barrier or shoulder on the right; exit gores at 9 and 39-45 s
+    frames:
+      - {t: 3.0, index: 3, count: null}
+      - {t: 15.0, index: 3, count: 3}
+      - {t: 21.0, index: 3, count: 3}
+      - {t: 27.0, index: 3, count: 3}
+      - {t: 33.0, index: 3, count: 3}
+      - {t: 39.0, index: 3, count: null}
+      - {t: 45.0, index: 3, count: null}
+      - {t: 51.0, index: 3, count: null}
+      - {t: 63.0, index: 3, count: 3}
+      - {t: 69.0, index: 3, count: 3}
+      - {t: 75.0, index: 3, count: 3}
+      - {t: 81.0, index: 3, count: 3}
+      - {t: 87.0, index: 3, count: 3}
+      - {t: 93.0, index: 3, count: 3}
+      - {t: 99.0, index: 3, count: 3}
+      - {t: 105.0, index: 3, count: 3}
+      - {t: 111.0, index: 3, count: 3}
+      - {t: 117.0, index: 3, count: 3}
+  - id: dm_20261009_112238
+    file: own/dm_20261009_112238.mp4
+    notes: >-
+      day, heavy rain; mostly the rightmost lane of a 4+ lane freeway whose left edge is out of view, lane drops,
+      a ramp and a collector (left out); yellow left edge visible at 69 s (2-lane roadway) and 117 s
+    frames:
+      - {t: 69.0, index: 2, count: null}
+      - {t: 117.0, index: 2, count: null}
+  - id: dm_20261009_112638
+    file: own/dm_20261009_112638.mp4
+    notes: >-
+      day, heavy rain (wiper in some frames); 2-lane express / HOV roadway next to the general lanes, a wide
+      double-white buffer on the right most of the time; right lane of the two; yellow left edge + shoulder +
+      barrier or guardrail
+    frames:
+      - {t: 3.0, index: 2, count: null}
+      - {t: 9.0, index: 2, count: null}
+      - {t: 15.0, index: 2, count: null}
+      - {t: 21.0, index: 2, count: null}
+      - {t: 27.0, index: 2, count: null}
+      - {t: 33.0, index: 2, count: null}
+      - {t: 39.0, index: 2, count: null}
+      - {t: 45.0, index: 2, count: null}
+      - {t: 51.0, index: 2, count: null}
+      - {t: 57.0, index: 2, count: null}
+      - {t: 63.0, index: 2, count: null}
+      - {t: 69.0, index: 2, count: null}
+      - {t: 75.0, index: 2, count: null}
+      - {t: 81.0, index: 2, count: null}
+      - {t: 87.0, index: 2, count: null}
+      - {t: 93.0, index: 2, count: null}
+      - {t: 99.0, index: 2, count: null}
+      - {t: 105.0, index: 2, count: null}
+      - {t: 111.0, index: 2, count: null}
+      - {t: 117.0, index: 2, count: null}
+  - id: dm_20261009_115239
+    file: own/dm_20261009_115239.mp4
+    notes: >-
+      day, sunny; freeway with a median barrier / guardrail; yellow left edge + shoulder; left lane until ~78 s,
+      then the middle of 3 lanes (white right edge line + shoulder + grass)
+    frames:
+      - {t: 3.0, index: 1, count: null}
+      - {t: 9.0, index: 1, count: null}
+      - {t: 15.0, index: 1, count: null}
+      - {t: 21.0, index: 1, count: null}
+      - {t: 27.0, index: 1, count: null}
+      - {t: 33.0, index: 1, count: null}
+      - {t: 39.0, index: 1, count: null}
+      - {t: 45.0, index: 1, count: null}
+      - {t: 51.0, index: 1, count: null}
+      - {t: 57.0, index: 1, count: null}
+      - {t: 63.0, index: 1, count: null}
+      - {t: 69.0, index: 1, count: null}
+      - {t: 75.0, index: 1, count: null}
+      - {t: 81.0, index: 2, count: null}
+      - {t: 87.0, index: 2, count: null}
+      - {t: 93.0, index: 2, count: 3}
+      - {t: 99.0, index: 2, count: 3}
+      - {t: 105.0, index: 2, count: 3}
+      - {t: 111.0, index: 2, count: 3}
+      - {t: 117.0, index: 2, count: 3}
+  - id: dm_20261010_175338
+    file: own/dm_20261010_175338.mp4
+    notes: >-
+      dusk, rain (spray, wet glare); freeway in the hills, yellow left edge + shoulder + guardrail; lane 2 of 3+
+      (only every other sheet looked at: t=3-27 and 63-87)
+    frames:
+      - {t: 3.0, index: 2, count: null}
+      - {t: 9.0, index: 2, count: null}
+      - {t: 15.0, index: 2, count: null}
+      - {t: 21.0, index: 2, count: null}
+      - {t: 27.0, index: 2, count: null}
+      - {t: 63.0, index: 2, count: null}
+      - {t: 69.0, index: 2, count: null}
+      - {t: 75.0, index: 2, count: null}
+      - {t: 81.0, index: 2, count: null}
+      - {t: 87.0, index: 2, count: null}
+  - id: dm_20261010_175738
+    file: own/dm_20261010_175738.mp4
+    notes: >-
+      dusk, rain; freeway (continues 175338), yellow left edge + shoulder + guardrail; middle lane (3 lanes where
+      the right edge shows; exit lane on the right at 9 s); only t=3-27 and 63-87 looked at
+    frames:
+      - {t: 3.0, index: 2, count: 3}
+      - {t: 9.0, index: 2, count: null}
+      - {t: 15.0, index: 2, count: 3}
+      - {t: 21.0, index: 2, count: 3}
+      - {t: 27.0, index: 2, count: 3}
+      - {t: 63.0, index: 2, count: null}
+      - {t: 69.0, index: 2, count: null}
+      - {t: 75.0, index: 2, count: null}
+      - {t: 81.0, index: 2, count: null}
+      - {t: 87.0, index: 2, count: null}
+  - id: dm_20261010_224338
+    file: own/dm_20261010_224338.mp4
+    notes: >-
+      night, unlit rural freeway, labeled on contrast-stretched frames (only the headlight pool is readable);
+      yellow left edge, middle of 3 lanes with a white right edge line (left lane at 63 s); only t=3-27 and
+      63-87 looked at
+    frames:
+      - {t: 15.0, index: 2, count: 3}
+      - {t: 21.0, index: 2, count: 3}
+      - {t: 27.0, index: 2, count: 3}
+      - {t: 63.0, index: 1, count: null}
+      - {t: 69.0, index: 2, count: 3}
+      - {t: 75.0, index: 2, count: 3}
+      - {t: 81.0, index: 2, count: 3}
+      - {t: 87.0, index: 2, count: 3}

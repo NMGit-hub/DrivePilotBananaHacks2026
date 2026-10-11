@@ -77,6 +77,7 @@ class LaneMasks:
     drivable: np.ndarray  # drivable-area pixels
     timings_ms: dict[str, float]
     view: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)  # the crop the masks cover (frame shares)
+    yellow: np.ndarray | None = None  # lane-line pixels painted yellow (None: not known)
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -116,6 +117,18 @@ def preprocess(image: np.ndarray) -> np.ndarray:
     return cv2.copyMakeBorder(
         small, PAD_TOP, PAD_TOP, 0, 0, cv2.BORDER_CONSTANT, value=(PAD_VALUE, PAD_VALUE, PAD_VALUE)
     )
+
+
+def yellow_lines(image: np.ndarray, lines: np.ndarray, cfg: LanesConfig) -> np.ndarray:
+    """Which lane-line mask pixels are yellow paint in the image (the image the masks were made from, any size):
+    hue in `cfg.yellow_hue`, saturation and brightness at least `yellow_min_sat` / `yellow_min_val`. The color mask
+    is grown by a pixel (the line mask is a little wider or narrower than the paint). uint8, 1 = yes."""
+    small = cv2.resize(image, MASK_SIZE, interpolation=cv2.INTER_AREA)
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    lo = np.array([cfg.yellow_hue[0], cfg.yellow_min_sat, cfg.yellow_min_val], np.uint8)
+    hi = np.array([cfg.yellow_hue[1], 255, 255], np.uint8)
+    color = cv2.dilate(cv2.inRange(hsv, lo, hi), np.ones((3, 3), np.uint8))
+    return ((color > 0) & (lines > 0)).astype(np.uint8)
 
 
 def decode(seg: torch.Tensor, ll: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -223,7 +236,8 @@ class LaneModel:
         image = crop_view(frame.image, self.view)
         lines, drivable, timings = self.infer(image)
         size = (int(image.shape[1]), int(image.shape[0]))
-        return LaneMasks(frame.t, frame.index, size, lines, drivable, timings, self.view)
+        yellow = yellow_lines(image, lines, self.cfg)
+        return LaneMasks(frame.t, frame.index, size, lines, drivable, timings, self.view, yellow)
 
 
 class LaneWorker(FrameWorker[LaneMasks]):

@@ -18,10 +18,10 @@ import cv2
 import numpy as np
 
 from core.config import LanesConfig
-from perception.lanes import MASK_SIZE, LaneMasks
+from perception.lanes import MASK_SIZE, LaneMasks, yellow_lines
 from state.lanes import DriftEvent, LaneMeasurement, LanesSnapshot, LaneTracker
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2  # 2: + the yellow line pixels (version 1 caches still load, without color)
 
 
 def iter_frames(clip: Path, fps: float, start_s: float = 0.0) -> Iterator[tuple[int, float, np.ndarray]]:
@@ -53,12 +53,14 @@ def build_mask_cache(
     out: Path,
     fps: float,
     transform: Callable[[float, np.ndarray], np.ndarray] | None = None,
+    cfg: LanesConfig | None = None,
 ) -> int:
     """Run `model` (LaneModel.infer) over the clip at `fps` and save the masks; returns the number of frames.
 
-    `transform(t, image)` changes each frame before the model sees it (the virtual-drift warp).
+    `transform(t, image)` changes each frame before the model sees it (the virtual-drift warp, the app's crop).
+    `cfg`: also keep which line pixels are yellow (`perception.lanes.yellow_lines`).
     """
-    times, indices, lines, drivable, ms = [], [], [], [], []
+    times, indices, lines, drivable, ms, yellow = [], [], [], [], [], []
     size = (0, 0)
     for index, t, image in iter_frames(clip, fps):
         if transform is not None:
@@ -70,7 +72,10 @@ def build_mask_cache(
         lines.append(np.packbits(ll.astype(bool), axis=1))
         drivable.append(np.packbits(da.astype(bool), axis=1))
         ms.append(timings["total"])
+        if cfg is not None:
+            yellow.append(np.packbits(yellow_lines(image, ll, cfg).astype(bool), axis=1))
     out.parent.mkdir(parents=True, exist_ok=True)
+    extra: dict[str, Any] = {"yellow": np.array(yellow)} if cfg is not None else {}
     np.savez_compressed(
         out,
         version=CACHE_VERSION,
@@ -80,6 +85,7 @@ def build_mask_cache(
         lines=np.array(lines),
         drivable=np.array(drivable),
         ms=np.array(ms),
+        **extra,
     )
     return len(times)
 
@@ -87,11 +93,14 @@ def build_mask_cache(
 def load_mask_cache(path: Path) -> list[LaneMasks]:
     """The cached masks of one clip, in time order."""
     data = np.load(path)
-    if int(data["version"]) != CACHE_VERSION:
+    if int(data["version"]) not in (1, CACHE_VERSION):
         raise ValueError(f"{path}: cache version {int(data['version'])}, expected {CACHE_VERSION}")
     w, h = (int(v) for v in data["size"])
+    colors = list(data["yellow"]) if "yellow" in data.files else [None] * len(data["t"])
     out = []
-    for t, index, ll, da, ms in zip(data["t"], data["index"], data["lines"], data["drivable"], data["ms"], strict=True):
+    for t, index, ll, da, ms, ye in zip(
+        data["t"], data["index"], data["lines"], data["drivable"], data["ms"], colors, strict=True
+    ):
         out.append(
             LaneMasks(
                 t=float(t),
@@ -100,6 +109,7 @@ def load_mask_cache(path: Path) -> list[LaneMasks]:
                 lines=np.unpackbits(ll, axis=1, count=MASK_SIZE[0]),
                 drivable=np.unpackbits(da, axis=1, count=MASK_SIZE[0]),
                 timings_ms={"total": float(ms)},
+                yellow=None if ye is None else np.unpackbits(ye, axis=1, count=MASK_SIZE[0]),
             )
         )
     return out

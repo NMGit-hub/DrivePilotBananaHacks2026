@@ -60,7 +60,7 @@ def cmd_cache(args: argparse.Namespace) -> int:
             print(f"cached   {clip.name}")
             continue
         started = time.perf_counter()
-        n = build_mask_cache(model.infer, clip, out, args.fps or cfg.lanes.fps, transform)
+        n = build_mask_cache(model.infer, clip, out, args.fps or cfg.lanes.fps, transform, cfg.lanes)
         elapsed = time.perf_counter() - started
         print(f"built    {clip.name}: {n} frames in {elapsed:.0f} s", flush=True)
     return 0

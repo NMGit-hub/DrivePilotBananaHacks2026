@@ -811,3 +811,57 @@ def test_the_drivable_area_of_a_crop_maps_to_frame_boxes() -> None:
     share = area.road_beside(box, W, H)
     assert share is not None and share > 0.8
     assert area.road_beside((10.0, 20.0, 40.0, 100.0), W, H) is None  # outside the crop: unknown
+
+
+# ------------------------------------------------------------------------- the yellow left edge (US)
+
+
+@dataclass(frozen=True)
+class ColorMasks(Masks):
+    """Masks with the yellow line pixels (perception.lanes.yellow_lines)."""
+
+    yellow: np.ndarray | None = None
+
+
+def _drive(road: Road, yellow_at: Sequence[int]) -> LanesSnapshot:
+    """Two seconds on `road`, the lines at the indices `yellow_at` painted yellow."""
+    tracker = LaneTracker(cfg_lanes(), HFOV)
+    for i in range(int(2 * FPS)):
+        road.phase = FAST * i / FPS
+        lines, drivable = render(road)
+        painted = Road(lines=[road.lines[k] for k in yellow_at], drivable=road.drivable, phase=road.phase)
+        yellow = render(painted)[0] & lines if yellow_at else np.zeros_like(lines)
+        tracker.update(i / FPS, ColorMasks(lines, drivable, yellow=yellow), FAST)
+    return tracker.snapshot()
+
+
+def test_a_paved_shoulder_past_the_yellow_edge_is_not_a_lane() -> None:
+    """The car dashcam's highways: yellow edge line, a shoulder as wide as a lane, the barrier's base (a line, the
+    drivable area's end). By width and drivable area the shoulder is one more lane (index 3, as measured on the
+    user's footage: 78 of 79 errors); the yellow line is our direction's left edge: lane 2."""
+
+    def road() -> Road:
+        return Road(lines=[-9.0, -5.4, -1.8, 1.8, 5.4], drivable=(-9.3, 5.9), dashed=(False, False, True, False, False))
+
+    assert _drive(road(), yellow_at=()).lane_index == 3  # (without color: the old reading)
+    assert _drive(road(), yellow_at=(1,)).lane_index == 2
+    assert _drive(road(), yellow_at=(0, 1, 2, 3, 4)).lane_index == 3  # every line yellow (sodium lights): no edge
+
+
+def test_our_own_yellow_left_line_makes_us_the_leftmost_lane() -> None:
+    road = Road(lines=[-5.4, -1.8, 1.8, 5.4], drivable=(-5.7, 5.9), dashed=(False, False, True, False))
+    snap = _drive(road, yellow_at=(1,))
+    assert snap.lanes_left == 0 and snap.lane_index == 1
+
+
+def test_yellow_lines_marks_yellow_paint_only() -> None:
+    from perception.lanes import yellow_lines
+
+    image = np.full((360, 640, 3), 90, np.uint8)  # gray road
+    image[:, 100:110] = (40, 190, 230)  # yellow paint (BGR)
+    image[:, 300:310] = (235, 235, 235)  # white paint
+    lines = np.zeros((360, 640), np.uint8)
+    lines[:, 99:111] = 1
+    lines[:, 299:311] = 1
+    yellow = yellow_lines(image, lines, cfg_lanes())
+    assert yellow[:, 100:110].all() and not yellow[:, 299:311].any() and not yellow[:, 200].any()
