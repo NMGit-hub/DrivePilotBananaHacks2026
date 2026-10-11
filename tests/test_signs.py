@@ -312,13 +312,14 @@ class _FakeYOLO:
         self.names = self.det_names if task == "detect" else self.cls_names
         self.predictor = SimpleNamespace(model=None)
 
-    def predict(self, image: np.ndarray, **kwargs: Any) -> list[Any]:
+    def predict(self, image: np.ndarray | list[np.ndarray], **kwargs: Any) -> list[Any]:
         if self.task == "detect":
             return [SimpleNamespace(boxes=_FakeBoxes(self.det_rows), speed={"inference": 1.0})]
         type(self).cls_calls += 1
-        assert image.shape == (96, 96, 3)
+        crops = image if isinstance(image, list) else [image]
+        assert all(c.shape == (96, 96, 3) for c in crops)
         probs = self.probs + [0.0] * (len(self.cls_names) - len(self.probs))
-        return [SimpleNamespace(probs=SimpleNamespace(data=torch.tensor(probs)))]
+        return [SimpleNamespace(probs=SimpleNamespace(data=torch.tensor(probs))) for _ in crops]
 
 
 @pytest.fixture
@@ -1116,6 +1117,36 @@ def test_label_fixes_apply_only_when_asked(monkeypatch: pytest.MonkeyPatch, tmp_
     assert (fixed["kind"], fixed["value"]) == prep.LABEL_FIXES[key] and fixed["labeler_kind"] == "other"
     assert prep.read_labels("train", fixes=False)[0]["kind"] == "other"  # the first build saw the original label
     assert all(prep.in_val(Path(k.split("/")[1])) for k in prep.LABEL_FIXES)  # never a training frame
+
+
+def test_value_views_must_all_agree() -> None:
+    from perception.signs import VALUE_VIEWS, consensus, read_value, view_boxes
+
+    boxes = view_boxes((100.0, 100.0, 130.0, 140.0), 5)
+    assert boxes[0] == (100.0, 100.0, 130.0, 140.0) and len(boxes) == 5 and len(VALUE_VIEWS) == 7
+    assert boxes[1] == pytest.approx((97.6, 100.0, 127.6, 140.0))  # shifted left by 8% of the width
+    assert consensus([(35, 0.99), (35, 0.95), (35, 0.97)]) == (35, 0.95)  # the weakest view decides
+    assert consensus([(35, 0.99), (30, 0.99)]) == (None, 0.99)  # disagreement: no value
+    assert consensus([(35, 0.99), (None, 0.6)]) == (None, 0.6)  # one view sees no number: no value
+    img = np.zeros((720, 1280, 3), np.uint8)
+    seen: list[int] = []
+
+    def classify(crops: list[np.ndarray]) -> list[tuple[int | None, float]]:
+        seen.append(len(crops))
+        return [(25, 0.99), (25, 0.98), (20, 0.99)][: len(crops)]
+
+    assert read_value(classify, img, (100.0, 100.0, 130.0, 140.0), 96, 3) == (None, 0.98) and seen == [3]
+    assert read_value(classify, img, (100.0, 100.0, 130.0, 140.0), 96, 2) == (25, 0.98)
+    assert read_value(classify, img, (5.0, 5.0, 6.0, 6.0), 96, 3) is None  # degenerate crop: not read
+
+
+def test_detector_reads_values_over_views(fake_detector: Any) -> None:
+    _FakeYOLO.det_rows = [(600, 200, 630, 240, 0.9, KIND_INDEX["speed_limit"])]
+    _FakeYOLO.probs = [0.0005, 0.0005, 0.999]
+    det = fake_detector(value_views=5)
+    calls = _FakeYOLO.cls_calls
+    (d,) = det.detect(_frame())
+    assert d.value == 35 and _FakeYOLO.cls_calls == calls + 1  # one classifier call with the 5 views
 
 
 def test_hard_negative_curation_blocks() -> None:

@@ -50,7 +50,7 @@ METRICS = REPO_ROOT / "models" / "signs" / "metrics.json"
 RAW_CACHE = REPO_ROOT / "data" / "signs" / "eval_raw"
 IOU_HIT = 0.5
 EVAL_CONF = 0.05  # raw detection threshold of the evaluation (curves are computed from here up)
-VALUE_SWEEP = (0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.93, 0.95, 0.97, 0.98, 0.99)
+VALUE_SWEEP = (0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.93, 0.95, 0.97, 0.98, 0.99, 0.995, 0.998)
 
 BoxT = tuple[float, float, float, float]
 Item = tuple[str, Path, list["Gt"], list[BoxT]]

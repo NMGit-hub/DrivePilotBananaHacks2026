@@ -530,7 +530,7 @@ class SignsConfig(_Strict):
     )
     iou: float = Field(0.6, gt=0.0, lt=1.0)
     value_conf: float = Field(
-        0.995, gt=0.0, le=1.0, description="Minimum classifier probability to report a speed-limit value."
+        0.9, gt=0.0, le=1.0, description="Minimum classifier probability (in every view) to report a speed-limit value."
     )
     value_min_px: float = Field(
         16.0, gt=0.0, description="Sign boxes shorter than this (pixels at 1280 px frame width) never get a value."
@@ -540,6 +540,9 @@ class SignsConfig(_Strict):
     )
     duplicate_iou: float = Field(
         0.6, gt=0.0, le=1.0, description="One sign reported as two kinds above this overlap: keep the surer one."
+    )
+    value_views: int = Field(
+        5, ge=1, le=7, description="Shifted/scaled crops of a speed sign that must all read the same value."
     )
 
     @field_validator("imgsz")

@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
@@ -133,6 +133,54 @@ def decide_value(probs: np.ndarray, names: dict[int, str], min_prob: float) -> t
     if value is None or p < min_prob:
         return None, p
     return value, p
+
+
+# Views of a sign box the value classifier reads: (dx, dy, scale) relative to the box size. A detector box is a
+# little off in a different way every frame, and a misread number tends to change with the crop while a clearly
+# read one doesn't, so a value counts only when every view agrees (`signs.value_views` of these, in order).
+VALUE_VIEWS: tuple[tuple[float, float, float], ...] = (
+    (0.0, 0.0, 1.0),
+    (-0.08, 0.0, 1.0),
+    (0.08, 0.0, 1.0),
+    (0.0, 0.0, 0.9),
+    (0.0, 0.0, 1.12),
+    (0.0, -0.08, 1.0),
+    (0.0, 0.08, 1.0),
+)
+
+
+def view_boxes(box: Box, views: int) -> list[Box]:
+    """The first `views` VALUE_VIEWS of a box (shifted / scaled about its centre)."""
+    x1, y1, x2, y2 = box
+    w, h = x2 - x1, y2 - y1
+    out = []
+    for dx, dy, s in VALUE_VIEWS[:views]:
+        cx, cy = (x1 + x2) / 2 + dx * w, (y1 + y2) / 2 + dy * h
+        out.append((cx - s * w / 2, cy - s * h / 2, cx + s * w / 2, cy + s * h / 2))
+    return out
+
+
+def consensus(readings: Sequence[tuple[int | None, float]]) -> tuple[int | None, float]:
+    """(value, lowest probability) when every view reads the same speed; (None, lowest probability) otherwise."""
+    p = min(prob for _, prob in readings)
+    values = {v for v, _ in readings}
+    if len(values) == 1 and None not in values:
+        return readings[0][0], p
+    return None, p
+
+
+def read_value(
+    classify: Callable[[list[np.ndarray]], list[tuple[int | None, float]]],
+    image: np.ndarray,
+    box: Box,
+    size: int,
+    views: int,
+) -> tuple[int | None, float] | None:
+    """The classifier's consensus reading of a sign over `views` crops of its box (None if a crop is degenerate)."""
+    crops = [crop_square(image, b, size) for b in view_boxes(box, views)]
+    if any(c is None for c in crops):
+        return None
+    return consensus(classify([c for c in crops if c is not None]))
 
 
 def _iou(a: Box, b: Box) -> float:
@@ -366,6 +414,11 @@ class SignDetector:
             raise SignGpuError(f"sign {what} is not on the GPU as configured: device={device}, precision={precision}")
         return device, precision
 
+    def classify(self, crops: list[np.ndarray]) -> list[tuple[int | None, float]]:
+        """Top-1 (value or None for the reject class, probability) of the value classifier per crop."""
+        results: Any = self.cls.predict(crops, **self._cls_args)
+        return [top_reading(r.probs.data.float().cpu().numpy(), self.cls_names) for r in results]
+
     def raw_detections(self, frame: Frame, classify_min_px: float) -> list[RawSign]:
         """Every box at the detector's lowest configured confidence, speed kinds classified if tall enough.
 
@@ -384,10 +437,9 @@ class SignDetector:
             top_value: int | None = None
             top_prob: float | None = None
             if value_attempted(kind, box, frame.width, classify_min_px):
-                crop = crop_square(frame.image, box, self.cfg.classifier_imgsz)
-                if crop is not None:
-                    res: Any = self.cls.predict(crop, **self._cls_args)
-                    top_value, top_prob = top_reading(res[0].probs.data.float().cpu().numpy(), self.cls_names)
+                reading = read_value(self.classify, frame.image, box, self.cfg.classifier_imgsz, self.cfg.value_views)
+                if reading is not None:
+                    top_value, top_prob = reading
                     n_cls += 1
             out.append(RawSign(kind, float(conf), box, top_value, top_prob))
         t2 = time.perf_counter()
