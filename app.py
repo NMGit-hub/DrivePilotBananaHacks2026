@@ -13,8 +13,10 @@ The screen is at http://localhost:8000/ (video plus the question and answer as t
 `adb reverse tcp:8000 tcp:8000`.
 
 Threads: capture → perception (YOLO26s + ByteTrack ∥ ego motion on the GPU) → world state (its own thread) →
-alert engine; microphone → wake word → end of question → Whisper → assistant → speaker; a housekeeping thread
-feeds GPS fixes to navigation, asks scripted questions and updates the page's status line; the web server.
+alert engine; the world thread hands frames to the lanes thread (YOLOPv2 + lane tracker: drift warnings, the
+drivable area for pedestrian warnings) and the sign thread; microphone → wake word → end of question → Whisper
+→ assistant → speaker; a housekeeping thread feeds GPS fixes to navigation, asks scripted questions and updates
+the page's status line; the web server.
 Every run writes a review folder, runs/<time>_<label>/: the log, events (questions, answers, alerts, world
 events, GPS fixes, latencies), detections, perf, frames (one a second plus every frame sent to the vision
 model) and summary.json (latencies against PLAN.md's targets).
@@ -36,7 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 from answers.alerts import LIGHT_GREEN, SAFETY_ALERT_TEXTS, YOUR_TURN
 from answers.assistant import CAMERA_LOST, Assistant
-from answers.lanes import VisionLaneReader
+from answers.lanes import CameraLaneReader, VisionLaneReader
 from answers.parking import ParkingWatch
 from answers.scene import SceneHandler, encode_jpeg
 from answers.speech import Priority, Speaker, TextSpeaker, Utterance
@@ -54,9 +56,12 @@ from nav.phrasing import in_distance, maneuver_phrase
 from perception.detector import Detector, Track
 from perception.ego_motion import EgoMotionEstimator
 from perception.gpu_monitor import GpuMonitor
+from perception.lanes import LaneMasks, LaneWorker
 from perception.pipeline import AsyncListener, PerceptionResult, PerceptionWorker
 from perception.sign_worker import SignWorker
+from state.lanes import DRIFT_TEXTS, LanesSnapshot, LaneTracker
 from state.memory import SceneMemory
+from state.pedestrians import DrivableArea
 from state.signs import SignTracker
 from state.signs import alert_texts as sign_alert_texts
 from state.world import WorldEvent, WorldSnapshot, WorldState
@@ -75,11 +80,14 @@ STALE_CAMERA_S = 1.5  # a live camera with no processed frame for this long is "
 CAMERA_RETRY_S = 3.0  # first wait after a failed reconnect (doubles, up to CAMERA_RETRY_MAX_S)
 CAMERA_RETRY_MAX_S = 30.0
 CAMERA_HEALTHY_S = 30.0  # running this long after a reconnect resets the backoff
+LANES_FRESH_S = 0.5  # lane detection older than this (vs. the frame shown / the question) isn't used
 STALE_AFTER_NAV = {"nav_rerouted", "nav_not_this_exit", "nav_arrived", "nav_roundabout"}
+LaneModelFactory = Callable[[], Callable[[Frame], LaneMasks]]
 FIXED_ALERT_TEXTS = (  # pre-rendered: play at once
     YOUR_TURN,
     LIGHT_GREEN,
     *SAFETY_ALERT_TEXTS,
+    *DRIFT_TEXTS,
     *FIXED_ALERTS,
     *sign_alert_texts(list(range(5, 90, 5))),
 )
@@ -178,6 +186,7 @@ class DrivePilotApp:
         status: dict[str, str] | None = None,
         scripted: Sequence[tuple[float, str]] = (),
         exit_at_end: bool = False,
+        lane_model: LaneModelFactory | None = None,
     ) -> None:
         self.cfg = cfg
         self._make_source = make_source
@@ -213,7 +222,16 @@ class DrivePilotApp:
         self._fps_mark: tuple[float, int] = (time.perf_counter(), 0)
         self._started_at: float | None = None
 
-        self.world = WorldState(cfg, on_event=self._on_world_event, speed_source=self._gps_speed_at)
+        self.lanes = LaneTracker(cfg.lanes, cfg.effective_hfov_deg)  # V2-M5: fed by the lanes thread
+        self._lane_model = lane_model  # builds YOLOPv2 on the lanes thread (None: lanes off)
+        self.lane_worker: LaneWorker | None = None
+        self._drivable: DrivableArea | None = None  # the lane model's latest drivable area (pedestrian warnings)
+        self.world = WorldState(
+            cfg,
+            on_event=self._on_world_event,
+            speed_source=self._gps_speed_at,
+            drivable_source=lambda: self._drivable,
+        )
         self.memory = SceneMemory(cfg.memory)  # V2: "what was that sign?"
         self.signs = SignTracker(cfg.sign_alerts)  # V2-M6: what the sign detector read (limits, school zones)
         self.sign_worker: SignWorker | None = None
@@ -225,11 +243,12 @@ class DrivePilotApp:
         self.screen = ScreenSpeaker(speaker, self.latency, hub, recorder)
         self.nav: NavHandler | None = None
         if routing is not None:
-            lane_reader = (
+            vision_reader = (
                 VisionLaneReader(vision, self._latest_frame, cfg.vision, on_frame=self._save_model_frame)
                 if vision is not None
                 else None
             )
+            lane_reader = CameraLaneReader(lambda: self.lanes_view(self.media_time()), vision_reader)
             self.nav = NavHandler(cfg.nav, routing, self.gps_fix, self._on_nav_alert, lane_reader)
         self.scene = (
             SceneHandler(
@@ -348,6 +367,11 @@ class DrivePilotApp:
             if result.new_segment:
                 self.signs.reset()
             self.sign_worker.offer(result.frame)
+        if self.lane_worker is not None:
+            if result.new_segment:
+                self.lanes.reset()
+                self._drivable = None
+            self.lane_worker.offer(result.frame)
         if self.hub is not None and self.cfg.ui.overlays:
             self.hub.offer_frame(result.frame, self._overlay(result))
 
@@ -364,6 +388,7 @@ class DrivePilotApp:
                 frame.height,
                 parking_active=self.parking.active,
                 highlight=highlight[0] if highlight is not None and left > 0 else None,
+                lanes=self.lanes_view(frame.t),
             )
         except Exception:
             log.exception("overlay failed")
@@ -587,6 +612,9 @@ class DrivePilotApp:
         then, before = self._fps_mark
         fps = (processed - before) / (now - then) if now > then and processed >= before else 0.0
         self._fps_mark = (now, processed)
+        for name, model in (("lanes", self.lane_worker), ("signs", self.sign_worker)):
+            if model is not None and model.error is not None:
+                self.status[name] = "failed (see the log)"  # the thread couldn't build its model
         self.hub.set_status(
             t=round(self.media_time(), 1),
             live=self.source.is_live,
@@ -618,9 +646,17 @@ class DrivePilotApp:
         self.hub.publish("thumbnail", image=image_id, t=round(frame.t, 1))
 
     def _extra_context(self) -> list[str]:
-        """What the vision model's prompt adds: navigation and speed, and what the sign detector read."""
+        """What the vision model's prompt adds: navigation and speed, what the sign detector read, and the lane
+        count and our lane from lane detection (when it is sure)."""
         lines = self.nav.extra_context() if self.nav is not None else []
-        return lines + self.signs.context(self.media_time())
+        t = self.media_time()
+        lanes = self.lanes.context() if self.lanes_view(t) is not None else []
+        return lines + self.signs.context(t) + lanes
+
+    def lanes_view(self, t: float) -> LanesSnapshot | None:
+        """Lane detection's latest, if it saw our lane at most LANES_FRESH_S before media time `t`."""
+        snap = self.lanes.snapshot()
+        return snap if snap.valid and 0.0 <= t - snap.t <= LANES_FRESH_S else None
 
     def _hud(self) -> dict[str, Any] | None:
         """The V2 page's banner, speed, speed limit and roundabout diagram."""
@@ -658,22 +694,53 @@ class DrivePilotApp:
         self.sign_worker = SignWorker(factory, self._on_signs, self.cfg.sign_alerts.fps).start()
         self.status["signs"] = "on"
 
+    def _start_lanes(self) -> None:
+        """YOLOPv2 lanes (V2-M5) on their own thread, if the app was given the model (`lane_model`, see
+        `lane_model_factory`): our lane on the page, the lane count for lane guidance, drift warnings, the drivable
+        area for pedestrian warnings."""
+        if self._lane_model is None:
+            self.status.setdefault("lanes", "off")
+            return
+        self.lane_worker = LaneWorker(self._lane_model, self._on_lanes, self.cfg.lanes.fps).start()
+        self.status["lanes"] = "on"
+
+    def _on_lanes(self, frame: Frame, masks: LaneMasks) -> None:
+        """Lanes thread: the masks feed the lane tracker (drift warnings: safety, spoken at once) and the
+        pedestrian check's drivable area."""
+        self._drivable = DrivableArea(masks.t, masks.drivable)
+        for event in self.lanes.update(frame.t, masks, self._gps_speed_at(frame.t)):
+            if self.recorder is not None:
+                self.recorder.event(
+                    "drift",
+                    t=event.t,
+                    side=event.side,
+                    gap_m=round(event.gap_m, 2),
+                    lateral_mps=round(event.lateral_speed_mps, 2),
+                    offset_m=round(event.offset_m, 2),
+                    habit_m=round(event.habit_m, 2),
+                    speed_mps=round(event.speed_mps, 1),
+                )
+            self.assistant.say(Utterance(event.text, "alert", Priority.SAFETY, clip="drift", t=event.t))
+
     def _on_signs(self, frame: Frame, detections: Sequence[Any]) -> None:
         """Sign thread: what the detector read becomes alerts, memory close-ups and the page's limit badge."""
         events = self.signs.update(frame.t, detections)
         for view in self.signs.last_frame:
             text = f"{view.value} mph" if view.value is not None else None
             self.memory.add_sign(frame, view.id, view.kind, view.box, text=text)
+        quiet = self.assistant.alerts.quiet  # (sign alerts are INFO: muted in quiet mode, like "you're up")
         for event in events:
             if self.recorder is not None:
-                self.recorder.event("sign", t=event.t, sign=event.kind, value=event.value, text=event.text)
-            self.assistant.say(Utterance(event.text, "alert", Priority.INFO, t=event.t))
+                self.recorder.event("sign", t=event.t, sign=event.kind, value=event.value, text=event.text, quiet=quiet)
+            if not quiet:
+                self.assistant.say(Utterance(event.text, "alert", Priority.INFO, t=event.t))
 
     def start(self) -> None:
         """Start every thread."""
         if self.hub is not None:
             self.hub.start()
         self._start_signs()
+        self._start_lanes()
         self._world_thread.start()
         self.source.start()
         self.worker = self._make_worker()
@@ -770,6 +837,8 @@ class DrivePilotApp:
         self.parking.close()
         if self.sign_worker is not None:
             self.sign_worker.stop()
+        if self.lane_worker is not None:
+            self.lane_worker.stop()
         if self.voice is not None:
             self.voice.stop()
         if self._mic is not None:
@@ -914,6 +983,23 @@ def _gps_source(cfg: AppConfig) -> GpsSource | None:
     return None
 
 
+def lane_model_factory(cfg: AppConfig, status: dict[str, str]) -> LaneModelFactory | None:
+    """What builds YOLOPv2 on the lanes thread, or None (lanes off, or the weights aren't installed)."""
+    if not cfg.lanes.enabled:
+        status["lanes"] = "off"
+        return None
+    if not cfg.resolve_path(cfg.lanes.weights).is_file():
+        status["lanes"] = "off (no model)"
+        return None
+
+    def factory() -> Callable[[Frame], LaneMasks]:
+        from perception.lanes import LaneModel
+
+        return LaneModel(cfg.lanes, cfg.root)
+
+    return factory
+
+
 def _vision(cfg: AppConfig, status: dict[str, str]) -> VisionModel | None:
     from answers.vision import VisionError, VisionRequest, create_vision_model
 
@@ -1023,6 +1109,7 @@ def build_app(
         status=status,
         scripted=args.ask,
         exit_at_end=args.exit_at_end,
+        lane_model=lane_model_factory(cfg, status),
     )
     if hasattr(speaker, "on_record"):  # the audio speaker reports when each utterance was heard
         speaker.on_record = app.on_speech_record

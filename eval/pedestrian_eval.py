@@ -12,6 +12,7 @@ track, with the reasons (we were stopped / GPS said we were barely moving / stil
 
 from __future__ import annotations
 
+import bisect
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -25,7 +26,7 @@ from core.types import Frame
 from eval.perception_cache import CachedFrame
 from perception.ego_motion import NOT_MEASURED, EgoMotion
 from perception.pipeline import PerceptionResult
-from state.pedestrians import PedestrianEvent, PedestrianSnapshot
+from state.pedestrians import DrivableArea, PedestrianEvent, PedestrianSnapshot
 from state.world import WorldEvent, WorldState
 
 
@@ -67,13 +68,25 @@ class Episode:
 
 
 def replay(
-    frames: list[CachedFrame], cfg: AppConfig, gps_speed: Callable[[float], float | None] | None = None
+    frames: list[CachedFrame],
+    cfg: AppConfig,
+    gps_speed: Callable[[float], float | None] | None = None,
+    road: list[DrivableArea] | None = None,
 ) -> Replay:
-    """Run the clip's cached perception through WorldState + AlertEngine (see the module docstring)."""
+    """Run the clip's cached perception through WorldState + AlertEngine (see the module docstring). `road`: the
+    clip's YOLOPv2 drivable areas in time order (each frame gets the newest one at or before it, as in the app)."""
     out = Replay()
     if not frames:
         return out
     current = {"index": 0}
+    now = {"t": 0.0}
+
+    def drivable() -> DrivableArea | None:
+        if not road:
+            return None
+        k = bisect.bisect_right([r.t for r in road], now["t"] + 1e-6) - 1
+        return road[k] if k >= 0 else None
+
     world_events: list[WorldEvent] = []
     said: list[Utterance] = []
     alerts = AlertEngine(cfg.alerts, said.append)
@@ -90,7 +103,7 @@ def replay(
             if len(said) > before:
                 out.alerts.append(SpokenAlert(event.t, current["index"], said[-1].text, event.payload))
 
-    world = WorldState(cfg, on_event=on_event, speed_source=gps_speed)
+    world = WorldState(cfg, on_event=on_event, speed_source=gps_speed, drivable_source=drivable)
     tracker = world.pedestrians
     update = tracker.update
     cost: list[float] = []
@@ -106,6 +119,7 @@ def replay(
     stopped_since: float | None = None
     for k, f in enumerate(frames):
         current["index"] = f.index
+        now["t"] = f.t
         if f.ego_stopped and stopped_since is None:
             stopped_since = f.t
         if not f.ego_stopped:

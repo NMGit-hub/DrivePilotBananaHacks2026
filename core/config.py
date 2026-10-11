@@ -438,6 +438,14 @@ class PedestriansConfig(_Strict):
         description="GPS at least this fast while ego motion can't be measured (it holds its last state): moving.",
     )
     confirm_frames: int = Field(3, ge=1, description="In (or entering) the path this many observations in a row.")
+    road_min_share: float = Field(
+        0.3,
+        ge=0.0,
+        le=1.0,
+        description="With YOLOPv2's drivable area (V2-M5): someone counts as in our path only if at least this share "
+        "of the ground around their feet is road (on a sidewalk they can still be stepping into the road).",
+    )
+    road_max_age_s: float = Field(0.3, gt=0.0, description="A drivable-area mask older than this isn't used.")
     max_gap_s: float = Field(0.3, gt=0.0, description="A track unseen for longer starts its streak over.")
     fit_s: float = Field(0.6, gt=0.0, description="Speeds are fitted over this much track history...")
     fit_min_samples: int = Field(6, ge=3, description="...with at least this many samples.")
@@ -661,13 +669,27 @@ class LanesConfig(_Strict):
     # Drift: slowly closing in on a line, above 25 mph.
     car_width_m: float = Field(1.85, gt=0.0)
     min_speed_mps: float = Field(11.18, ge=0.0, description="PLAN.md: drift warnings above 25 mph (GPS speed).")
+    habit_window_s: float = Field(
+        120.0,
+        gt=0.0,
+        description="Our usual place in the lane (camera mount + driver): median offset over this long...",
+    )
+    habit_min_s: float = Field(8.0, ge=0.0, description="...of driving above min_speed_mps; no drift alerts before.")
     smooth_s: float = Field(0.3, gt=0.0, description="Lateral position smoothing (time constant).")
     velocity_window_s: float = Field(1.5, gt=0.0, description="Lateral speed is fitted over this long.")
-    drift_gap_m: float = Field(0.3, description="Alert when the car's side is this close to the line...")
+    quick_window_s: float = Field(
+        0.6, gt=0.0, description="...and over this long, to catch a lane change starting (the slow fit lags)."
+    )
+    drift_gap_m: float = Field(
+        0.2, description="Alert when the car's side is this close to the line (measured from our usual place)..."
+    )
     drift_min_mps: float = Field(0.08, ge=0.0, description="...closing in at least this fast...")
     lane_change_mps: float = Field(0.5, gt=0.0, description="...but slower than this (faster: a lane change)...")
     drift_window_s: float = Field(2.5, gt=0.0, description="...having moved toward it steadily for this long...")
-    drift_min_shift_m: float = Field(0.25, ge=0.0, description="...by at least this much.")
+    drift_min_shift_m: float = Field(0.2, ge=0.0, description="...by at least this much...")
+    drift_steady_share: float = Field(
+        0.8, ge=0.0, le=1.0, description="...moving toward it in this share of that window (not a sudden move)."
+    )
     lane_change_quiet_s: float = Field(4.0, ge=0.0, description="No drift alert this long after a lane change.")
     rearm_gap_m: float = Field(0.55, ge=0.0, description="After an alert: re-armed once the gap is this big again.")
     cooldown_s: float = Field(10.0, ge=0.0, description="At most one drift alert in this long.")

@@ -4,7 +4,9 @@
 badges and a color, in coordinates normalized to the frame (0..1), so the page scales them to whatever size it
 shows the video at. The backend sends it in the same WebSocket message as the frame's JPEG, so they can't drift.
 `hud_packet` is the slower-changing part (navigation banner with lanes, speed, roundabout diagram), sent with
-the status line.
+the status line. `lanes_packet` is what lane detection (V2-M5) saw last: our lane's two lines and the others, each
+resampled to `LANE_POINTS` points so the page can ease between the lane model's ~12 updates a second, and the
+line we're drifting toward (red, with the screen edge on that side pulsing).
 
 Colors mean the same everywhere (PLAN.md "Visualization"): green = where you should be / your turn / allowed,
 red = danger, amber = watch this (pedestrians, cyclists, the car that goes next), white/gray = tracked, nothing to
@@ -16,9 +18,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+import numpy as np
+
 from nav.phrasing import in_distance, maneuver_phrase
 from nav.progress import Progress
 from perception.detector import Track, is_own_hood
+from state.lanes import LanesSnapshot
 from state.world import WorldSnapshot
 
 GREEN, RED, AMBER, WHITE, GRAY = "green", "red", "amber", "white", "gray"
@@ -44,6 +49,39 @@ def ordinal(n: int) -> str:
     return _ORDINALS[n - 1] if 1 <= n <= len(_ORDINALS) else f"{n}th"
 
 
+def resample(points: Sequence[tuple[float, float]], n: int = 8) -> list[list[float]]:
+    """A polyline (near to far) as `n` points evenly spaced along its length (the page eases point by point)."""
+    if len(points) < 2:
+        return [[round(points[0][0], 4), round(points[0][1], 4)]] * n if points else []
+    xy = np.asarray(points, dtype=float)
+    seg = np.hypot(*np.diff(xy, axis=0).T)
+    along = np.concatenate(([0.0], np.cumsum(seg)))
+    if along[-1] <= 0.0:
+        return [[round(float(xy[0, 0]), 4), round(float(xy[0, 1]), 4)]] * n
+    at = np.linspace(0.0, along[-1], n)
+    xs, ys = np.interp(at, along, xy[:, 0]), np.interp(at, along, xy[:, 1])
+    return [[round(float(x), 4), round(float(y), 4)] for x, y in zip(xs, ys, strict=True)]
+
+
+LANE_POINTS = 8
+
+
+def lanes_packet(lanes: LanesSnapshot | None) -> dict[str, Any] | None:
+    """Our lane (its left and right lines), the other lines, and the drift side, or None without a lane."""
+    if lanes is None or not lanes.valid:
+        return None
+    left = next((line for line in lanes.lines if line.role == "left"), None)
+    right = next((line for line in lanes.lines if line.role == "right"), None)
+    if left is None or right is None:
+        return None
+    return {
+        "left": resample(left.points, LANE_POINTS),
+        "right": resample(right.points, LANE_POINTS),
+        "others": [resample(line.points, LANE_POINTS) for line in lanes.lines if line.role == "other"],
+        "drift": lanes.drift_side,
+    }
+
+
 def frame_packet(
     snap: WorldSnapshot | None,
     tracks: Sequence[Track],
@@ -52,12 +90,14 @@ def frame_packet(
     *,
     parking_active: bool = False,
     highlight: int | None = None,
+    lanes: LanesSnapshot | None = None,
 ) -> dict[str, Any]:
     """The overlay for one frame: every tracked object with its meaning, the 4-way badges, the light's state,
-    open parking spots (while the parking watch is on) and the "YOU" badge. `highlight`: a track id to pulse."""
+    open parking spots (while the parking watch is on), the "YOU" badge and our lane (`lanes`: lane detection's
+    latest, if it is recent). `highlight`: a track id to pulse."""
     items: list[dict[str, Any]] = []
     if snap is None:
-        return {"items": items, "you": None}
+        return {"items": items, "you": None, "lanes": lanes_packet(lanes)}
     queue = snap.queue
     queued: dict[int, tuple[int, float]] = {}  # track id -> (position, arrived)
     next_id: int | None = None
@@ -146,7 +186,7 @@ def frame_packet(
             "text": "YOU: your turn" if queue.your_turn else f"YOU: {ordinal(queue.ego_position)}",
             "color": GREEN if queue.your_turn else WHITE,
         }
-    return {"items": items, "you": you}
+    return {"items": items, "you": you, "lanes": lanes_packet(lanes)}
 
 
 def hud_packet(

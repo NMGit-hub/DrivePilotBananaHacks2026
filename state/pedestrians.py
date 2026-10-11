@@ -20,7 +20,7 @@ while we drive (`aim_*`; the fitted homography damps the ground's expansion, so 
 speed). Not placed: a box cut off at a side edge and at the top or bottom (the windshield
 mount, a reflection, someone right beside our door).
 
-The path zone (`PathZone`, behind a small boundary: YOLOPv2's drivable area replaces it in V2-M5): `half_width`
+The path zone (`PathZone`): `half_width`
 either side of a centreline straight ahead, out to `min_length` + `headway_s` × our speed (GPS, else
 `default_speed_mps` while moving). Someone moving away with us (a cyclist riding ahead at our speed) is closed in on
 more slowly: their measured approach (+ `closing_margin_mps` for noise) shortens it, never lengthens it, and until it
@@ -51,6 +51,13 @@ holds its last state), GPS at `gps_moving_mps` or more means moving. Someone in 
 is warned about then. In the zone (or entering) for `confirm_frames` observations in a row, so a one-frame false
 detection says nothing. Once per track; a new track of the same kind appearing where a warned one was just lost
 (an ID switch) inherits its warning.
+
+On the road. With the lanes model running (V2-M5), YOLOPv2's drivable area of a recent frame (`DrivableArea`, at
+most `road_max_age_s` old) also has a say: someone counts as in the path only if at least `road_min_share` of the
+ground around their feet is road (a band at the foot row, half a box wider on each side), so a man walking along
+the sidewalk next to our corridor isn't "ahead". Someone on the sidewalk moving into the path is still "entering":
+stepping off the curb is exactly what that warning is for. Without a mask (lanes off, a stale one) the zone alone
+decides.
 
 Called once per frame on the world thread (WorldState); not thread-safe on its own.
 """
@@ -118,6 +125,30 @@ class PathZone:
 
 
 @dataclass(frozen=True, slots=True)
+class DrivableArea:
+    """YOLOPv2's drivable area of one frame (perception.lanes.LaneMasks.drivable): 1 = road, stretched over the
+    whole frame (mask pixel (r, c) covers frame pixel (c·W/cols, r·H/rows))."""
+
+    t: float  # media time of the frame it was computed on
+    mask: np.ndarray
+
+    def share_at_feet(self, box: Box, width: int, height: int) -> float:
+        """Share of road in a band at the box's foot row, half a box wider on each side (the person's own pixels
+        aren't road, so on a road it is well above zero, on a sidewalk near zero)."""
+        rows, cols = self.mask.shape
+        x1, y1, x2, y2 = box
+        w, h = x2 - x1, y2 - y1
+        sy, sx = rows / height, cols / width
+        r0 = max(0, math.floor((y2 - 0.04 * h) * sy) - 1)
+        r1 = min(rows, math.ceil((y2 + 0.06 * h) * sy) + 1)
+        c0 = max(0, math.floor((x1 - 0.5 * w) * sx))
+        c1 = min(cols, math.ceil((x2 + 0.5 * w) * sx))
+        if r1 <= r0 or c1 <= c0:
+            return 0.0
+        return float(self.mask[r0:r1, c0:c1].mean())
+
+
+@dataclass(frozen=True, slots=True)
 class PersonView:
     """A pedestrian or cyclist as the path check saw it this frame."""
 
@@ -134,6 +165,7 @@ class PersonView:
     streak: int  # observations in a row in (or entering) the path
     alerted: bool
     ignored: str | None = None  # why it can't be warned about: "cut off" (side edge) | "parked bicycle" | "too tall"
+    on_road: bool | None = None  # the ground at their feet is drivable (None: no fresh drivable-area mask)
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,12 +285,15 @@ class PedestrianTracker:
         homography: np.ndarray | None = None,
         gps_speed: float | None = None,
         ego_confident: bool = True,
+        drivable: DrivableArea | None = None,
     ) -> list[PedestrianEvent]:
         """Fold one frame in. `horizon`: the horizon row (px); `gps_speed`: our GPS speed (m/s) with a fresh fix;
-        `ego_confident`: ego motion could be measured (otherwise it holds its last state)."""
+        `ego_confident`: ego motion could be measured (otherwise it holds its last state); `drivable`: YOLOPv2's
+        drivable area of a recent frame (used if at most `road_max_age_s` old)."""
         cfg = self.cfg
         if self._last_t is not None and t < self._last_t - 1e-6:
             self.reset()  # time went backwards (a seek without a segment change): histories don't apply
+        road = drivable if drivable is not None and 0.0 <= t - drivable.t <= cfg.road_max_age_s else None
         dt = 0.0 if self._last_t is None else t - self._last_t
         self._last_t = t
         cam = Camera.from_fov(width, self.hfov_deg, self.camera_height_m)
@@ -301,7 +336,8 @@ class PedestrianTracker:
             placed = self._place(box, body_h, cam, aim_x, horizon, width, height)
             if placed is None:
                 continue
-            view = self._observe(t, track_id, kind, box, placed, zone, turning, still is None, present, events)
+            on_road = None if road is None else road.share_at_feet(box, width, height) >= cfg.road_min_share
+            view = self._observe(t, track_id, kind, box, placed, zone, turning, still is None, present, events, on_road)
             views.append(view)
         self._drop_stale(t)
         self._snapshot = PedestrianSnapshot(
@@ -477,6 +513,7 @@ class PedestrianTracker:
         moving: bool,
         present: set[int],
         events: list[PedestrianEvent],
+        on_road: bool | None = None,
     ) -> PersonView:
         cfg = self.cfg
         x, z = placed.x, placed.z
@@ -504,7 +541,7 @@ class PedestrianTracker:
         approach = 0.0 if person.vz is None else max(0.0, -person.vz)
         closing = min(zone.speed, approach + cfg.closing_margin_mps)
         offset = zone.offset(x, z)
-        in_path = zone.contains(x, z, closing)
+        in_path = zone.contains(x, z, closing) and on_road is not False  # (on a sidewalk: not in our path)
         entering = False
         vx = person.vx
         predict_z = max(cfg.predict_max_z_m, cfg.predict_max_s * zone.speed)
@@ -543,6 +580,7 @@ class PedestrianTracker:
             person.streak,
             person.alerted,
             ignored,
+            on_road,
         )
         if fire:
             if in_path:

@@ -24,7 +24,7 @@ from perception.detector import Track
 from perception.ego_motion import NOT_MEASURED, EgoMotion
 from perception.pipeline import PerceptionResult
 from state.parking import Camera
-from state.pedestrians import ENTERING, IN_PATH, PathZone, PedestrianEvent, PedestrianTracker
+from state.pedestrians import ENTERING, IN_PATH, DrivableArea, PathZone, PedestrianEvent, PedestrianTracker
 from state.world import WorldEvent, WorldState
 
 W, H = 1280, 720
@@ -122,6 +122,8 @@ class Street:
         self.s = 0.0  # how far we have driven (m)
         self.events: list[PedestrianEvent] = []
         self.extra: list[Track] = []  # boxes added as they are (artifacts)
+        self.road_half: float | None = None  # YOLOPv2's drivable area: the road |x| <= this (None: no mask)
+        self.road_age = 0.0  # how old the mask is (s)
 
     def ahead(self, across: float, along: float) -> tuple[float, float]:
         """A road point (`across` m right of the road's centre line, `along` m along it) relative to us: (x, z)."""
@@ -171,7 +173,10 @@ class Street:
         gps_speed = speed if gps == "speed" else gps
         assert gps_speed is None or isinstance(gps_speed, float | int)
         horizon = HORIZON + self.horizon_error
-        events = self.tracker.update(self.t, W, H, self.tracks(), horizon, stopped, hom, gps_speed, self.confident)
+        road = None if self.road_half is None else DrivableArea(self.t - self.road_age, road_mask(self.road_half))
+        events = self.tracker.update(
+            self.t, W, H, self.tracks(), horizon, stopped, hom, gps_speed, self.confident, drivable=road
+        )
         self.events += events
         self.t = round(self.t + 1 / FPS, 6)
         self.s += dz
@@ -183,6 +188,19 @@ class Street:
 
     def kinds(self) -> list[tuple[int, str, str]]:
         return [(e.person.track_id, e.how, e.side) for e in self.events]
+
+
+def road_mask(half: float, rows: int = 360, cols: int = 640) -> np.ndarray:
+    """A drivable-area mask (as YOLOPv2's, stretched over the frame) of a straight road |x| <= half ahead of us."""
+    mask = np.zeros((rows, cols), np.uint8)
+    for r in range(rows):
+        dy = (r + 0.5) * H / rows - HORIZON
+        if dy <= 0:
+            continue
+        z = CAM.f * CAM_H / dy
+        lo, hi = (CAM.cx + x * CAM.f / z for x in (-half, half))
+        mask[r, max(0, round(lo * cols / W)) : min(cols, round(hi * cols / W))] = 1
+    return mask
 
 
 def standing(x: float, z: float) -> Callable[[float], tuple[float, float]]:
@@ -700,3 +718,57 @@ def test_world_state_emits_the_warning_once_and_snapshots_the_people() -> None:
     snap = world.snapshot()
     assert snap is not None and [p.track_id for p in snap.pedestrians.people] == [7]
     assert snap.pedestrians.people[0].alerted
+
+
+# ------------------------------------------------------------------------- the drivable area (V2-M5)
+
+
+def test_someone_on_the_sidewalk_beside_a_narrow_road_is_not_in_our_path() -> None:
+    """A narrow street (the road ends 0.7 m right of where we drive): someone standing 1.15 m out is inside the
+    geometric corridor but on the sidewalk. Without the drivable area: warned; with it: not."""
+    walkers = [Walker(1, standing(1.15, 30.0))]
+    without = Street(walkers)
+    without.drive(3.0, 8.0)
+    assert without.kinds() == [(1, IN_PATH, "right")]
+    with_road = Street(walkers)
+    with_road.road_half = 0.7
+    with_road.drive(3.0, 8.0)
+    assert with_road.events == []
+    people = with_road.tracker.snapshot().people
+    assert people and people[0].on_road is False and not people[0].in_path
+
+
+def test_someone_on_the_road_is_still_in_our_path() -> None:
+    street = Street([Walker(1, standing(1.0, 25.0))])
+    street.road_half = 3.5
+    street.drive(3.0, 8.0)
+    assert street.kinds() == [(1, IN_PATH, "right")]
+    assert street.events[0].person.on_road is True
+
+
+def test_stepping_off_the_sidewalk_is_still_warned_about() -> None:
+    """The curb is 2.0 m out; standing on the sidewalk at 2.6 m, then stepping into the road: "entering"."""
+    street = Street([Walker(3, walking(2.6, 30.0, -1.5, start=3.0))])
+    street.road_half = 2.0
+    street.drive(3.8, 6.0)
+    assert street.kinds() == [(3, ENTERING, "right")]
+
+
+def test_a_stale_drivable_area_is_not_used() -> None:
+    street = Street([Walker(1, standing(1.15, 30.0))])
+    street.road_half = 0.7
+    street.road_age = 1.0  # older than road_max_age_s: the corridor alone decides
+    street.drive(3.0, 8.0)
+    assert street.kinds() == [(1, IN_PATH, "right")]
+    assert street.tracker.snapshot().people[0].on_road is None
+
+
+def test_road_share_at_the_feet() -> None:
+    mask = road_mask(2.0)
+    area = DrivableArea(0.0, mask)
+    on_road = box_of(0.5, 15.0, 0.0, 1.7, 0.5)
+    off_road = box_of(3.5, 15.0, 0.0, 1.7, 0.5)
+    assert on_road is not None and off_road is not None
+    assert area.share_at_feet(on_road, W, H) > 0.8
+    assert area.share_at_feet(off_road, W, H) < 0.05
+    assert area.share_at_feet((10.0, 700.0, 30.0, 719.0), W, H) == 0.0  # outside the road: none

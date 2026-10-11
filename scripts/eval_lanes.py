@@ -3,9 +3,8 @@
     .venv/Scripts/python scripts/eval_lanes.py cache --clip data/videos/highway/<id>.mov ...   # masks at lanes.fps
     .venv/Scripts/python scripts/eval_lanes.py frames --labels eval/lane_labels.yaml            # JPEGs to label
     .venv/Scripts/python scripts/eval_lanes.py index --labels eval/lane_labels.yaml             # lane index score
-    .venv/Scripts/python scripts/eval_lanes.py drift --clip ... (--gpx from data/gps/<id>.gpx)  # drift alerts
-    .venv/Scripts/python scripts/eval_lanes.py virtual --clip <id>.mov --start 5 --rate 0.25    # virtual drift
-    .venv/Scripts/python scripts/eval_lanes.py speed --clip <id>.mov                            # fps with YOLO26s
+    .venv/Scripts/python scripts/eval_lanes.py drift [--frames]       # drift alerts + lane changes (GPS from data/gps)
+    .venv/Scripts/python scripts/eval_lanes.py virtual --clip <id>.mov --start 15 --rate 0.2 --rate 0.8  # virtual
 
 Masks are cached in runs/lanes_cache/<clip stem>.npz (gitignored) so the tracker can be replayed in seconds.
 `--data-root` points at the folder holding data/ and models/ (default: this checkout).
@@ -18,11 +17,12 @@ import itertools
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from core.config import AppConfig, load_config  # noqa: E402
+from core.config import AppConfig, LanesConfig, load_config  # noqa: E402
 from core.logging_setup import get_logger, setup_logging  # noqa: E402
 
 log = get_logger("eval_lanes")
@@ -204,7 +204,7 @@ def cmd_drift(args: argparse.Namespace) -> int:
         for t, e in alerts:
             print(
                 f"    ALERT t={t:5.2f} {e.side:5s} gap {e.gap_m:.2f} m, toward {e.lateral_speed_mps:.2f} m/s, "
-                f"offset {e.offset_m:+.2f} m, {e.speed_mps * 2.237:.0f} mph"
+                f"offset {e.offset_m:+.2f} m (usual {e.habit_m:+.2f}), {e.speed_mps * 2.237:.0f} mph"
             )
         for t, k in changes:
             print(f"    lane change t={t:5.2f} {'right' if k > 0 else 'left'}")
@@ -220,6 +220,91 @@ def cmd_drift(args: argparse.Namespace) -> int:
                     name = f"{_clip_id(video)}{args.tag}_{what}_{t:05.1f}_{dt_s:+.0f}.jpg"
                     cv2.imwrite(str(out_dir / name), draw_lanes(image, snap), [cv2.IMWRITE_JPEG_QUALITY, 85])
     print(f"total: {total_alerts} drift alert(s) in {fast_s / 60.0:.1f} min above the speed threshold")
+    return 0
+
+
+def _expected_alert(steps: list[Any], start: float, sign: float, rate: float, cfg: LanesConfig) -> float | None:
+    """When the car's side reaches `drift_gap_m` of the line in a virtual slide: the unwarped replay's own position
+    (from our usual place, median over ±0.5 s) plus `rate` m/s toward the line from `start`."""
+    import numpy as np
+
+    rows = [
+        (s.t, s.snapshot.offset_m - s.snapshot.habit_m, s.snapshot.lane_width_m)
+        for s in steps
+        if s.snapshot.valid and s.snapshot.habit_m is not None and s.snapshot.lane_width_m is not None
+    ]
+    if not rows:
+        return None
+    ts = np.array([r[0] for r in rows])
+    rel = np.array([r[1] for r in rows])
+    width = float(np.median([r[2] for r in rows]))
+    threshold = width / 2.0 - cfg.car_width_m / 2.0 - cfg.drift_gap_m
+    for t in ts[ts >= start]:
+        near = np.abs(ts - t) <= 0.5
+        if sign * float(np.median(rel[near])) + rate * (t - start) >= threshold:
+            return float(t)
+    return None
+
+
+def cmd_virtual(args: argparse.Namespace) -> int:
+    """Virtual drift: a clip warped as if the car slid sideways at --rate m/s from --start (the lane model runs on
+    the warped frames). The alert should come within 1 s of when the car's side reaches drift_gap_m of the line;
+    a fast slide (a lane change) should stay quiet."""
+    from eval.lanes_eval import build_mask_cache, load_mask_cache, replay, speed_from_gpx, warp_lateral
+    from perception.lanes import LaneModel
+    from state.lanes import LaneTracker
+
+    cfg = _config(args)
+    lc = cfg.lanes
+    root = _data_root(args)
+    model: Any = None
+    for video in args.clip:
+        speed_at = speed_from_gpx(root / "data" / "gps" / f"{_clip_id(video)}.gpx")
+        base_tracker = LaneTracker(lc, args.hfov)
+        base = replay(lc, load_mask_cache(cache_path(video)), args.hfov, speed_at, base_tracker)
+        horizon, scale = base_tracker.horizon, base_tracker.scale  # the warp uses the tracker's own geometry
+        for side in args.side or ["left", "right"]:
+            sign = 1.0 if side == "right" else -1.0
+            for rate in args.rate or [0.2]:
+                tag = f"_virtual_{side}_{rate:g}_{args.start:g}_{args.max_shift:g}"
+                cache = cache_path(video, tag)
+                if args.force or not cache.exists():
+                    if model is None:
+                        model = LaneModel(lc, cfg.root)
+
+                    def transform(
+                        t: float,
+                        image: Any,
+                        sign: float = sign,
+                        rate: float = rate,
+                        scale: float = scale,
+                        horizon: float = horizon,
+                    ) -> Any:
+                        slid = min(rate * max(0.0, t - args.start), args.max_shift)  # (then the driver holds it)
+                        shift = sign * slid / scale  # unscaled metres, like the tracker's
+                        return warp_lateral(image, shift, horizon, lc.camera_height_m)
+
+                    build_mask_cache(model.infer, video, cache, args.fps or lc.fps, transform)
+                steps = replay(lc, load_mask_cache(cache), args.hfov, speed_at)
+                alerts = [(s.t, e) for s in steps for e in s.events]
+                expected = _expected_alert(base, args.start, sign, rate, lc)
+                fast = rate >= lc.lane_change_mps
+                verdict = ""
+                hits = [t for t, e in alerts if t >= args.start and e.side == side]
+                others = [(t, e.side) for t, e in alerts if not (t >= args.start and e.side == side)]
+                if fast:
+                    verdict = "ok (quiet)" if not alerts else "FALSE ALERT"
+                elif expected is None:
+                    verdict = "no expected time (the slide never reaches the line)"
+                elif hits:
+                    verdict = "ok" if abs(hits[0] - expected) <= 1.0 else f"LATE/EARLY by {hits[0] - expected:+.2f} s"
+                else:
+                    verdict = "MISSED"
+                print(
+                    f"{_clip_id(video)} {side} {rate:g} m/s from {args.start:g} s: "
+                    f"expected {'-' if expected is None else f'{expected:.2f}'}, "
+                    f"alert {'-' if not hits else f'{hits[0]:.2f}'}, other alerts {others}: {verdict}"
+                )
     return 0
 
 
@@ -250,6 +335,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--hfov", type=float, default=60.0, help="Field of view of the clips (BDD100K: ~60°).")
     p.add_argument("--frames", action="store_true", help="Save frames at each alert / lane change (runs/lane_drift).")
     p.set_defaults(func=cmd_drift)
+    p = sub.add_parser("virtual", help="Virtual drift: a clip warped into a slow sideways slide.")
+    p.add_argument("--clip", type=Path, action="append", required=True)
+    p.add_argument("--start", type=float, default=15.0, help="The slide starts here (s).")
+    p.add_argument("--rate", type=float, action="append", help="Slide speed, m/s (repeatable; default 0.2).")
+    p.add_argument("--side", choices=("left", "right"), action="append", help="Default: both.")
+    p.add_argument("--fps", type=float, help="Sampling rate (default lanes.fps).")
+    p.add_argument("--hfov", type=float, default=60.0)
+    p.add_argument("--max-shift", type=float, default=1.2, help="The slide stops after this many metres.")
+    p.add_argument("--force", action="store_true", help="Rebuild the warped mask caches.")
+    p.set_defaults(func=cmd_virtual)
     args = parser.parse_args(argv)
     setup_logging("WARNING")
     return int(args.func(args))

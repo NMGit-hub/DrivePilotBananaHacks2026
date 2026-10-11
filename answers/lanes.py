@@ -1,10 +1,13 @@
-"""Which lane are we in? The vision model reads it off the latest frame, for navigation's lane advice.
+"""Which lane are we in? Lane detection (YOLOPv2, V2-M5) when it is sure, else the vision model reads it off the
+latest frame, for navigation's lane advice.
 
 PLAN.md "Combining route and camera": the route says which lanes are valid, the camera says which lane we're in,
 and the difference is the instruction ("move one lane left"). Lane counting by the model is not reliable
 (PROGRESS.md: it said 2 lanes instead of 3 on one of two runs), so a reading is only used when the model says
 it is sure, and the navigation handler only uses it when its lane count matches the route's. Anything else
-(a timeout, low confidence, nonsense numbers) means "I can't tell exactly which lane you're in".
+(a timeout, low confidence, nonsense numbers) means "I can't tell exactly which lane you're in". Lane detection
+answers only when it has seen both road edges recently and its frames agree (state/lanes.py: our lane from the
+left was right on 55 of 56 hand-labeled highway frames it answered); the count match still applies.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from answers.vision import ImagePart, VisionError, VisionModel, VisionRequest
 from core.config import VisionConfig
 from core.logging_setup import get_logger
 from core.types import Frame
+from state.lanes import LanesSnapshot
 
 log = get_logger(__name__)
 
@@ -79,5 +83,26 @@ class VisionLaneReader:
             log.warning("lane reading failed", error=str(exc))
             return None
         reading = parse_lane_reading(data)
-        log.info("lane reading", raw=data, used=reading is not None)
+        log.info("lane reading", source="vision model", raw=data, used=reading is not None)
         return reading
+
+
+class CameraLaneReader:
+    """`nav.handler.LaneReader`: lane detection's count and our lane when it knows both, else `fallback` (the
+    vision model), else None. `snapshot()` gives lane detection's latest, or None if it is stale."""
+
+    def __init__(
+        self,
+        snapshot: Callable[[], LanesSnapshot | None],
+        fallback: Callable[[], tuple[int, int] | None] | None = None,
+    ) -> None:
+        self._snapshot = snapshot
+        self._fallback = fallback
+
+    def __call__(self) -> tuple[int, int] | None:
+        """(lanes in our direction, our lane from the left), or None."""
+        snap = self._snapshot()
+        if snap is not None and snap.lane_count is not None and snap.lane_index is not None:
+            log.info("lane reading", source="lane detection", lanes=snap.lane_count, ours=snap.lane_index)
+            return snap.lane_count, snap.lane_index
+        return self._fallback() if self._fallback is not None else None

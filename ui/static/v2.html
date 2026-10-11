@@ -339,9 +339,70 @@ function draw() {
   }
 }
 
+// our lane (V2-M5): eased toward lane detection's ~12 updates a second, so it glides instead of jumping
+let laneShown = null;
+function easeLanes(target) {
+  if (!target) { laneShown = null; return null; }
+  if (!laneShown || laneShown.others.length !== target.others.length) {
+    laneShown = JSON.parse(JSON.stringify(target));
+    return laneShown;
+  }
+  const k = 0.45;
+  const mix = (a, b) => a.map((q, i) => [q[0] + k * (b[i][0] - q[0]), q[1] + k * (b[i][1] - q[1])]);
+  laneShown.left = mix(laneShown.left, target.left);
+  laneShown.right = mix(laneShown.right, target.right);
+  laneShown.others = laneShown.others.map((line, j) => mix(line, target.others[j]));
+  laneShown.drift = target.drift;
+  return laneShown;
+}
+
+function rgba(hex, a) {
+  const n = parseInt(hex.replace("#", ""), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+function drawLanes(lanes, ox, oy, vw, vh, dpr, now) {
+  const at = q => [ox + q[0] * vw, oy + q[1] * vh];
+  const trace = pts => {
+    ctx.beginPath();
+    pts.forEach((q, i) => { const [x, y] = at(q); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); });
+  };
+  ctx.save();
+  trace([...lanes.left, ...lanes.right.slice().reverse()]); // our lane, faintly filled
+  ctx.closePath();
+  ctx.fillStyle = COLORS.white;
+  ctx.globalAlpha = 0.1;
+  ctx.fill();
+  ctx.globalAlpha = 0.5; // the other lanes' lines
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.strokeStyle = COLORS.gray;
+  for (const line of lanes.others) { trace(line); ctx.stroke(); }
+  for (const side of ["left", "right"]) { // our lane's lines; the one we drift toward in red
+    const red = lanes.drift === side;
+    ctx.globalAlpha = red ? 0.95 : 0.75;
+    ctx.lineWidth = (red ? 5 : 3) * dpr;
+    ctx.strokeStyle = red ? COLORS.red : COLORS.white;
+    trace(lanes[side]);
+    ctx.stroke();
+  }
+  if (lanes.drift) { // ...and that side's screen edge pulses
+    const p = 0.5 + 0.5 * Math.sin(now * 2 * Math.PI * 2);
+    const w = vw * 0.07, left = lanes.drift === "left";
+    const g = ctx.createLinearGradient(left ? ox : ox + vw, 0, left ? ox + w : ox + vw - w, 0);
+    g.addColorStop(0, rgba(COLORS.red, 0.25 + 0.45 * p));
+    g.addColorStop(1, rgba(COLORS.red, 0));
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = g;
+    ctx.fillRect(left ? ox : ox + vw - w, oy, w, vh);
+  }
+  ctx.restore();
+}
+
 function drawOverlay(overlay, ox, oy, vw, vh, dpr) {
   const now = performance.now() / 1000;
   const fs = Math.max(11 * dpr, Math.round(vh / 46)); // label size follows the video size (and pixel density)
+  const lanes = easeLanes(overlay.lanes);
+  if (lanes) drawLanes(lanes, ox, oy, vw, vh, dpr, now);
   for (const item of overlay.items) {
     const [x1, y1, x2, y2] = item.box;
     const x = ox + x1 * vw, y = oy + y1 * vh, w = (x2 - x1) * vw, h = (y2 - y1) * vh;
@@ -407,10 +468,12 @@ function onFrame(buffer) {
   }).catch(() => {});
 }
 
-// keep pulsing highlights alive between frames (a paused replay sends no new frames)
+// keep pulsing highlights and the drift edge alive between frames (a paused replay sends no new frames)
 setInterval(() => {
   const ov = latest && latest.header.overlay;
-  if (ov && ov.items.some(i => i.pulse) && !(ov.pulse_until && Date.now() / 1000 > ov.pulse_until + 0.2) && !drawPending) {
+  const pulsing = ov && ((ov.items.some(i => i.pulse) && !(ov.pulse_until && Date.now() / 1000 > ov.pulse_until + 0.2))
+                         || (ov.lanes && ov.lanes.drift));
+  if (pulsing && !drawPending) {
     drawPending = true; requestAnimationFrame(draw);
   }
 }, 50);

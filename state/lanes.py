@@ -21,13 +21,21 @@ majority over the last `vote_window_s`; when it isn't clear, they are None, so c
 or the vision model.
 
 Drift. Our offset from the lane center is unwrapped across lane changes (a continuous lateral position), smoothed,
-and its speed fitted over `velocity_window_s`. A drift is closing in on a line slowly and steadily (at least
-`drift_min_mps`, slower than `lane_change_mps`, `drift_min_shift_m` over `drift_window_s`) until the car's side is
-`drift_gap_m` from it, at `min_speed_mps` (25 mph) or more by GPS. A fast sideways move is a lane change (we
-can't see the turn signal): no alert, and none for `lane_change_quiet_s` after crossing a line. One alert per
-drift: re-armed when we're back toward the lane center or change lanes, with a cooldown.
+and its speed fitted over `velocity_window_s`. The offset is measured from the camera, and neither where the camera
+sits across the windshield nor where this driver keeps the car in the lane is known (on the BDD100K highway clips
+the median offset is −0.5..+0.2 m), so drift is measured from our usual place: the median offset over the last
+`habit_window_s` of driving at speed (none before `habit_min_s` of it: no alerts until then). A drift is closing in
+on a line slowly and steadily (at least `drift_min_mps`, slower than `lane_change_mps`, `drift_min_shift_m` over
+`drift_window_s`, moving toward it in `drift_steady_share` of that window) until the car's side, counted from our
+usual place, is `drift_gap_m` from it, at `min_speed_mps` (25 mph) or more by GPS. A fast sideways move is a lane
+change (we can't see the turn signal): no alert, and none for `lane_change_quiet_s` after crossing a line. The
+steadiness test matters at a lane change's start: the fitted speed lags the real one by most of
+`velocity_window_s`, so the first second of a fast move looks slow; the speed over the last `quick_window_s` must
+not be a lane change's either. One alert per drift: re-armed when we're back
+near our usual place or change lanes, with a cooldown.
 
-Called from the lanes thread (`update`); `snapshot` is safe from any thread.
+Called from the lanes thread (`update`, which measures outside the lock); `snapshot` and `reset` are safe from any
+thread (a reset is applied by the next `update`).
 """
 
 from __future__ import annotations
@@ -48,19 +56,21 @@ Point = tuple[float, float]
 # Search grids for the shared heading a and curvature b (coarse, then fine around the best coarse cell).
 _COARSE_A_STEP = 0.02
 _COARSE_B_STEP = 0.001
-_FINE_STEPS = 4  # fine cells on each side of the coarse best
-_SEARCH_BIN_M = 0.2  # coarser bins for the search (robust); peaks use cfg.bin_m
+_FINE_STEPS = 4  # fine cells per coarse cell...
+_FINE_SPAN = 2  # ...searched this many coarse cells around the coarse best (heading and curvature trade off)
+_SEARCH_BIN_M = 0.2  # coarser bins for the coarse search (robust); peaks use cfg.bin_m
+_FINE_BIN_M = 0.05  # bins for the fine search
 _X_RANGE_M = 16.0  # line offsets considered: within this of the car (before scaling)
 _MEMBER_M = 0.3  # a pixel within this of a line's offset belongs to it
-_HORIZON_MAX_JUMP = 0.08  # a vanishing row this far (height share) from the estimate is an outlier
-_HORIZON_FAST_SAMPLES = 10  # the first measurements move the estimate quickly from the prior
+_HORIZON_FAST_SAMPLES = 10  # until this many vanishing rows are measured, the estimate is their median
+_HORIZON_WINDOW = 90  # the estimate follows the median of the last this many (~7 s at 12 fps)
 _VP_MAX_RUN = 40  # mask px: wider runs (stop lines, blobs) don't give a direction
 _VP_LINK_ROWS = 3  # segments link run centers this many mask rows apart...
 _VP_LINK_MAX = 30  # ...at most this many mask px apart sideways
 _VP_MIN_LEAN = 0.3  # segments leaning at least this much (dx/dy) on both sides constrain the row
 _VP_ROW_STEP = 4.0  # frame px between candidate rows
 _VP_BIN_PX = 10.0  # frame px: crossing points within ~3 bins agree
-_VP_MIN_SCORE = 0.2  # share of segments that must cross near one point
+_VP_MIN_SCORE = 0.2  # share of each side's segments that must cross near one point
 _DRIVABLE_FAR_M = 20.0  # the drivable area's edges are read this far ahead
 _DRIVABLE_MERGE_M = 2.0  # drivable runs separated by less (a car beside us) are one road
 _EDGE_PERCENTILE = 80.0  # the drivable area's reach: this percentile over rows (cars hide some rows)
@@ -68,6 +78,8 @@ _FAN_MEMBER_M = 0.4  # line pixels this near a line's offset are fitted for its 
 _FAN_MIN_RANGE_M = 6.0  # ...if they span this much distance
 _FAN_MAX_STEP = 0.03  # one frame's fan-out measurement moves the horizon at most this (height share)
 _POLY_STEP_M = 2.0
+_HABIT_MAX_GAP_S = 0.5  # a habit sample stands for at most this long (frames missing in between don't count)
+_LANE_CHANGE_CONFIRM_S = 1.0  # a lane change is logged once we've stayed in the new lane this long
 
 
 class MasksLike(Protocol):
@@ -117,9 +129,10 @@ class DriftEvent:
     t: float
     side: Side
     text: str
-    gap_m: float  # car side to the line
+    gap_m: float  # car side to the line (counted from our usual place in the lane)
     lateral_speed_mps: float  # toward the line
     offset_m: float  # car center from the lane center (+ = right)
+    habit_m: float  # our usual offset from the lane center
     speed_mps: float  # GPS speed
 
 
@@ -159,6 +172,7 @@ class LanesSnapshot:
     lane_width_m: float | None
     lateral_speed_mps: float | None  # + = moving right
     horizon: float
+    habit_m: float | None = None  # our usual offset from the lane center (None: not learned yet)
 
 
 EMPTY = LanesSnapshot(0.0, False, (), (), None, None, None, None, None, None, 0.0, None, None, None, 0.5)
@@ -247,13 +261,18 @@ def _histogram(off: np.ndarray, w: np.ndarray, lo: float, bin_m: float, nbins: i
 
 
 def _search(
-    x: np.ndarray, z: np.ndarray, w: np.ndarray, a_grid: np.ndarray, b_grid: np.ndarray
+    x: np.ndarray, z: np.ndarray, w: np.ndarray, a_grid: np.ndarray, b_grid: np.ndarray, bin_m: float
 ) -> tuple[float, float, float]:
-    """The (heading, curvature) whose offsets are most concentrated, and that concentration."""
-    nbins = int(2 * _X_RANGE_M / _SEARCH_BIN_M) + 2
+    """The (heading, curvature) whose offsets are most concentrated, and that concentration.
+
+    The histograms are smoothed with a binomial kernel (σ = 1 bin) before scoring: on raw (linearly interpolated)
+    bins a line at a bin center scores twice as sharp as one on a bin edge, so the search would prefer a slightly
+    wrong heading and curvature that move the lines onto bin centers (measured: lines 0.15 m off).
+    """
+    nbins = int(2 * _X_RANGE_M / bin_m) + 2
     na, nb = len(a_grid), len(b_grid)
     off = x[None, None, :] - a_grid[:, None, None] * z[None, None, :] - b_grid[None, :, None] * (z * z)[None, None, :]
-    idx = (off + _X_RANGE_M) / _SEARCH_BIN_M
+    idx = (off + _X_RANGE_M) / bin_m
     i0 = np.floor(idx).astype(np.int64)
     frac = idx - i0
     ok = (i0 >= 0) & (i0 < nbins - 1)
@@ -265,8 +284,10 @@ def _search(
     hist = np.bincount(flat, weights=ww * (1.0 - fr), minlength=size)[:size]
     hist += np.bincount(flat + 1, weights=ww * fr, minlength=size + 1)[:size]
     hist = hist.reshape(na * nb, nbins)
-    total = hist.sum(axis=1)
-    score = (hist * hist).sum(axis=1) / np.maximum(total * total, 1e-12)
+    padded = np.pad(hist, ((0, 0), (2, 2)))
+    smooth = (padded[:, :-4] + 4 * padded[:, 1:-3] + 6 * padded[:, 2:-2] + 4 * padded[:, 3:-1] + padded[:, 4:]) / 16.0
+    total = smooth.sum(axis=1)
+    score = (smooth * smooth).sum(axis=1) / np.maximum(total * total, 1e-12)
     best = int(np.argmax(score))
     return float(a_grid[best // nb]), float(b_grid[best % nb]), float(score[best])
 
@@ -316,10 +337,17 @@ def vanishing_row(lines: np.ndarray, size: tuple[int, int], lo: float, hi: float
     xv = x[None, :] + beta[None, :] * (candidates[:, None] - y[None, :])
     idx = np.floor((xv + w) / _VP_BIN_PX).astype(np.int64)
     ok = (idx >= 0) & (idx < nb)
-    flat = (np.arange(len(candidates))[:, None] * nb + idx)[ok]
-    hist = np.bincount(flat, minlength=len(candidates) * nb).reshape(len(candidates), nb).astype(float)
-    hist[:, 1:-1] += hist[:, :-2] + hist[:, 2:]  # a 3-bin window (the right-hand side is evaluated first)
-    score = hist.max(axis=1) / len(x)
+    cell = np.arange(len(candidates))[:, None] * nb + idx
+    shares = []
+    # Lines leaning left and lines leaning right vote separately, and a point scores the smaller of the two shares
+    # passing through it: segments of one curved line also cross each other (near the line itself), which must
+    # not outvote the point where the lines on both sides meet.
+    for family in (beta < 0.0, beta > 0.0):
+        sel = ok & family[None, :]
+        hist = np.bincount(cell[sel], minlength=len(candidates) * nb).reshape(len(candidates), nb).astype(float)
+        hist[:, 1:-1] += hist[:, :-2] + hist[:, 2:]  # a 3-bin window (the right-hand side is evaluated first)
+        shares.append(hist / max(1, int(family.sum())))
+    score = np.minimum(shares[0], shares[1]).max(axis=1)
     best = int(np.argmax(score))
     if score[best] < _VP_MIN_SCORE:
         return None
@@ -341,27 +369,42 @@ class LaneTracker:
         # The camera's horizon and the metric scale belong to the mount, not the moment: reset() keeps them.
         self._horizon = cfg.horizon_prior
         self._horizon_n = 0
+        self._vanishing: deque[float] = deque(maxlen=_HORIZON_WINDOW)  # recent measured vanishing rows
         self._widths: deque[float] = deque(maxlen=cfg.scale_window)
+        # So does our usual place in the lane (where the camera sits, how this driver keeps the lane).
+        self._habit: deque[tuple[float, float, float]] = deque()  # (t, offset, seconds it stands for)
+        self._habit_s = 0.0  # seconds of driving the samples stand for
+        self._habit_value: float | None = None
         self.lane_changes: deque[tuple[float, int]] = deque(maxlen=64)  # (t, +1 right / -1 left), for logs
-        self.reset()
+        self._reset_pending = False
+        self._snapshot = EMPTY
+        self.last: LaneMeasurement | None = None
+        # Tracking state (set by _clear / _forget_track).
+        self._last_t: float | None = None
+        self._last_valid_t: float | None = None
+        self._k_since: float | None = None  # when _k last changed
+        self._p_prev: float | None = None
+        self._p_smooth: float | None = None
+        self._positions: deque[tuple[float, float]] = deque()  # (t, unwrapped raw position)
+        self._speeds: deque[tuple[float, float]] = deque()  # (t, fitted lateral speed)
+        self._votes: deque[tuple[float, int | None, int | None]] = deque()
+        self._drift_side: Side | None = None
+        self._clear()
 
     def reset(self) -> None:
-        """Forget the tracked position, votes and drift state (a seek, a new segment)."""
+        """Forget the tracked position, votes and drift state (a seek, a new segment; any thread). Applied by the
+        next `update`; the snapshot is empty until then."""
         with self._lock:
-            self._last_t: float | None = None
-            self._last_valid_t: float | None = None
-            self._k = 0  # lanes moved since tracking began (unwrapping across lane changes)
-            self._p_prev: float | None = None
-            self._p_smooth: float | None = None
-            self._positions: deque[tuple[float, float]] = deque()  # (t, unwrapped raw position)
-            self._speeds: deque[tuple[float, float]] = deque()  # (t, fitted lateral speed)
-            self._votes: deque[tuple[float, int | None, int | None]] = deque()
-            self._last_lane_change_t = -math.inf
-            self._last_alert_t = -math.inf
-            self._armed = {"left": True, "right": True}
-            self._drift_side: Side | None = None
+            self._reset_pending = True
             self._snapshot = EMPTY
-            self.last: LaneMeasurement | None = None
+
+    def _clear(self) -> None:
+        """The reset itself (lanes thread)."""
+        self._last_t = None
+        self._last_lane_change_t = -math.inf
+        self._last_alert_t = -math.inf
+        self.last = None
+        self._forget_track()
 
     # ------------------------------------------------------------------------------------------ geometry
 
@@ -417,10 +460,12 @@ class LaneTracker:
         # Shared heading and curvature: coarse grid, then fine around the best cell.
         a_c = _grid(0.0, cfg.max_heading, _COARSE_A_STEP)
         b_c = _grid(0.0, cfg.max_curvature, _COARSE_B_STEP) if cfg.max_curvature > 0 else np.zeros(1)
-        a0, b0, _ = _search(x_m, z_m, weight, a_c, b_c)
-        a_f = _grid(a0, _COARSE_A_STEP, _COARSE_A_STEP / _FINE_STEPS)
-        b_f = _grid(b0, _COARSE_B_STEP, _COARSE_B_STEP / _FINE_STEPS) if cfg.max_curvature > 0 else np.zeros(1)
-        heading, curvature, _ = _search(x_m, z_m, weight, a_f, b_f)
+        a0, b0, _ = _search(x_m, z_m, weight, a_c, b_c, _SEARCH_BIN_M)
+        a_f = _grid(a0, _FINE_SPAN * _COARSE_A_STEP, _COARSE_A_STEP / _FINE_STEPS)
+        b_f = np.zeros(1)
+        if cfg.max_curvature > 0:
+            b_f = _grid(b0, _FINE_SPAN * _COARSE_B_STEP, _COARSE_B_STEP / _FINE_STEPS)
+        heading, curvature, _ = _search(x_m, z_m, weight, a_f, b_f, _FINE_BIN_M)
 
         lines = self._find_lines(geo, x_m, z_m, weight, heading, curvature)
         self._fan_out(geo, lines, x_m, z_m, heading, curvature)
@@ -529,12 +574,16 @@ class LaneTracker:
         measured = vanishing_row(lines_mask, size, cfg.horizon_min, cfg.horizon_max, cfg.hood_cutoff)
         if measured is None:
             return
-        if self._horizon_n >= _HORIZON_FAST_SAMPLES and abs(measured - self._horizon) > _HORIZON_MAX_JUMP:
-            return
+        # The median of the recent rows, not single ones: on a curve, at a fork or behind a truck a frame's
+        # crossing points can pile up at a wrong row. No outlier gate against the estimate: if the drive started on
+        # a long curve, the estimate is off, and a gate would then keep out the straight road's right rows for good.
+        self._vanishing.append(measured)
         self._horizon_n += 1
-        fast = self._horizon_n <= _HORIZON_FAST_SAMPLES
-        rate = max(cfg.horizon_rate, 1.0 / self._horizon_n) if fast else cfg.horizon_rate
-        self._horizon += rate * (measured - self._horizon)
+        target = float(np.median(self._vanishing))
+        if self._horizon_n <= _HORIZON_FAST_SAMPLES:
+            self._horizon = target
+        else:
+            self._horizon += cfg.horizon_rate * (target - self._horizon)
 
     def _drivable_sides(
         self, geo: _Geometry, drivable: np.ndarray, center_m: float, heading: float, curvature: float
@@ -667,37 +716,62 @@ class LaneTracker:
     # -------------------------------------------------------------------------------------------- track
 
     def update(self, t: float, masks: MasksLike, gps_speed_mps: float | None) -> list[DriftEvent]:
-        """One frame's masks (lanes thread); returns drift alerts to speak."""
+        """One frame's masks (lanes thread only); returns drift alerts to speak. Measures outside the lock, so
+        `snapshot()` never waits for a measurement."""
         cfg = self.cfg
         with self._lock:
-            if self._last_t is not None and t < self._last_t:
+            pending, self._reset_pending = self._reset_pending, False
+        if pending:
+            self._clear()
+        if self._last_t is not None and t < self._last_t:
+            self._forget_track()
+        self._last_t = t
+        m = self.measure(masks)
+        self.last = m
+        events: list[DriftEvent] = []
+        if m.offset_m is not None and m.width_m is not None:
+            if self._last_valid_t is not None and t - self._last_valid_t > cfg.lost_s:
                 self._forget_track()
-            self._last_t = t
-            m = self.measure(masks)
-            self.last = m
-            events: list[DriftEvent] = []
-            if m.offset_m is not None and m.width_m is not None:
-                if self._last_valid_t is not None and t - self._last_valid_t > cfg.lost_s:
-                    self._forget_track()
-                self._last_valid_t = t
-                events = self._track(t, m, gps_speed_mps)
-            elif self._last_valid_t is not None and t - self._last_valid_t > cfg.lost_s:
-                self._forget_track()
-            self._votes.append((t, m.lanes_left, m.lanes_right))
-            while self._votes and t - self._votes[0][0] > cfg.vote_window_s:
-                self._votes.popleft()
-            self._snapshot = self._make_snapshot(t, m)
-            return events
+            self._last_valid_t = t
+            events = self._track(t, m, gps_speed_mps)
+        elif self._last_valid_t is not None and t - self._last_valid_t > cfg.lost_s:
+            self._forget_track()
+        self._votes.append((t, m.lanes_left, m.lanes_right))
+        while self._votes and t - self._votes[0][0] > cfg.vote_window_s:
+            self._votes.popleft()
+        snapshot = self._make_snapshot(t, m)
+        with self._lock:
+            if self._reset_pending:
+                return []  # a reset came in meanwhile: this frame belongs to before it
+            self._snapshot = snapshot
+        return events
 
     def _forget_track(self) -> None:
+        """Forget the tracked lateral position and votes (lost lanes, time going backwards)."""
         self._k = 0
-        self._p_prev = self._p_smooth = None
-        self._positions.clear()
-        self._speeds.clear()
-        self._votes.clear()
+        self._k_logged = 0  # the lane we were last confirmed in (lane changes in the log)
+        self._k_since = None
+        self._p_prev = None
+        self._p_smooth = None
+        self._positions = deque()
+        self._speeds = deque()
+        self._votes = deque()
         self._last_valid_t = None
         self._drift_side = None
         self._armed = {"left": True, "right": True}
+
+    def _learn_habit(self, t: float, offset: float) -> None:
+        """One sample of where in the lane we drive (at speed, not around a lane change)."""
+        cfg = self.cfg
+        credit = min(t - self._habit[-1][0], _HABIT_MAX_GAP_S) if self._habit else 0.0
+        self._habit.append((t, offset, max(0.0, credit)))
+        self._habit_s += max(0.0, credit)
+        while self._habit and t - self._habit[0][0] > cfg.habit_window_s:
+            self._habit_s -= self._habit.popleft()[2]
+        if self._habit_s >= cfg.habit_min_s:
+            self._habit_value = float(np.median(np.fromiter((s[1] for s in self._habit), float, len(self._habit))))
+        else:
+            self._habit_value = None
 
     def _track(self, t: float, m: LaneMeasurement, speed: float | None) -> list[DriftEvent]:
         """Unwrap, smooth and differentiate our lateral position; decide on a drift alert."""
@@ -710,12 +784,15 @@ class LaneTracker:
             best_k = min((self._k - 1, self._k, self._k + 1), key=lambda k: abs(d + k * width - self._p_prev))  # type: ignore[operator]
             if best_k != self._k:
                 self._last_lane_change_t = t
-                self.lane_changes.append((t, best_k - self._k))
                 self._k = best_k
+                self._k_since = t
                 self._armed = {"left": True, "right": True}
                 self._drift_side = None
+        if self._k != self._k_logged and self._k_since is not None and t - self._k_since >= _LANE_CHANGE_CONFIRM_S:
+            self.lane_changes.append((self._k_since, self._k - self._k_logged))  # (flip-flops are not logged)
+            self._k_logged = self._k
         p = d + self._k * width
-        dt = 0.0 if self._positions == deque() else t - self._positions[-1][0]
+        dt = t - self._positions[-1][0] if self._positions else 0.0
         self._p_prev = p
         alpha = 1.0 if self._p_smooth is None else 1.0 - math.exp(-max(dt, 0.0) / cfg.smooth_s)
         self._p_smooth = p if self._p_smooth is None else self._p_smooth + alpha * (p - self._p_smooth)
@@ -730,25 +807,40 @@ class LaneTracker:
             self._speeds.popleft()
 
         offset = self._p_smooth - self._k * width  # smoothed, relative to the current lane's center
-        side: Side = "right" if offset > 0 else "left"
-        gap = width / 2.0 - abs(offset) - cfg.car_width_m / 2.0
+        at_speed = speed is not None and speed >= cfg.min_speed_mps
+        after_change = t - self._last_lane_change_t < cfg.lane_change_quiet_s
+        if at_speed and not after_change:
+            self._learn_habit(t, offset)
+        habit = self._habit_value
+        if habit is None:
+            return []  # where we usually drive in the lane isn't known yet
+        rel = offset - habit  # from our usual place
+        side: Side = "right" if rel > 0 else "left"
+        gap = width / 2.0 - abs(rel) - cfg.car_width_m / 2.0
         if gap >= cfg.rearm_gap_m:
             self._armed = {"left": True, "right": True}
             self._drift_side = None
-        if v is None or speed is None or speed < cfg.min_speed_mps:
+        if v is None or speed is None or not at_speed:
             return []
         toward = v if side == "right" else -v
         if not (gap <= cfg.drift_gap_m and cfg.drift_min_mps <= toward < cfg.lane_change_mps):
             return []
         if not self._armed[side] or t - self._last_alert_t < cfg.cooldown_s:
             return []
-        if t - self._last_lane_change_t < cfg.lane_change_quiet_s:
+        if after_change:
             return []
         window = [(tt, vv) for tt, vv in self._speeds if t - tt <= cfg.drift_window_s]
         if not window or t - window[0][0] < 0.8 * cfg.drift_window_s:
             return []
         if max(abs(vv) for _, vv in window) >= cfg.lane_change_mps:
             return []  # part of a fast sideways move: a lane change
+        quick = self._velocity(t, cfg.quick_window_s)
+        if quick is not None and abs(quick) >= cfg.lane_change_mps:
+            return []  # a lane change starting now (the speed over velocity_window_s still lags behind it)
+        sign = 1.0 if side == "right" else -1.0
+        steady = sum(1 for _, vv in window if sign * vv > 0.0)
+        if steady < cfg.drift_steady_share * len(window):
+            return []  # not moving toward the line all along: the start of a sudden move (its speed fit lags)
         past = [pp for tt, pp in self._positions if t - tt >= cfg.drift_window_s]
         if not past:
             return []
@@ -758,13 +850,13 @@ class LaneTracker:
         self._armed[side] = False
         self._last_alert_t = t
         self._drift_side = side
-        return [DriftEvent(t, side, drift_text(side), gap, toward, offset, speed)]
+        return [DriftEvent(t, side, drift_text(side), gap, toward, offset, habit, speed)]
 
-    def _velocity(self, t: float) -> float | None:
-        """Lateral speed (m/s, + = right): a least-squares slope over the last velocity_window_s."""
-        cfg = self.cfg
-        pts = [(tt, pp) for tt, pp in self._positions if t - tt <= cfg.velocity_window_s]
-        if len(pts) < 5 or pts[-1][0] - pts[0][0] < 0.6 * cfg.velocity_window_s:
+    def _velocity(self, t: float, window_s: float | None = None) -> float | None:
+        """Lateral speed (m/s, + = right): a least-squares slope over the last `window_s` (velocity_window_s)."""
+        span = self.cfg.velocity_window_s if window_s is None else window_s
+        pts = [(tt, pp) for tt, pp in self._positions if t - tt <= span]
+        if len(pts) < 5 or pts[-1][0] - pts[0][0] < 0.6 * span:
             return None
         ts = np.array([q[0] for q in pts])
         ps = np.array([q[1] for q in pts])
@@ -833,6 +925,7 @@ class LaneTracker:
             lane_width_m=None if m.width_m is None else round(m.width_m, 3),
             lateral_speed_mps=None if lateral is None else round(lateral, 3),
             horizon=round(self._horizon, 4),
+            habit_m=None if self._habit_value is None else round(self._habit_value, 3),
         )
 
     def snapshot(self) -> LanesSnapshot:

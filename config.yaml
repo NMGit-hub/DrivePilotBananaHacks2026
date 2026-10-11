@@ -124,7 +124,9 @@ pedestrians:                # "Pedestrian stepping into the road on your right."
   max_length_m: 35.0
   min_speed_mps: 0.5        # GPS slower than this = not moving (people crossing while we wait are normal)
   confirm_frames: 3         # in (or stepping into) the path 3 observations in a row before a warning
-  predict_s: 1.2            # "stepping into the road": inside the path within 1.2 s at their sideways speed,
+  road_min_share: 0.3       # with the lanes model on: "in our path" only if >= 30 % of the ground at their feet is
+  road_max_age_s: 0.3       #   drivable (a sidewalk isn't; stepping off it still warns), masks <= 0.3 s old
+  predict_s: 1.2          # "stepping into the road": inside the path within 1.2 s at their sideways speed,
   predict_max_z_m: 15.0     #   predicted only within 15 m (further out, sideways speeds are mostly depth noise)
   height_weight: 0.5        # distance = box height and ground contact combined (the latter breaks on hills)
   max_tall_ratio: 1.4       # a "person" much taller than one standing there is a tree / pole: never warned of
@@ -172,11 +174,13 @@ lanes:                      # V2 YOLOPv2 lanes (perception/lanes.py) + lane trac
   edge_drivable_max: 0.35   # ...and the road ends at a line the drivable area doesn't reach past (by > 0.35 lanes)
   vote_window_s: 1.5        # lane count and index: the majority of the last 1.5 s (>= 5 frames, >= 70 %)
   min_speed_mps: 11.18      # PLAN.md: drift warnings only above 25 mph (GPS speed; no GPS = no warnings)
-  drift_gap_m: 0.3          # "Careful, you're drifting right.": the car's side within 0.3 m of the line...
+  habit_window_s: 120.0     # drift is measured from where we usually drive in the lane (camera mount + driver):
+  habit_min_s: 8.0          #   the median over 2 min at speed; no drift warnings before 8 s of it
+  drift_gap_m: 0.2          # "Careful, you're drifting right.": the car's side within 0.2 m of the line...
   drift_min_mps: 0.08       # ...closing in at 0.08-0.5 m/s (faster is a lane change: we can't see the signal)...
   lane_change_mps: 0.5
-  drift_window_s: 2.5       # ...steadily for 2.5 s, by at least 0.25 m
-  drift_min_shift_m: 0.25
+  drift_window_s: 2.5       # ...steadily for 2.5 s (toward it in 80 % of it), by at least 0.2 m
+  drift_min_shift_m: 0.2
   cooldown_s: 10.0          # once per drift; re-armed back near the lane center or after a lane change
 
 vision_model: claude       # scene-question provider: claude (Haiku, default) | gemini | ollama | mock

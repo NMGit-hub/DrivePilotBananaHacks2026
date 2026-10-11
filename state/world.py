@@ -31,7 +31,7 @@ from state.colors import color_name, frame_gains
 from state.parking import EMPTY as EMPTY_PARKING
 from state.parking import ParkingEvent, ParkingSnapshot, ParkingTracker
 from state.pedestrians import EMPTY as EMPTY_PEDESTRIANS
-from state.pedestrians import PedestrianEvent, PedestrianSnapshot, PedestrianTracker
+from state.pedestrians import DrivableArea, PedestrianEvent, PedestrianSnapshot, PedestrianTracker
 from state.stop_queue import Approach, EgoStop, QueueSnapshot, StopQueue, WaitingVehicle
 from state.traffic_light import LightColor, LightReading, TrafficLightTracker
 from state.vehicle_motion import VehicleMotionTracker, VehicleState
@@ -106,11 +106,14 @@ class WorldState:
         cfg: AppConfig,
         on_event: Callable[[WorldEvent], None] | None = None,
         speed_source: Callable[[float], float | None] | None = None,
+        drivable_source: Callable[[], DrivableArea | None] | None = None,
     ) -> None:
-        """`speed_source(t)`: our GPS speed (m/s) at media time t, None without a fresh fix (parking uses it)."""
+        """`speed_source(t)`: our GPS speed (m/s) at media time t, None without a fresh fix (parking uses it);
+        `drivable_source()`: YOLOPv2's latest drivable area (V2-M5; pedestrians check who stands on the road)."""
         self.cfg = cfg
         self.on_event = on_event
         self.speed_source = speed_source
+        self.drivable_source = drivable_source
         self._lock = threading.Lock()
         self.vehicle_motion = VehicleMotionTracker(cfg.vehicle_motion)
         self.queue = StopQueue(cfg.stop_queue)
@@ -243,6 +246,7 @@ class WorldState:
                 ego.homography,
                 gps_speed,
                 ego.confident,
+                self.drivable_source() if self.drivable_source is not None else None,
             )
         ]
         first = 1 if events and events[0].kind == "segment_reset" else 0

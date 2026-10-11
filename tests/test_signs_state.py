@@ -6,6 +6,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -162,3 +163,20 @@ def test_a_detector_that_cannot_start_reports_why() -> None:
     assert worker.ready.wait(2.0)
     time.sleep(0.05)
     assert worker.error == "RuntimeError: CUDA is not available" and not worker.running
+
+
+def test_sign_alerts_are_muted_in_quiet_mode(tmp_path: Path) -> None:
+    """Sign alerts are INFO, like "you're up": quiet mode keeps only requested and safety alerts."""
+    from state.signs import SignEvent
+    from tests.test_lanes import _app
+
+    app, speaker = _app(tmp_path)
+    event = SignEvent("speed_limit", 3.0, limit_text("speed_limit", 35), 35, 1, (0.0, 0.0, 10.0, 10.0))
+    app.signs.update = lambda t, dets: [event]  # type: ignore[method-assign]
+    frame = Frame(np.zeros((8, 8, 3), np.uint8), t=3.0, index=90, captured_at=time.perf_counter())
+    app.assistant.alerts.set_quiet(True)
+    app._on_signs(frame, [])
+    assert speaker.said == []
+    app.assistant.alerts.set_quiet(False)
+    app._on_signs(frame, [])
+    assert [u.text for u in speaker.said] == ["Speed limit is now 35."]

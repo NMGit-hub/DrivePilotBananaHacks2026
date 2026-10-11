@@ -4,20 +4,54 @@
     {
       "name": "drivepilot-camera",
       "runtimeExecutable": "C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\.venv\\Scripts\\python.exe",
-      "runtimeArgs": ["-m", "app", "--camera"],
+      "runtimeArgs": [
+        "-m",
+        "app",
+        "--camera"
+      ],
       "port": 8000
     },
     {
       "name": "drivepilot-replay",
       "runtimeExecutable": "C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\.venv\\Scripts\\python.exe",
-      "runtimeArgs": ["-m", "app", "--video", "data/videos/dev/red_light_turns_green_sf__b97b9ee8-612c36ef.mov"],
+      "runtimeArgs": [
+        "-m",
+        "app",
+        "--video",
+        "data/videos/dev/red_light_turns_green_sf__b97b9ee8-612c36ef.mov"
+      ],
       "port": 8000
     },
     {
       "name": "drivepilot-overlays",
       "runtimeExecutable": "C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\.venv\\Scripts\\python.exe",
-      "runtimeArgs": ["-m", "app", "--video", "data/videos/dev/stop_sign_cross_traffic_sf_dawn__be986afd-012d020c.mov",
-                      "--gpx", "data/gps/be986afd-012d020c.gpx", "--no-voice", "--no-audio"],
+      "runtimeArgs": [
+        "-m",
+        "app",
+        "--video",
+        "data/videos/dev/stop_sign_cross_traffic_sf_dawn__be986afd-012d020c.mov",
+        "--gpx",
+        "data/gps/be986afd-012d020c.gpx",
+        "--no-voice",
+        "--no-audio"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "drivepilot-lanes",
+      "runtimeExecutable": "C:\\ClaudeProjects\\DrivePilot_BananaHacks2026\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": [
+        "-m",
+        "app",
+        "--video",
+        "data/videos/highway/7dc2914d-a20a969a.mov",
+        "--gpx",
+        "data/gps/7dc2914d-a20a969a.gpx",
+        "--no-voice",
+        "--no-audio",
+        "--set",
+        "video.file.hfov_deg=60"
+      ],
       "port": 8000
     }
   ]

@@ -18,13 +18,12 @@ waiting on launches), so the forward pass is captured once in a CUDA graph and r
 GPU, identical outputs). The model runs on its own CUDA stream so it overlaps with the perception thread's
 detector. Like the detector, it refuses the CPU: the weights must end up on CUDA in the configured precision.
 
-`LaneWorker` runs the model on its own thread on the newest frame only, at most `lanes.fps` times a second (the
-pattern of perception/sign_worker.py); the model is built on that thread.
+`LaneWorker` runs the model on its own thread on the newest frame only, at most `lanes.fps` times a second
+(perception/frame_worker.py); the model is built on that thread.
 """
 
 from __future__ import annotations
 
-import threading
 import time
 import warnings
 from collections.abc import Callable
@@ -39,6 +38,7 @@ import torch
 from core.config import LanesConfig
 from core.logging_setup import get_logger
 from core.types import Frame
+from perception.frame_worker import FrameWorker
 
 log = get_logger(__name__)
 
@@ -184,8 +184,8 @@ class LaneModel:
         return LaneMasks(frame.t, frame.index, (frame.width, frame.height), lines, drivable, timings)
 
 
-class LaneWorker:
-    """Runs the lane model on the newest frame, at most `fps` times a second, on its own thread.
+class LaneWorker(FrameWorker[LaneMasks]):
+    """Runs the lane model on the newest frame, at most `fps` times a second, on its own thread ("lanes").
 
     `offer` (any thread, never blocks) hands over a frame; only the newest waits. `on_result(frame, masks)` is
     called on the lanes thread (feed the LaneTracker there). If the model can't be built, the thread ends and
@@ -198,76 +198,4 @@ class LaneWorker:
         on_result: Callable[[Frame, LaneMasks], None],
         fps: float,
     ) -> None:
-        self._factory = factory
-        self._on_result = on_result
-        self._interval = 1.0 / fps
-        self._cond = threading.Condition()
-        self._pending: Frame | None = None
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self.ready = threading.Event()  # set once the model is built (or failed: see `error`)
-        self.error: str | None = None
-        self.processed = 0
-        self.last_ms: float | None = None
-
-    def start(self) -> LaneWorker:
-        """Start the thread (returns self)."""
-        self._thread = threading.Thread(target=self._run, name="lanes", daemon=True)
-        self._thread.start()
-        return self
-
-    def stop(self, timeout: float = 2.0) -> None:
-        """Stop the thread."""
-        self._stop.set()
-        with self._cond:
-            self._cond.notify_all()
-        if self._thread is not None:
-            self._thread.join(timeout=timeout)
-
-    @property
-    def running(self) -> bool:
-        """The thread is alive (False after a failed start)."""
-        return self._thread is not None and self._thread.is_alive()
-
-    def offer(self, frame: Frame) -> None:
-        """A new frame (any thread): only the newest waits; never blocks."""
-        with self._cond:
-            self._pending = frame
-            self._cond.notify()
-
-    def _run(self) -> None:
-        try:
-            model = self._factory()
-        except Exception as exc:
-            self.error = f"{type(exc).__name__}: {exc}"
-            log.exception("lane model could not start")
-            self.ready.set()
-            return
-        self.ready.set()
-        next_at = 0.0
-        while not self._stop.is_set():
-            with self._cond:
-                while self._pending is None and not self._stop.is_set():
-                    self._cond.wait(0.5)
-                frame, self._pending = self._pending, None
-            if frame is None:
-                continue
-            delay = next_at - time.perf_counter()
-            if delay > 0:
-                self._stop.wait(delay)
-                with self._cond:  # a newer frame arrived while we waited: use that one
-                    if self._pending is not None:
-                        frame, self._pending = self._pending, None
-            next_at = time.perf_counter() + self._interval
-            started = time.perf_counter()
-            try:
-                masks = model(frame)
-            except Exception:
-                log.exception("lane model failed on a frame", t=frame.t)
-                continue
-            self.last_ms = (time.perf_counter() - started) * 1000.0
-            self.processed += 1
-            try:
-                self._on_result(frame, masks)
-            except Exception:
-                log.exception("lane result handling failed", t=frame.t)
+        super().__init__("lanes", factory, on_result, fps)

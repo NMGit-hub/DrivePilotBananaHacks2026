@@ -3,6 +3,7 @@
     .venv/Scripts/python scripts/cache_perception.py ...          # once: perception of every dev clip on disk
     .venv/Scripts/python scripts/eval_pedestrians.py              # every alert + every in-path-but-silent episode
     .venv/Scripts/python scripts/eval_pedestrians.py --frames     # + JPEGs of each alert and episode (zone drawn)
+    .venv/Scripts/python scripts/eval_pedestrians.py --road       # + YOLOPv2's drivable area (cached lane masks)
     .venv/Scripts/python scripts/eval_pedestrians.py --clip red_light_construction --set pedestrians.headway_s=2.5
 
 Replays cached perception through the real WorldState and AlertEngine, with each clip's GPS speed (data/gps/<bdd
@@ -28,11 +29,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from core.config import AppConfig, load_config  # noqa: E402
+from eval.lanes_eval import load_mask_cache  # noqa: E402
 from eval.pedestrian_eval import Replay, episodes, replay  # noqa: E402
 from eval.perception_cache import CachedFrame, load_cache, read_frame  # noqa: E402
 from nav.gps import GpxReplay  # noqa: E402
 from state.parking import Camera  # noqa: E402
-from state.pedestrians import PedestrianSnapshot  # noqa: E402
+from state.pedestrians import DrivableArea, PedestrianSnapshot  # noqa: E402
 
 COLORS = {"in_path": (0, 0, 255), "entering": (0, 128, 255), "other": (0, 215, 255)}
 
@@ -104,6 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--clip", action="append", default=[], help="Only clips whose name contains this.")
     parser.add_argument("--frames", action="store_true", help="Save JPEGs of every alert and silent episode.")
     parser.add_argument("--no-gps", action="store_true", help="Replay without the clips' GPS speed.")
+    parser.add_argument(
+        "--road", action="store_true", help="Use the cached YOLOPv2 drivable area (scripts/eval_lanes.py cache)."
+    )
     parser.add_argument("--min-episode", type=int, default=3, help="Shorter silent episodes are not drawn.")
     parser.add_argument("--out", type=Path, default=None, help="Report folder (default runs/<time>_pedestrians).")
     args = parser.parse_args(argv)
@@ -131,7 +136,14 @@ def main(argv: list[str] | None = None) -> int:
         bdd = clip.stem.split("__")[-1]
         gpx = args.data / "gps" / f"{bdd}.gpx"
         speed = gps_speed(GpxReplay(gpx)) if not args.no_gps and gpx.exists() else None
-        run = replay(frames, cfg, speed)
+        road = None
+        if args.road:
+            masks = REPO_ROOT / "runs" / "lanes_cache" / f"{clip.stem}.npz"
+            if not masks.exists():
+                emit(f"== {clip.stem}: no lane-mask cache (scripts/eval_lanes.py cache)")
+                continue
+            road = [DrivableArea(m.t, m.drivable) for m in load_mask_cache(masks)]
+        run = replay(frames, cfg, speed, road)
         costs += run.cost_ms
         name = clip.stem.split("__")[0]
         cost = sorted(run.cost_ms)
