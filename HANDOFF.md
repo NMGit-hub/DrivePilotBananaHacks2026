@@ -24,6 +24,26 @@ Also this session: an independent review of M1/M2/M4 (11 bugs, all but one fixed
 `tests/test_v2_review.py`; the unfixed one, single-gap rows in simulation, is an xfail with the reason), a replay
 seek fix, README for V2. 1092 tests pass; ruff, ruff format, mypy clean.
 
+## 1b. Session of 2026-10-10 evening (stopped at the usage limit)
+- **V2-M5 lanes branch merged into main** (`d644cc0`; the agent's pending `state/lanes.py` change committed on its
+  branch first). Not wired into the app yet. **No lane tests exist yet** (the agent never wrote any): still to do.
+- Lane index re-measured from main: **56/57 answered frames right, 57/65 answered** (86 % of all labeled frames,
+  bar 85 %); lane count 19/26 (it undercounts lanes on the right: use `lanes_left`/index for guidance, not `lanes_right`).
+- **Drift eval added** (`scripts/eval_lanes.py drift [--frames]`, frames in `runs/lane_drift/`; `LaneTracker.lane_changes`
+  is now filled). Mask caches copied to `runs/lanes_cache/`. **Result: 10 drift alerts in 5.7 min of highway
+  driving (bar: 0).** Frames looked at: lines sit on the real lane lines; most alerts are steady driving. Cause: the
+  alert uses the absolute offset, which includes the dashcam's mount position (per-clip median offset -0.53..+0.22 m)
+  plus ±0.3-0.5 m wander (p5/p95). 5c5dc708 at 14-18 s may be a real mild drift right (the dash line comes close);
+  40f7f545 at 29-31 s moves left as a car passes on the right. Planned fix: learn the habitual lane position (running
+  median at speed, arm after ~10 s) and measure drift relative to it; require gap ≤ ~0.1 m (near the line); re-run.
+  Also: 490ba810 / 7576a8b6 show 13 / 7 spurious "lane changes" (unwrap flipping on forks and at night): debounce.
+- Review notes so far: `LaneWorker` duplicates `SignWorker` (merge into one latest-frame worker); `update()` holds the
+  lock for the whole ~17-22 ms measurement (other threads' `snapshot()` would block: measure outside the lock);
+  tracker CPU ~17-22 ms/frame (half in `_search`).
+- Then: virtual-drift clip (`warp_lateral` exists; no `virtual` subcommand yet), integration (section 2.1), review.
+- **Crawl labels half B**: a labeling subagent was started writing `eval/parking_labels_crawl_b.yaml` clip by clip
+  (uncommitted). Check how many clips it finished, validate, commit, then score (section 2.2).
+
 ## 2. Next steps (in order)
 1. **Finish and merge V2-M5 lanes.** The agent stalled during the drift evaluation (no final report). Its worktree:
    `.claude/worktrees/agent-af32ec16370458bc6`, branch `worktree-agent-af32ec16370458bc6`, commit `75e6b3d`

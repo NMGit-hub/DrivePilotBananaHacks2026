@@ -117,10 +117,15 @@ class ReplayStep:
 
 
 def replay(
-    cfg: LanesConfig, masks: list[LaneMasks], hfov_deg: float, speed_at: Callable[[float], float | None]
+    cfg: LanesConfig,
+    masks: list[LaneMasks],
+    hfov_deg: float,
+    speed_at: Callable[[float], float | None],
+    tracker: LaneTracker | None = None,
 ) -> list[ReplayStep]:
-    """Feed a clip's cached masks through a fresh LaneTracker, with GPS speed from `speed_at(t)`."""
-    tracker = LaneTracker(cfg, hfov_deg)
+    """Feed a clip's cached masks through a LaneTracker (a fresh one unless given), with GPS speed from
+    `speed_at(t)`."""
+    tracker = tracker if tracker is not None else LaneTracker(cfg, hfov_deg)
     steps = []
     for m in masks:
         speed = speed_at(m.t)
@@ -186,6 +191,42 @@ def speed_from_gpx(path: Path | None) -> Callable[[float], float | None]:
         return None if fix is None else fix.speed_mps
 
     return speed_at
+
+
+def draw_lanes(image: np.ndarray, snap: LanesSnapshot, text: str = "") -> np.ndarray:
+    """The frame with our lane filled, the lines drawn (ours white, others gray, the drift line red) and a caption."""
+    out = image.copy()
+    h, w = out.shape[:2]
+
+    def pts(points: tuple[tuple[float, float], ...]) -> np.ndarray:
+        return np.array([[round(x * w), round(y * h)] for x, y in points], dtype=np.int32)
+
+    if snap.lane_polygon:
+        fill = out.copy()
+        cv2.fillPoly(fill, [pts(snap.lane_polygon)], (80, 200, 80))
+        out = cv2.addWeighted(fill, 0.3, out, 0.7, 0.0)
+    for line in snap.lines:
+        color = (255, 255, 255) if line.role != "other" else (150, 150, 150)
+        if snap.drift_line is not None and line.points == snap.drift_line:
+            color = (0, 0, 255)
+        cv2.polylines(out, [pts(line.points)], False, color, 3, cv2.LINE_AA)
+    caption = text or (
+        f"t={snap.t:.1f} lanes {snap.lane_index}/{snap.lane_count} off {snap.offset_m} v {snap.lateral_speed_mps}"
+    )
+    for color, thickness in (((0, 0, 0), 5), ((255, 255, 255), 2)):
+        cv2.putText(out, caption, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, thickness, cv2.LINE_AA)
+    return out
+
+
+def read_frame(clip: Path, t: float) -> np.ndarray | None:
+    """The clip's frame at video time `t`."""
+    cap = cv2.VideoCapture(str(clip))
+    try:
+        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0)
+        ok, image = cap.read()
+        return image if ok else None
+    finally:
+        cap.release()
 
 
 def warp_lateral(image: np.ndarray, shift_m: float, horizon: float, camera_height_m: float) -> np.ndarray:

@@ -14,6 +14,7 @@ Masks are cached in runs/lanes_cache/<clip stem>.npz (gitignored) so the tracker
 from __future__ import annotations
 
 import argparse
+import itertools
 import sys
 import time
 from pathlib import Path
@@ -148,6 +149,80 @@ def cmd_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def _clip_id(video: Path) -> str:
+    """BDD100K clip id from a video name (`<id>.mov` or `<scene>__<id>.mov`)."""
+    return video.stem.split("__")[-1]
+
+
+def _clips(args: argparse.Namespace) -> list[Path]:
+    """Videos to replay: --clip, else every clip of the labels file."""
+    if args.clip:
+        return [Path(c) for c in args.clip]
+    import yaml
+
+    labels = yaml.safe_load(args.labels.read_text(encoding="utf-8"))
+    return [_data_root(args) / "data" / "videos" / clip["file"] for clip in labels["clips"]]
+
+
+def cmd_drift(args: argparse.Namespace) -> int:
+    """Replay clips with their GPS speed: every drift alert and lane change (and frames of each, with --frames)."""
+    import cv2
+
+    from eval.lanes_eval import at_time, draw_lanes, load_mask_cache, read_frame, replay, speed_from_gpx
+    from state.lanes import LaneTracker
+
+    cfg = _config(args)
+    root = _data_root(args)
+    out_dir = REPO_ROOT / "runs" / "lane_drift"
+    total_alerts = 0
+    fast_s = 0.0
+    for video in _clips(args):
+        cache = cache_path(video, args.tag)
+        if not cache.exists():
+            print(f"no cache for {video.name}{args.tag}: run `cache` first")
+            return 1
+        masks = load_mask_cache(cache)
+        speed_at = speed_from_gpx(root / "data" / "gps" / f"{_clip_id(video)}.gpx")
+        tracker = LaneTracker(cfg.lanes, args.hfov)
+        steps = replay(cfg.lanes, masks, args.hfov, speed_at, tracker)
+        valid = sum(1 for s in steps if s.snapshot.valid)
+        dt = [b.t - a.t for a, b in itertools.pairwise(steps)]
+        fast = sum(
+            d
+            for d, s in zip(dt, steps, strict=False)
+            if s.speed_mps is not None and s.speed_mps >= cfg.lanes.min_speed_mps
+        )
+        fast_s += fast
+        alerts = [(s.t, e) for s in steps for e in s.events]
+        changes = list(tracker.lane_changes)
+        total_alerts += len(alerts)
+        print(
+            f"{_clip_id(video)}{args.tag}: {len(alerts)} drift alert(s), {len(changes)} lane change(s); "
+            f"lane seen in {100.0 * valid / max(1, len(steps)):.0f} % of {len(steps)} frames; "
+            f"{fast:.0f} s at >= {cfg.lanes.min_speed_mps * 2.237:.0f} mph"
+        )
+        for t, e in alerts:
+            print(
+                f"    ALERT t={t:5.2f} {e.side:5s} gap {e.gap_m:.2f} m, toward {e.lateral_speed_mps:.2f} m/s, "
+                f"offset {e.offset_m:+.2f} m, {e.speed_mps * 2.237:.0f} mph"
+            )
+        for t, k in changes:
+            print(f"    lane change t={t:5.2f} {'right' if k > 0 else 'left'}")
+        if args.frames:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            moments = [(t, "alert") for t, _ in alerts] + [(t, "change") for t, _ in changes]
+            for t, what in moments:
+                for dt_s in (-2.0, 0.0):
+                    image = read_frame(video, max(0.0, t + dt_s))
+                    if image is None:
+                        continue
+                    snap = at_time(steps, t + dt_s).snapshot
+                    name = f"{_clip_id(video)}{args.tag}_{what}_{t:05.1f}_{dt_s:+.0f}.jpg"
+                    cv2.imwrite(str(out_dir / name), draw_lanes(image, snap), [cv2.IMWRITE_JPEG_QUALITY, 85])
+    print(f"total: {total_alerts} drift alert(s) in {fast_s / 60.0:.1f} min above the speed threshold")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--set", action="append", default=[], help="Config override key=value.")
@@ -168,6 +243,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--hfov", type=float, default=60.0, help="Field of view of the clips (BDD100K: ~60°).")
     p.add_argument("-v", "--verbose", action="store_true")
     p.set_defaults(func=cmd_index)
+    p = sub.add_parser("drift", help="Drift alerts and lane changes on clips (with their GPS speed).")
+    p.add_argument("--clip", type=Path, action="append", help="Videos (default: every clip of --labels).")
+    p.add_argument("--labels", type=Path, default=REPO_ROOT / "eval" / "lane_labels.yaml")
+    p.add_argument("--tag", default="", help="Cache name suffix (a virtual-drift cache).")
+    p.add_argument("--hfov", type=float, default=60.0, help="Field of view of the clips (BDD100K: ~60°).")
+    p.add_argument("--frames", action="store_true", help="Save frames at each alert / lane change (runs/lane_drift).")
+    p.set_defaults(func=cmd_drift)
     args = parser.parse_args(argv)
     setup_logging("WARNING")
     return int(args.func(args))

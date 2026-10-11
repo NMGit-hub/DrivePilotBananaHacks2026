@@ -710,6 +710,7 @@ class LaneTracker:
             best_k = min((self._k - 1, self._k, self._k + 1), key=lambda k: abs(d + k * width - self._p_prev))  # type: ignore[operator]
             if best_k != self._k:
                 self._last_lane_change_t = t
+                self.lane_changes.append((t, best_k - self._k))
                 self._k = best_k
                 self._armed = {"left": True, "right": True}
                 self._drift_side = None
