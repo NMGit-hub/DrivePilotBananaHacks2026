@@ -7,6 +7,14 @@ known issues: kept current), DEMO.md, V2_BUILD_PLAN.md and PLAN.md.
 `669fd08` + this handoff). Another session ("voice-alerts-destination": wake-word modes, unrequested alerts, a
 destination box) merges into main too: `git pull` before every commit.
 
+## 0. Update 2026-10-11 ~15:20: section 3's steps 1-5 are done (PROGRESS.md "The user's own dashcam footage")
+- FOV 96° (18 turns); `lanes.view_center_y` 0.65 and `perception.hood_bottom` 0.93 for this camera.
+- 52 clips in `data/videos/own/` with GPX; `selection.csv` lists them by type and the showcase moments.
+- Showcase: `runs/showcase/final/DrivePilot_showcase.mp4` (3.5 min, 7 scenes) and the single scenes next to it
+  (`render_all.sh` there re-renders them). Renderer reviewed twice, fixed, committed.
+- Evals on the footage: lane index 85 % (after the yellow-left-edge fix; was 60 %), drift 4.8 false / h, parking
+  spots 0/8, parking answers 20/4/1 of 25 after a prompt change. Open problems: PROGRESS "Known issues" (top).
+
 ## 1. Where things stand
 - V2 is done (PROGRESS.md "V2"): overlays, pedestrians, memory, YOLOPv2 lanes/drift, the sign detector, parking
   (below its bar on public footage), the 45-row test sheet, README screenshots, DEMO.md, align_gpx.py.

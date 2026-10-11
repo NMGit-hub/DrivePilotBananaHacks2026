@@ -15,8 +15,8 @@ to be in, which roundabout exit, what a sign means, whether you can park here.
   stepping into the road on your right."), YOLOPv2 lane detection (which lane we're in, for lane guidance) with a
   drift warning ("Careful, you're drifting right." above 25 mph), and a fine-tuned US sign detector ("Speed limit
   is now 35.", "School zone ahead."). All of it runs at once on the laptop GPU within the latency targets
-  (PROGRESS.md). Parking spots and drift warnings are below their accuracy bars on public footage and need our own
-  drives to tune (PROGRESS.md "Known issues").
+  (PROGRESS.md). Parking spots and drift warnings are below their accuracy bars, on public footage and on our own
+  car's dashcam (PROGRESS.md "Known issues").
 
 See [PLAN.md](PLAN.md) for the full design, [V2_BUILD_PLAN.md](V2_BUILD_PLAN.md) for V2 and
 [PROGRESS.md](PROGRESS.md) for current status, measurements and known limits.
@@ -145,6 +145,36 @@ For drives: plug the laptop into its own charger and set Windows to **Best perfo
    full stop and pull-away came back within 0.32 s on 52 of 54 tries (2 off by 1.15 s); the others kept the
    timestamp start and said so (nav/align.py has the method).
 
+### A car's own dashcam (burned-in GPS) and showcase videos
+
+The submission uses the team's own car dashcam (Mercedes MBUX: 2-minute `dm_YYYYMMDD_HHMMSS.mp4` clips, 1920x1280,
+with date, speed and GPS burned into a text bar at the bottom). The bar is read into GPX tracks, and blacked out for
+perception and cropped from anything shown (it holds coordinates).
+
+```powershell
+.venv/Scripts/python scripts/dashcam_gpx.py scan D:/Dashcam --jobs 10      # read every clip's bar (cached)
+.venv/Scripts/python scripts/dashcam_gpx.py gpx dm_20261003_175025         # -> data/gps/dm_20261003_175025.gpx
+.venv/Scripts/python scripts/dashcam_calibrate.py D:/Dashcam --turns 20     # field of view from turns (96°)
+.venv/Scripts/python -m app --video data/videos/own/dm_20261003_175025.mp4 --set video.file.hfov_deg=96 --set lanes.view_center_y=0.65 --set perception.hood_bottom=0.93
+```
+
+That camera sees ~96° across and is pitched up, so the lane model gets a 70° crop placed low in the frame
+(`lanes.view_center_y`) and the hood rule allows for the blacked-out bar (`perception.hood_bottom`).
+
+**Showcase videos** play a clip through the whole app in lock-step and write an MP4 with the page's overlays, the
+conversation as captions and every line spoken (Piper: DrivePilot's voice, and a second voice for the driver's
+"Hey Drive Pilot, ..."), placed in time the way the app's speaker would play them. Answers come from the real
+models, so they vary from run to run.
+
+```powershell
+.venv/Scripts/python scripts/render_showcase.py data/videos/own/dm_20260920_184404.mp4 --start 17 --end 44 --ask "27.5=tell me when it's green" --title "Red light" --png 34.5
+.venv/Scripts/python scripts/showcase_reel.py runs/showcase/reel.mp4 "runs/showcase/a.mp4=Red light|Tell me when it's green" "runs/showcase/b.mp4=Rain|What did that sign say?"
+```
+
+`dm_` clips get the camera settings above automatically; `--brighten 1.3` for night, `--no-audio`, `--width`,
+`--keep-overlay-bar` (never for anything public). Output: `runs/showcase/<clip>_<start>-<end>.mp4` with a `.json`
+timeline.
+
 ## Tools
 
 ```powershell
@@ -168,6 +198,9 @@ For drives: plug the laptop into its own charger and set Windows to **Best perfo
 .venv/Scripts/python scripts/find_bdd_clips.py --scene "parking lot" --min-crawl-s 15 --max-mph 15 --fetch 10
 .venv/Scripts/python scripts/align_gpx.py data/videos/own/VID_<...>.mp4 data/gps/<track>.gpx   # own drive + GPX: video_start
 .venv/Scripts/python scripts/eval_align.py             # align_gpx's refinement vs BDD100K clips with a known start
+.venv/Scripts/python scripts/render_showcase.py <clip> --ask "T=question"   # a showcase MP4 (overlays, captions, voice)
+.venv/Scripts/python scripts/showcase_reel.py out.mp4 "a.mp4=Title|Subtitle" ...  # showcase videos joined, title cards
+.venv/Scripts/python scripts/eval_lanes.py --set lanes.view_center_y=0.65 cache --hfov 96 --clip data/videos/own/<clip>.mp4  # wide dashcam
 ```
 
 ## Configuration
@@ -184,7 +217,8 @@ Everything lives in [config.yaml](config.yaml); API keys come from `.env`. The m
 | `ui.overlays` | The V2 overlay screen (default) or the plain V1 one. |
 | `vision.mark_objects` | Number the tracked objects on the frame sent to the model, so its answer can point at one. |
 | `parking.*`, `memory.*`, `sign_alerts.*` | V2: the parking spot finder, "what was that sign?", sign alerts. |
-| `lanes.*` | V2: YOLOPv2 lane detection (`enabled`, `fps`; weights `models/lanes/yolopv2.pt` from github.com/CAIC-AD/YOLOPv2) and the drift warning (`drift_gap_m`, `min_speed_mps`). |
+| `lanes.*` | V2: YOLOPv2 lane detection (`enabled`, `fps`; weights `models/lanes/yolopv2.pt` from github.com/CAIC-AD/YOLOPv2), a wide camera's crop (`max_view_deg`, `view_center_y`), the yellow left edge (`yellow_*`) and the drift warning (`drift_gap_m`, `min_speed_mps`). |
+| `video.file.hfov_deg`, `perception.hood_bottom` | The recorded camera's field of view (BDD100K 60°, the car dashcam 96°) and where its hood ends. |
 | `pedestrians.*` | V2: the path zone for pedestrian/cyclist warnings; `road_min_share` uses the lanes model's drivable area. |
 
 ## Tests
@@ -199,4 +233,5 @@ The tests need no camera, microphone or API keys (a few use the GPU and are mark
 
 Your own drives go in `data/videos/` (gitignored). For development the repo uses a few public
 [BDD100K](https://bdd-data.berkeley.edu/) validation clips. Those are not committed and are only for tuning.
-The submission video uses only our own footage.
+The submission video uses only our own footage (the car dashcam, above). Measured on it (PROGRESS.md): lane index
+85 % right, 4.8 false drift alerts per hour of highway, the parking-spot finder 0 of 8 (not usable there yet).

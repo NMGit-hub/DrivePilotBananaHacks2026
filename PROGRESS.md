@@ -4,6 +4,66 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### The user's own dashcam footage: showcase videos, evals, fixes (2026-10-11 afternoon)
+The user's Mercedes dashcam clips (D:\Dashcam, HANDOFF.md section 2) are the data for the evals and the submission.
+- **Camera:** horizontal FOV **96°** (median of 18 turns, IQR 92-103°; `scripts/dashcam_calibrate.py --turns 20`,
+  which now skips a turn when > 10 % of its frames have no usable homography: 2 of 20 skipped). The camera is
+  pitched up (horizon ~70 % down the frame): new `lanes.view_center_y` puts the lane model's 70° crop low (0.65);
+  centered, the crop was mostly sky and the horizon fell past `horizon_max` (no lanes at all). The masked text bar
+  ends the hood's box at 96 % of the frame, so `perception.hood_bottom` (0.97, dashcam 0.93) makes the hood rule
+  see it (a box was drawn on our own hood). `scripts/eval_lanes.py cache --hfov` now feeds the lane model the app's
+  crop (it fed the whole frame).
+  For these clips: `--set video.file.hfov_deg=96 --set lanes.view_center_y=0.65 --set perception.hood_bottom=0.93`
+  (the showcase renderer applies them to `dm_` clips by itself).
+- **Clips:** 52 picked by an agent from contact sheets (privacy: none within 2.2 km of home, no garages/driveways,
+  no school pick-ups; the burned-in GPS bar cropped from everything shown) into `data/videos/own/` with their GPX
+  (`scripts/dashcam_gpx.py gpx`): 19 highway (day, rain, night), 13 parking lots, 11 city with lights, showcase
+  moments (`data/videos/own/selection.csv`, gitignored).
+- **Showcase renderer** (`scripts/render_showcase.py`, `ui/render.py`, `ui/timeline.py`, built by an agent of the
+  previous session, reviewed twice here and fixed): plays a clip in lock-step through the app's real pieces
+  (perception, world, lanes, signs, watches, memory, navigation, the Assistant with Claude), draws the V2 page's
+  overlays, HUD and caption cards into each frame, and speaks every line with Piper (the driver's "Hey Drive
+  Pilot, ..." in a second voice) placed like `voice/speaker.py` would play it. Review fixes: an alert that makes
+  answers stale also drops answers still on their way (a stale "wait" right after "Light's green"), thumbnails
+  cropped above the bar, the bar's row scaled to the frame size, guidance waits only for a new route's answer, the
+  parking watch's pacing re-based after a question, the source stopped once at a time. `scripts/showcase_reel.py`
+  joins videos with title cards. **Rendered** (`runs/showcase/final/`, gitignored; frames of each looked at):
+  `DrivePilot_showcase.mp4` (3 min 29 s, 7 scenes): red light + "tell me when it's green" (the alert at 33.04 s,
+  the light changed at 33.0 s by eye), highway lanes + "which lane am I in?" (second, right), rain + "what did that
+  yellow sign say?" (the 35 mph curve sign), exit signs read off a gantry, a roundabout's YIELD / ONE WAY /
+  crossing signs, a parking stall + "can I park here?", night highway + "how many lanes?". Model answers vary from
+  run to run: for the roundabout, parking and highway scenes 2 takes were rendered and the better one used (every
+  take is a real run; the first roundabout take called YIELD "too blurry", the first lane take said "third lane"
+  before the yellow-edge fix). Seen and not used: at a 6-head intersection (`dm_20260926_185554`) "Light's green"
+  never came because the right-turn heads stayed red (the safety rule working as designed); at night
+  (`dm_20260929_195410`) a blooming green LED read YELLOW (Known issues); the parking finder found no spot.
+- **Measured on the user's footage:**
+
+  | What | Result | (BDD100K, before) |
+  | --- | --- | --- |
+  | Drift warning, 19 highway clips, 37.2 min >= 25 mph | 8 alerts: 5 real (2 clear, 3 borderline), **3 false = 4.8 false / h** (a ramp narrowing, an exit-lane split at night, a merge) | 1 borderline in 5.7 min |
+  | Lane changes detected (5 clips checked) | 13 of 15 real, none missed (2 false: a lane added / split on the right) | |
+  | Lane index, 256 hand-labeled frames of 18 clips | **188/221 right (85 %)**, answers 86 %; was 121/200 (60 %) | 52/57 (91 %), was 57/58 |
+  | Parking spots, 13 hand-labeled lots (12 usable, 8 clear targets) | **0/8 found**, 3 false spots, 7 false "parked" | recall 1/30, 0.7 false / 10 min (bar: >= 70 %) |
+  | Parking answers (25 parking rows of the 3 test sheets) | 20 right / 4 partly / 1 wrong; was 15 / 10 / 0 | |
+
+  Drift and lane changes judged by an agent from time-slice images (`runs/lane_drift_own_verdicts.txt`); labels
+  `eval/lane_labels_own.yaml`, `eval/parking_labels_own.yaml` (agents, not spot-checked by a second pass).
+- **Lane index fix (the yellow left edge):** 78 of the 79 misses were one lane too high: the wide paved left shoulder
+  (yellow edge line, shoulder, barrier) passed as a lane by width and drivable area. The lane model now marks which
+  line pixels are yellow paint (`perception.lanes.yellow_lines`), each line gets its yellow share, and counting lanes
+  to the left stops at the nearest yellow line (US: yellow separates opposing traffic or marks a one-way roadway's
+  left edge), only while another line of the frame is white (orange street lights make every line yellow). Own
+  footage 60 % -> 85 %; BDD100K 98 % -> 91 %: 4 of its 5 misses are one NYC clip where the tracker places our lane
+  one to the left (its yellow edge reads as our own line; the old count got it right by counting the shoulder).
+  Both sets together: 69 % -> 86 %.
+- **Parking answers:** "Can I park here?" at an ordinary stall said "I can't see any markings that decide this...".
+  The prompt now says an ordinary stall or curb with no restriction in view is normally fine: say so first, then to
+  check posted signs. On the parking rows (sets used before, so not blind): +5 right, 1 new wrong (a painted NO
+  PARKING box it didn't read, now called an ordinary stall; before it hedged).
+- Tests: 1528 passed (new: the yellow edge, the hood threshold, the low lane crop, the reel, the renderer's stale
+  answers); ruff, mypy clean.
+
 ### Wake modes, unrequested alerts, destination box (2026-10-11, user request; branch `voice-alerts-destination`)
 - **Wake modes** (`voice.wake_mode`, `--wake`, Settings on the page while running): `hey_drivepilot` (default,
   unchanged), `hey`, `none`. In the two open modes a second Silero VAD watches the idle microphone; 0.15 s of
@@ -68,11 +128,11 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   four alert-engine tests now switch the unrequested green off (they test the watch). Full suite: 1476 passed.
 
 ### V2 (2026-10-10/11): V2-M0..M6 and M8 done (M1 parking and M5 drift below their accuracy bars on public footage; M7 RF-DETR cut)
-- **The user's own dashcam footage (2026-10-11, in progress, HANDOFF.md section 2):** 950 Mercedes dashcam clips
+- **The user's own dashcam footage (2026-10-11, HANDOFF.md section 2; results in the section above):** 950 Mercedes dashcam clips
   (30.2 h, D:\Dashcam). Their burned-in GPS/speed line is read into GPX (`nav/dashcam_overlay.py`,
   `scripts/dashcam_gpx.py`): 97.7 % of 1 Hz samples read on 837 clips, the time field agrees with the file name on
-  99.6 %; 4.3 h of highway, 9.2 h city, 1.9 h lot-speed crawl, 111 night clips. Horizontal FOV ~97 deg from 6 turns
-  (`scripts/dashcam_calibrate.py`, to firm up). Next: clip selection, evals on this footage, showcase videos.
+  99.6 %; 4.3 h of highway, 9.2 h city, 1.9 h lot-speed crawl, 111 night clips. Horizontal FOV 96° from 18 turns
+  (`scripts/dashcam_calibrate.py`).
 - **Vision answers improved without training (2026-10-11, the user's go-ahead):** a second ("reading") model, the
   place from GPS, and parking guidance in the prompt. (1) `vision.reading`: Claude Haiku 5.5 (thinking off, effort
   low) answers sign, parking and scene-description questions; Claude Haiku 4.5 keeps lights, lanes, memory and go
@@ -678,6 +738,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 - **GPU actually used:** `scripts/check_gpu.py` (fp16 matmul ~21 TFLOPS on cuda:0; CTranslate2 sees the GPU).
 
 ## Next
+- **After the submission (2026-10-11):** the parking tracker on the 96° dashcam (0/8 on the user's lots); drift on
+  road-shape changes (ramps, exit splits: 4.8 false / h); the night green-LED misread; the lane tracker placing our
+  lane one over on the NYC clip; blur plates in published videos if wanted. Rotate the API keys after the hackathon.
 - **V2 next steps:** our own drives (`scripts/align_gpx.py`, README "Record your own drive") to check lanes and drift on the phone's 114° view and to tune parking; then V1's deferred live drive. Earlier: **V2 build plan** (`V2_BUILD_PLAN.md`, 2026-10-10): milestones V2-M0..M8 with "done when" tests and how each
   feature is tested without a live drive. The user answered the parking questions, set the deadline (**Sunday
   2026-10-11, 8:59 pm PDT**) and moved the sign fine-tune to a separate session (`SIGN_FINETUNE_PROMPT.md`).
@@ -706,6 +769,24 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   GPX (HANDOFF.md 5A steps 6-8) waits for the user's go.
 
 ## Known issues / compromises
+- **On the user's dashcam footage (2026-10-11):** (1) **parking spots 0/8** found on 12 lots (3 false spots, 7 false
+  "parked" at long stops at lights and lot exits): the tracker rarely fires on this 96° camera, not investigated
+  further (deadline). (2) **Drift: 4.8 false alerts / h** at highway speed, all from the road changing shape (a ramp
+  line narrowing in, an exit-only lane split at night moving the left line one lane over, a merge); 2 borderline
+  alerts came from "our usual place" carried over from the previous lane after a lane change. (3) A green LED at
+  night, blooming, read **YELLOW** (`dm_20260929_195410`, 25-27 s): no "Light's green" there. (4) The lane index is
+  wrong where the tracker places our lane one to the left (one BDD100K NYC clip, 4 frames, since the yellow-edge
+  rule), and lanes to our right are still undercounted (the count stays out of the prompt). (5) The yellow-edge rule
+  trusts the HSV color: faded yellow below saturation 70, or a yellow line in deep shade, falls back to the old count.
+- **Showcase videos:** model answers differ from run to run, and for 3 scenes the better of 2 real takes was used
+  (PROGRESS "own dashcam footage"). The renderer differs from the app in small ways: "stop" / "never mind" stop the
+  answer but not a playing alert; the wake word cuts an answer where the question starts (the app: ~0.7 s later, at
+  the wake word); an answer card shows its whole sentence even when an alert cut its audio; frames go to x264 as
+  untagged BT.601 (colors shift slightly in BT.709 players); a jump in the clip's timestamps doesn't reset lanes and
+  memory as the app does. Other cars' license plates are readable in the videos (not blurred).
+- **The new parking prompt** calls a stall "ordinary" when it misses painted words on it (a NO PARKING box on a
+  held-out sheet row; before, it hedged), and `scripts/eval_lanes.py --frames` draws lines without the crop's
+  mapping on a cropped camera (the saved frames' lines are offset; the numbers are right).
 - **Open-mic wake modes (`hey`, `none`) are tested on synthetic voices only**, not real voices in the car. Without
   the full wake word, passengers' questions are answered too ("none" mode answers any question; "hey" mode any
   that starts with "hey"), and every utterance in the car is transcribed (Whisper on the GPU, ~0.1-0.3 s each).
