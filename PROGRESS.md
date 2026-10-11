@@ -34,6 +34,15 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   (two DO NOT ENTER signs 28 px tall in the rain: the detector sees them, the close-up is too blurry, and the model
   rightly won't name a sign it can't read: the detector's kind is 62-81 % precise per box on BDD, too unsure to
   speak), row 10 (a street name it can't read), row 25 (invented a DO NOT ENTER sign for "can I park here?").
+- **Test sheet again after those fixes** (`runs/20261010-235356_sheet`): **31 right, 8 partly, 6 wrong** of 45:
+  the same level, but different rows. Fixed rows held (8 lights partly -> right: lights 7/7; 30 lanes wrong ->
+  right). Rows that changed by model variance: 11 (can't read the sign: partly -> wrong), 18 (lane count 3 -> 2: the
+  known flaky count), 41 (hedged on the handicap spot), 45 (see next). **Found from it:** for "can I pull out now?"
+  the strict safety net took "...so you need to wait until they clear and check both ways yourself" for "it's
+  clear" and replaced that whole pedestrian warning with the generic sentence: now "until/till ... clear" and
+  "to clear" are exempt (anything else with clear/safe still is: tests). Per category over both runs: lights
+  6-7/7, right of way 2/2, controls 1/1, road 5/7 (+2 partly), safety 4-5/6, lanes 4/5, memory 2/3, signs 4/7,
+  parking 2-3/7 (the weakest: the model hedges on spots and once invented a sign).
 - **README screenshots** of the V2 page (`docs/screenshots/`, taken in the browser pane on 4 replays: highway
   lanes + "which lane am I in?", the speed-limit alert and badge, a pedestrian pulsing at a red light, "tell me when
   it's green"). Found while taking them: the two answer bugs above. `DEMO.md`: a 7-replay demo plan.
