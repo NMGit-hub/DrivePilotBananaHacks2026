@@ -35,7 +35,7 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   better on parking (2 -> 3 right, 2 partly -> right, 1 right -> wrong: it hedged on a hatched call-box island) and
   "what's going on" (0 -> 1 of 2), the same on signs (2/4), lights (3/3), memory and safety. So the honest size of
   the gain is about +2 of 18 on unseen questions, smaller than on the set used to choose it. **Bench** with the
-  reading model (`runs/20261011-110450_bench_app`, `..._111...`): every target met; model answers 1.84 / 2.11 s and
+  reading model (`runs/20261011-110450_bench_app`, `runs/20261011-110607_bench_app`): every target met; model answers 1.84 / 2.11 s and
   1.55 / 1.66 s (median / p90, target 2.5; before 1.3-1.5 s): Haiku 5.5's first sentences are longer. Answer times unchanged (model rows ~1.0-1.3
   s median to the first sentence; reading questions 1.1-1.3 s). Checked in the real app: both models start, the
   location resolves ("Bayside, Queens, New York City, New York"), a sign question goes to Haiku 5.5 (30 mph, 1.17 s),
