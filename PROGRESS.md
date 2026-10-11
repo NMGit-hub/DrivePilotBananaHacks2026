@@ -22,6 +22,13 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   asked for it), a periodic Claude Haiku scan (`eval/parking_scan.py`, `scripts/eval_parking_scan.py`, by a
   subagent, ~2,400 calls, ~$7): best 47 % recall at 26.6 false / 10 min, handicap stalls announced as open 3 times;
   Sonnet 4.6: 20 % at 1.9. Not shipped. The geometry + per-candidate model check stays: rare but precise.
+  **Model check measured** (`scripts/eval_parking_check.py`, the stall now outlined by its ground footprint): of the
+  5 spot events on the 40 lot clips + crawl half A, Claude Haiku rejected all 5 (4 false, and the 1 hit, whose stall
+  is at the frame edge by the time it's confirmed on a 60° camera): nothing false is spoken, nothing found either.
+  **32 more lot clips at parking-search speed** (`data/videos/parking_crawl`, user's request, labels half A in
+  `eval/parking_labels_crawl_a.yaml`: 7/16 usable, 2 clear spots, both the stall we park in): 0/2 found, 3 false spot
+  events in 4.1 min. Even crawling, the clips mostly cross lots at an angle instead of driving down an aisle, which
+  is the only case the geometry handles.
 - **V2-M2 overlay page** (`ui/overlay.py`, `ui/static/v2.html`, `ui.overlays`): each frame and its overlay packet go
   in one binary WebSocket message (built on the world thread right after that frame's update, so they can't drift);
   4-way badges with timers (next car amber, YOU badge green on our turn), people amber, the light's state, parked
