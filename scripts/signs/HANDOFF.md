@@ -8,7 +8,16 @@ Python: `C:\ClaudeProjects\DrivePilot_BananaHacks2026\.venv\Scripts\python.exe` 
 `YOLO_AUTOINSTALL=false`. Deadlines: working detector to the other session by **Sun 2026-10-11 11:00 PDT**, project
 deadline Sun 20:59 PDT. Check the time with `date` (it is easy to lose track).
 
-## Session 3b state (2026-10-10 ~20:10 PDT) — READ THIS FIRST, it supersedes older notes below
+## FINAL STATE (2026-10-10 ~21:40 PDT) — the milestone is done; read scripts/signs/STATUS.md
+- Delivered to the main checkout's models/signs (det_ft detector + cls5 classifier, engines + sidecars; smoke-tested).
+- Final settings: value_views 5, value_conf 0.9 (chosen on BDD validation boxes + tune, before the final held-out run).
+- Fresh held-out: 69/77 clearly readable limits right, no value contradicting a labeled sign; flagged values all
+  checked by eye (STATUS "Numbers"). Full pytest 914 passed, ruff, mypy clean; branch pushed.
+- A last focused review of the value-views change was running at hand-off time; fix anything it finds with tests.
+- Left for the user: delete the stray COCO8 runs in the main checkout (`runs/detect/train`, `train-2..7`) and
+  `C:\ClaudeProjects\datasets\coco8` (the permission system blocked deleting them).
+
+## Session 3b state (2026-10-10 ~20:10 PDT) — superseded by FINAL STATE above
 - Main run `runs/signs/det` early-stopped at epoch 39 (best epoch 24, mAP50 0.854). The old watchdog then kept
   "resuming" the finished run: 7 stray COCO8 runs landed in the MAIN checkout `runs/detect/train`, `train-2..7`
   and `C:\ClaudeProjects\datasets\coco8` (deleting them was denied by the permission classifier: the user was

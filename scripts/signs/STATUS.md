@@ -184,7 +184,7 @@ speed limit); "what does the overhead sign say?" (too far) → nothing ✓; "can
   announcing them on one detection.
 
 ## Delivery
-Copied on 2026-10-10 ~21:50 PDT with `scripts/signs/export_engines.py --deliver` (it refuses a missing, stale or
+Copied on 2026-10-10 ~21:35 PDT with `scripts/signs/export_engines.py --deliver` (it refuses a missing, stale or
 sidecar-less engine) to `C:\ClaudeProjects\DrivePilot_BananaHacks2026\models\signs\` (gitignored there):
 
 | File | Size | What |
