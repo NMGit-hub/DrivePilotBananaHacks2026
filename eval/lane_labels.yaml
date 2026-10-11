@@ -1,0 +1,116 @@
+# Hand-labeled lane position on highway / multi-lane frames (V2-M5), for scripts/eval_lanes.py index.
+# Labeled by looking at each frame (scripts/eval_lanes.py frames: every 6 s from t=3 s, 960 px wide).
+#   index: our lane counted from the left (1 = leftmost lane of our direction)
+#   count: lanes in our direction, only where the right edge is clearly visible too (null: not sure)
+# Frames that couldn't be labeled confidently are left out (blocked view, intersections, gores, a rolled camera
+# in the city). Videos: data/videos/<folder>/<file>; GPS: data/gps/<id>.gpx.
+clips:
+  - id: c4c4b88a-d1a38d2f
+    file: dev/highway_multilane_overhead_sign__c4c4b88a-d1a38d2f.mov
+    notes: NYC expressway, day; yellow left edge + narrow shoulder + barrier; 4+ lanes, right side crowded
+    frames:
+      - {t: 3.0, index: 2, count: null}
+      - {t: 9.0, index: 2, count: null}
+      - {t: 15.0, index: 2, count: null}
+      - {t: 27.0, index: 2, count: null}
+      - {t: 33.0, index: 2, count: null}
+      - {t: 39.0, index: 2, count: null}
+  - id: 02514ff2-5fafa3bc
+    file: highway/02514ff2-5fafa3bc.mov
+    notes: day, snow; leftmost lane next to a delineator-post separator (another roadway beyond it)
+    frames:
+      - {t: 3.0, index: 1, count: null}
+      - {t: 9.0, index: 1, count: 3}
+      - {t: 15.0, index: 1, count: null}
+      - {t: 21.0, index: 1, count: null}
+      - {t: 27.0, index: 1, count: null}
+      - {t: 33.0, index: 1, count: null}
+      - {t: 39.0, index: 1, count: null}
+  - id: 40f7f545-f32479c7
+    file: highway/40f7f545-f32479c7.mov
+    notes: night expressway, 3 lanes, middle lane; big dashboard in view (road ends at ~0.7 of the height)
+    frames:
+      - {t: 3.0, index: 2, count: 3}
+      - {t: 9.0, index: 2, count: 3}
+      - {t: 15.0, index: 2, count: 3}
+      - {t: 21.0, index: 2, count: 3}
+      - {t: 27.0, index: 2, count: 3}
+      - {t: 33.0, index: 2, count: 3}
+  - id: 490ba810-6823ec29
+    file: highway/490ba810-6823ec29.mov
+    notes: Israel, day; airport roads with painted curbs, ramps and forks
+    frames:
+      - {t: 3.0, index: 1, count: null}
+      - {t: 9.0, index: 2, count: null}
+      - {t: 21.0, index: 2, count: 2, note: curved ramp}
+      - {t: 33.0, index: 2, count: 2}
+  - id: 552991d2-a22e7623
+    file: highway/552991d2-a22e7623.mov
+    notes: night parkway (Henry Hudson), 3 lanes, middle lane throughout
+    frames:
+      - {t: 3.0, index: 2, count: 3}
+      - {t: 9.0, index: 2, count: 3}
+      - {t: 15.0, index: 2, count: 3}
+      - {t: 21.0, index: 2, count: 3}
+      - {t: 27.0, index: 2, count: 3}
+      - {t: 33.0, index: 2, count: 3}
+      - {t: 39.0, index: 2, count: 3}
+  - id: 5c5dc708-17089dd4
+    file: highway/5c5dc708-17089dd4.mov
+    notes: day parkway, 2 lanes, left lane; yellow left edge, shoulder, guardrail
+    frames:
+      - {t: 3.0, index: 1, count: 2}
+      - {t: 9.0, index: 1, count: 2}
+      - {t: 15.0, index: 1, count: 2}
+      - {t: 21.0, index: 1, count: 2}
+      - {t: 27.0, index: 1, count: 2}
+      - {t: 33.0, index: 1, count: 2}
+      - {t: 39.0, index: 1, count: 2}
+  - id: 7576a8b6-9050a21e
+    file: highway/7576a8b6-9050a21e.mov
+    notes: night, Tel Aviv, camera rolled ~5 degrees; most frames ambiguous
+    frames:
+      - {t: 15.0, index: 1, count: null}
+  - id: 7dc2914d-a20a969a
+    file: highway/7dc2914d-a20a969a.mov
+    notes: California freeway, day; leftmost lane, yellow edge, wide left shoulder, concrete median
+    frames:
+      - {t: 3.0, index: 1, count: null}
+      - {t: 9.0, index: 1, count: null}
+      - {t: 15.0, index: 1, count: null}
+      - {t: 21.0, index: 1, count: null}
+      - {t: 27.0, index: 1, count: null}
+      - {t: 33.0, index: 1, count: null}
+      - {t: 39.0, index: 1, count: null}
+  - id: ad7bd963-c0111bc7
+    file: highway/ad7bd963-c0111bc7.mov
+    notes: night freeway, 3 lanes (+ exit lanes at times), middle lane
+    frames:
+      - {t: 3.0, index: 2, count: null, note: exit gore on the right}
+      - {t: 9.0, index: 2, count: 3}
+      - {t: 15.0, index: 2, count: null}
+      - {t: 21.0, index: 2, count: null, note: exit gore on the right}
+      - {t: 27.0, index: 2, count: 3}
+      - {t: 33.0, index: 2, count: 3}
+      - {t: 39.0, index: 2, count: 3}
+  - id: ae3733cf-18a37cfc
+    file: highway/ae3733cf-18a37cfc.mov
+    notes: Israel, day; dashcam with a device on the dash; 2-lane road, left lane; double line + barrier left
+    frames:
+      - {t: 3.0, index: 1, count: 2}
+      - {t: 9.0, index: 1, count: 2}
+      - {t: 15.0, index: 1, count: 2}
+      - {t: 21.0, index: 1, count: 2}
+      - {t: 33.0, index: 1, count: 2}
+      - {t: 39.0, index: 1, count: 1, note: single-lane ramp}
+  - id: b11496d7-20b00dbb
+    file: highway/b11496d7-20b00dbb.mov
+    notes: dusk freeway (I-280 SF), second lane from the left, 4+ lanes
+    frames:
+      - {t: 3.0, index: 2, count: null}
+      - {t: 9.0, index: 2, count: null}
+      - {t: 15.0, index: 2, count: null}
+      - {t: 21.0, index: 2, count: null}
+      - {t: 27.0, index: 2, count: null}
+      - {t: 33.0, index: 2, count: null}
+      - {t: 39.0, index: 2, count: null}
