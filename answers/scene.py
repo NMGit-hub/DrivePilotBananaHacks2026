@@ -122,16 +122,29 @@ MARK_COLORS = {"vehicle": (255, 220, 60), "person": (40, 190, 255), "light": (20
 
 NO_VOUCH = "I can't judge moving traffic, so check both ways yourself before you go."
 GREEN_CHECK = "Check the intersection before you go."
-LIGHT_NAMED = re.compile(r"\b(?:light|lights|signal|signals|arrow|arrows)\b", re.IGNORECASE)
-_GREEN = re.compile(r"\bgreen\b", re.IGNORECASE)
-_NOT_JUST_GREEN = re.compile(r"\b(?:red|yellow|amber|not|no|never)\b|n't\b|\bcheck\b", re.IGNORECASE)
+# "Our light is green now", said plainly: "The light facing us is green.", "Yes, it just turned green.", "Green."
+_OUR_LIGHT = r"(?:it|the light|our light|your light|the light (?:facing|in front of|ahead of) (?:us|you))"
+GREEN_NOW = re.compile(
+    rf"\b{_OUR_LIGHT}(?:'s| is)(?: now)? green\b|\b{_OUR_LIGHT}(?: has)?(?: now| just)? turned green\b"
+    r"|^\W*(?:yes\W+)?green\b",
+    re.IGNORECASE,
+)
+# ...with nothing that makes it another light, the future or the past, or that already reminds or warns.
+NOT_OUR_GREEN_NOW = re.compile(
+    r"\b(?:red|yellow|amber|not|never|about to|will|should|soon|wait|until|yet|arrows?|turn lane|left[- ]turn|"
+    r"right[- ]turn|cross street|other|was|were|passed|pull over|check)\b|n't\b",
+    re.IGNORECASE,
+)
 
 
-def says_green(spoken: Sequence[str]) -> bool:
-    """The answer says a light is green, and nothing red, yellow, negated or already a reminder to check: "The light
-    facing us is green." (test sheet row 8) yes; "No, it's still red." / "The arrow is green, ours is red." no."""
+def says_green(spoken: Sequence[str], light: LightColor | None = None) -> bool:
+    """The answer says plainly that our light is green now, and the tracker doesn't read it red or yellow: "The light
+    facing us is green." (test sheet row 8) yes; "It's about to turn green.", "The left-turn arrow just turned
+    green.", "It was green when we went through." and "The green sign says Main St." no (the review's cases)."""
+    if light in (LightColor.RED, LightColor.YELLOW):
+        return False
     text = " ".join(spoken)
-    return bool(_GREEN.search(text)) and not _NOT_JUST_GREEN.search(text)
+    return bool(GREEN_NOW.search(text)) and not NOT_OUR_GREEN_NOW.search(text)
 
 
 FALLBACK_TIMEOUT = "Sorry, I couldn't get a clear answer in time."
@@ -143,7 +156,8 @@ SIGN_WORDS = re.compile(r"\b(?:sign|signs|said|say|says|read|speed limit|limit|p
 # Questions about *our* moving off (the router's gap checks are covered by the route kind already).
 GO_QUESTION = re.compile(
     r"\b(?:(?:can|could|should|may|do|shall) (?:i|we) (?:still )?(?:go|turn|merge|pull out|pull in|cross|proceed|pass|"
-    r"change lanes?|get over|move over|make it)|(?:is it|it is|am i|are we|is that) (?:safe|clear|ok|okay|good)|"
+    r"change lanes?|get over|move over|make it|pull (?:forward|up|ahead)|creep|inch|roll (?:forward|up)|move up)|"
+    r"(?:is it|it is|am i|are we|is that) (?:safe|clear|ok|okay|good)|"
     r"(?:safe|clear|ok|okay) to|(?:anyone|anybody|anything|someone|somebody|cars?|traffic) coming|room to|gap)\b",
     re.IGNORECASE,
 )
@@ -160,7 +174,8 @@ PERMISSION = re.compile(
     r"|\bgo ahead\b|\bgo for it\b|\bgood to go\b|\bgo now\b|\bgo(?:,| -|—)? it'?s clear\b"
     r"|\byou(?:'re| are) (?:good|clear|all clear|safe|fine|ok|okay)\b(?! to (?:park|stop))"
     r"|\ball clear\b"
-    r"|\byou (?:can|may|could|should) (?:go|merge|turn|pull out|proceed|cross|pass|change lanes|make it|get over)\b"
+    r"|\byou (?:can|may|could|should) (?:go|merge|turn|pull out|proceed|cross|pass|change lanes|make it|get over|"
+    r"pull (?:forward|up|ahead)|creep|inch|roll (?:forward|up)|move up)\b"
     r"|\b(?:safe|clear|ok|okay|fine) (?:for you )?to "
     r"(?:go|merge|turn|pull out|proceed|cross|pass|change lanes|get over)\b",
     re.IGNORECASE,
@@ -173,11 +188,12 @@ VOUCHING = re.compile(
     re.IGNORECASE,
 )
 # A condition to wait for isn't vouching: "...so wait until they clear and check both ways yourself" (test sheet row
-# 45: the net replaced that whole warning about pedestrians). Only "until/till ... clear" within one clause and "(for
-# them) to clear" are exempt: "It's clear until the light", "Once the truck passes, it's safe" and "Pull out when
-# it's safe" still count as vouching.
+# 45: the net replaced that whole warning about pedestrians). Only a waiting clause within one clause is exempt
+# ("until/till ... clear", "wait for them to clear"): "It's clear until the light", "Once the truck passes, it's
+# safe", "Pull out when it's safe" and "You have time to clear the lane" still count as vouching.
 CONDITIONAL_CLEAR = re.compile(
-    r"\b(?:until|till)\b[^.;:,]*?\b(?:clear|clears|cleared|safe|empty)\b|\bto (?:clear|be clear)\b",
+    r"\b(?:until|till)\b[^.;:,]*?\b(?:clear|clears|cleared|safe|empty)\b"
+    r"|\b(?:wait|waiting)\b[^.;:,]*?\bto (?:clear|be clear)\b",
     re.IGNORECASE,
 )
 
@@ -416,6 +432,7 @@ def strip_tags(sentence: str) -> tuple[str, list[tuple[str, int]]]:
     for kind_a, nums_a, kind_b, nums_b in TAG.findall(sentence):
         kind = "image" if (kind_a or kind_b).lower() in ("image", "img") else "ref"
         tags += [(kind, int(n)) for n in re.findall(r"\d{1,3}", nums_a or nums_b)]
+    sentence = re.sub(r",\s*(\[[^\]]*\])\s*,", r" \1", sentence)  # "The sign, [ref 3], says" -> "The sign says"
     text = STRAY_OBJECT.sub("that one", OBJECT_NUMBER.sub(r"\1", STRAY_MARK.sub("", TAG.sub("", sentence))))
     text = re.sub(r"\s+([.,!?;:])", r"\1", re.sub(r"\s{2,}", " ", text))
     # Punctuation around a removed tag: "30 mph, [ref 3]." -> "30 mph."; "The sign, [ref 3], says" -> "The sign, says"
@@ -652,13 +669,14 @@ class SceneHandler:
         vcfg = self.cfg.vision
         pieces = guarded_stream(self.model, planned.request, vcfg.first_token_timeout_s, vcfg.total_timeout_s, cancel)
         passing = bool(PASS_QUESTION.search(route.text))
-        light_question = bool(LIGHT_NAMED.search(route.text))  # (not "what did that green sign say?")
+        # "It's green" gets "check the intersection" while we wait at the light (not a memory answer about the past)
+        green_check = route.intent != "memory" and snapshot.ego_stopped
         return self._safe(
             sentences(pieces),
             strict=is_go_question(route),
             passing=passing,
             planned=planned,
-            light_question=light_question,
+            green_check=snapshot.light.color if green_check else None,
         )
 
     def _show_image(self, number: int, planned: RequestPlan) -> None:
@@ -689,10 +707,11 @@ class SceneHandler:
         strict: bool,
         passing: bool = False,
         planned: RequestPlan | None = None,
-        light_question: bool = False,
+        green_check: LightColor | None = None,
     ) -> Iterator[str]:
-        """Safety nets on every sentence, hidden tags taken out, and spoken fallbacks for failures (`light_question`:
-        an answer that says our light is green ends with a reminder to check the intersection)."""
+        """Safety nets on every sentence, hidden tags taken out, and spoken fallbacks for failures (`green_check`: the
+        tracker's light while we're stopped; an answer that says our light is green then ends with a reminder to check
+        the intersection, unless the tracker reads red or yellow)."""
         said = False
         no_vouch_said = False
         replaced = False  # a safety net changed the answer: it no longer points at what the model named
@@ -744,7 +763,8 @@ class SceneHandler:
             log.warning("vision answer was empty")
             yield FALLBACK_EMPTY
             return
-        if strict and not no_vouch_said:
-            yield NO_VOUCH
-        elif light_question and says_green(spoken):
+        if strict:
+            if not no_vouch_said:
+                yield NO_VOUCH  # (says "check" already: no second reminder)
+        elif green_check is not None and says_green(spoken, green_check):
             yield GREEN_CHECK  # like the local light answers: never a bare "it's green"

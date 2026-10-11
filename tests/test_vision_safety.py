@@ -81,24 +81,55 @@ def test_descriptions_with_clear_are_fine_when_not_about_going() -> None:
     assert spoken_by_assistant(reply, "Is the road closed ahead?", ego_stopped=False) == [reply]
 
 
-@pytest.mark.parametrize(
-    ("question", "reply", "reminded"),
-    [
-        ("Is the light green?", "The light facing us is green, [ref 4].", True),  # test sheet row 8
-        ("What color is the light?", "It just turned green.", True),
-        ("Is the light green?", "No, the light is red.", False),
-        ("Is the arrow green?", "The left arrow is green, but our light is red.", False),
-        ("Is the light green?", "It's green, so check the intersection first.", False),  # already reminds
-        ("Is the light green?", "It isn't green yet.", False),
-        ("What did that green sign say?", "The green sign said Exit 15.", False),  # not about a light
-    ],
-)
+GREEN_CASES = [
+    ("Is the light green?", "The light facing us is green, [ref 4].", True),  # test sheet row 8
+    ("What color is the light?", "It just turned green.", True),
+    ("Is it green yet?", "Yes, it just turned green.", True),  # (review: no "light" in the question)
+    ("Has it turned green?", "Yes, it's green, and there's no one crossing.", True),
+    ("Is the light green?", "No, the light is red.", False),
+    ("Is the arrow green?", "The left arrow is green, but our light is red.", False),
+    ("Is the light green?", "It's green, so check the intersection first.", False),  # already reminds
+    ("Is the light green?", "It isn't green yet.", False),
+    ("What did that green sign say?", "The green sign said Exit 15.", False),  # not about a light
+    # The independent review's cases (2026-10-11): none of these say our light is green now.
+    ("Is the light green?", "It's about to turn green.", False),
+    ("Can I go soon?", "Wait for the green.", False),
+    ("What color is the light?", "It should turn green in a few seconds.", False),
+    ("Is the light green?", "The left-turn arrow just turned green, but you are going straight.", False),
+    ("Is the light green?", "The green arrow is for the left-turn lane only; you're going straight.", False),
+    ("What's happening?", "The cross street's light just turned green.", False),
+    ("Is the light green?", "The light is green, but an ambulance is coming up behind you, so pull over.", False),
+    ("What does the green sign on the light pole say?", "The green sign says Main Street.", False),
+]
+
+
+@pytest.mark.parametrize(("question", "reply", "reminded"), GREEN_CASES)
 def test_a_model_answer_that_says_our_light_is_green_reminds_to_check(
     question: str, reply: str, reminded: bool
 ) -> None:
     said = spoken_by_assistant(reply, question, ego_stopped=True, ego_stopped_since=10.0)
     assert (said[-1] == GREEN_CHECK) is reminded, said
     assert said[0].endswith(".") and ",." not in said[0]
+
+
+def test_no_green_reminder_against_the_tracker_or_while_moving_or_about_the_past() -> None:
+    """Never a go-flavored cue the tracker contradicts (it reads our light red), none while driving through, and
+    none for a memory answer ("It was green when we went through.")."""
+    red = LightReading(20.0, LightColor.RED, True, 1, ((600.0, 100.0, 620.0, 150.0),))
+    said = spoken_by_assistant("The light facing us is green.", "Is the light green?", ego_stopped=True, light=red)
+    assert said == ["The light facing us is green."]
+    said = spoken_by_assistant("The light facing us is green.", "Is the light green?", ego_stopped=False)
+    assert said == ["The light facing us is green."]
+    said = spoken_by_assistant("It was green.", "What color was that light we just passed?", ego_stopped=True)
+    assert GREEN_CHECK not in said
+
+
+def test_one_reminder_after_a_replaced_sentence() -> None:
+    """A strict answer whose sentence the net replaced says "check both ways" once, not a second green reminder."""
+    said = spoken_by_assistant(
+        "The light is green. It's clear, go ahead.", "Is it safe to pull out?", ego_stopped=True, ego_stopped_since=10.0
+    )
+    assert said.count(NO_VOUCH) == 1 and GREEN_CHECK not in said
 
 
 ROW_45 = (
@@ -119,6 +150,11 @@ def test_waiting_until_people_clear_is_not_vouching() -> None:
 @pytest.mark.parametrize(
     "reply",
     [
+        # (review 2026-10-11: "to clear" was exempt anywhere, not only after "wait")
+        "The car on the left is far away, so you have time to clear the lane.",
+        "The gap is big enough for you to clear the intersection.",
+        "You have time to clear it before the bus arrives.",
+        "There is room to clear the turn.",
         "It's clear, but check both ways.",
         "It looks clear until the next light.",
         "Once the truck passes, it's safe.",
@@ -426,3 +462,14 @@ def test_real_claude_client_sends_temperature_in_the_body_and_streams() -> None:
     assert model.complete(VisionRequest(system="s", text="q", temperature=0.0)) == "It's red."
     assert model.complete(VisionRequest(system="s", text="q")) == "It's red."
     assert sent[0]["temperature"] == 0.0 and "temperature" not in sent[1]
+
+
+@pytest.mark.parametrize("question", ["Can I pull forward a little?", "Can I inch forward?", "Can I creep up a bit?"])
+@pytest.mark.parametrize(
+    "reply", ["Yes, you can pull forward a little.", "Yes, the crosswalk is clear now, you can pull forward."]
+)
+def test_pulling_forward_is_a_go_question(question: str, reply: str) -> None:
+    """Review 2026-10-11 (DEMO.md asks it while a woman crosses in front): "can I pull forward a little?" wasn't a go
+    question and "you can pull forward" wasn't permission, so both answers were spoken as they were."""
+    said = spoken_by_assistant(reply, question, ego_stopped=True, ego_stopped_since=10.0)
+    assert said == [NO_VOUCH]

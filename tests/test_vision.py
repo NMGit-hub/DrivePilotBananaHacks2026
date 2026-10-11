@@ -344,7 +344,9 @@ def test_a_bare_go_from_the_model_is_rewritten(bare: str) -> None:
 
 def test_normal_answers_are_not_rewritten() -> None:
     text = "The light is green, but a pedestrian is still crossing on your right."
-    assert ask(handler(MockVision(text)), "is the light green?") == [text, GREEN_CHECK]  # (the reminder follows it)
+    assert ask(handler(MockVision(text)), "is the light green?") == [text]  # (driving: no reminder)
+    stopped = snapshot(ego_stopped=True)
+    assert ask(handler(MockVision(text)), "is the light green?", stopped) == [text, GREEN_CHECK]  # (it follows)
     text = "The bus ahead is stopped with its hazards on."
     assert ask(handler(MockVision(text)), "why is the bus stopped?") == [text]
 

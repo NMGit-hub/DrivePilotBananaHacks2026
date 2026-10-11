@@ -123,7 +123,7 @@ def test_what_was_that_still_repeats_the_last_message() -> None:
             "I can see a sign on the right that shows 30 mph.",
             [("ref", 3)],
         ),
-        ("The sign, [ref 3], says 30.", "The sign, says 30.", [("ref", 3)]),
+        ("The sign, [ref 3], says 30.", "The sign says 30.", [("ref", 3)]),
         ("It reads 30 mph; (ref 3)?", "It reads 30 mph?", [("ref", 3)]),
     ],
 )
