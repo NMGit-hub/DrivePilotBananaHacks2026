@@ -362,6 +362,12 @@ class NavHandler:
         lanes = describe_lanes(step.lanes) or "the marked lanes"
         road = road_name(step) or "the next turn"
         text = f"For {road} {when}, use {lanes}."
+        # The driver just heard which lanes: the reminder that would come up next for this maneuver ("In a quarter
+        # mile, use the right lane.") would only repeat it, and cut into this answer. Later, closer ones still come.
+        distance = step.start_m - progress.along_m
+        for threshold in self.cfg.lane_reminders_m:
+            if threshold >= 0.5 * distance:
+                self._announced.add(("lanes", step.index, threshold))
         reading = self.lane_reader(len(step.lanes)) if self.lane_reader is not None else None
         if reading is not None:
             counted, ours = reading

@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -37,15 +38,42 @@ class Item:
     path: Path
     title: str
     subtitle: str = ""
+    start: float = 0.0  # seconds into the video to start from...
+    end: float | None = None  # ...and to stop at (None: its end)
 
 
 def parse_item(text: str) -> Item:
-    """ "clip.mp4=Rain|What did that sign say?" -> Item."""
+    """ "clip.mp4=Rain|What did that sign say?" -> Item; "clip.mp4@3.5-17=Rain" plays 3.5-17 s of the video."""
     path, sep, label = text.partition("=")
     if not sep:
-        raise argparse.ArgumentTypeError(f"expected <video>=<title>[|<subtitle>], got {text!r}")
+        raise argparse.ArgumentTypeError(f"expected <video>[@start-end]=<title>[|<subtitle>], got {text!r}")
     title, _, subtitle = label.partition("|")
-    return Item(Path(path), title.strip(), subtitle.strip())
+    path, at, span = path.partition("@")
+    start, end = 0.0, None
+    if at:
+        a, dash, b = span.partition("-")
+        if not dash:
+            raise argparse.ArgumentTypeError(f"expected @start-end, got {span!r}")
+        start, end = float(a), float(b)
+    return Item(Path(path), title.strip(), subtitle.strip(), start, end)
+
+
+@dataclass(frozen=True, slots=True)
+class Slide:
+    """An image shown for `seconds` (at least as long as its narration), with narration spoken over it."""
+
+    path: Path
+    seconds: float
+    narration: str = ""
+
+
+def parse_slide(text: str) -> Slide:
+    """ "intro_1.png=5=DrivePilot is ..." -> Slide."""
+    path, sep, rest = text.partition("=")
+    seconds, _, narration = rest.partition("=")
+    if not sep or not seconds:
+        raise argparse.ArgumentTypeError(f"expected <image>=<seconds>[=<narration>], got {text!r}")
+    return Slide(Path(path), float(seconds), narration.strip())
 
 
 def title_card(width: int, height: int, title: str, subtitle: str = "", brand: str = "DrivePilot") -> np.ndarray:
@@ -168,6 +196,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--intro", default="DrivePilot|A voice co-pilot that watches the road")
     parser.add_argument("--outro", default="DrivePilot|Banana Hacks 2026")
     parser.add_argument("--card-s", type=float, default=CARD_S)
+    parser.add_argument("--no-cards", action="store_true", help="No title card before each video (titles drawn in).")
+    parser.add_argument(
+        "--slide",
+        action="append",
+        type=parse_slide,
+        default=[],
+        metavar="IMAGE=SECONDS[=NARRATION]",
+        help="An image slide before the videos (after --intro), narrated in DrivePilot's voice (Piper).",
+    )
     parser.add_argument("--crf", type=int, default=18)
     args = parser.parse_args(argv)
 
@@ -190,19 +227,55 @@ def main(argv: list[str] | None = None) -> int:
         for _ in range(round(args.card_s / step)):
             writer.write(image, np.zeros(0, np.float32))
 
+    def slide(item: Slide, voice: Any) -> None:
+        import cv2
+
+        picture = cv2.imread(str(item.path))
+        if picture is None:
+            raise SystemExit(f"can't read slide {item.path}")
+        image = fit(picture, width, height)
+        speech = np.zeros(0, np.float32)
+        if item.narration and voice is not None:
+            from voice.audio import resample
+
+            spoken = resample(voice.synthesize(item.narration).astype(np.float32), voice.rate, AUDIO_RATE)
+            speech = np.concatenate((np.zeros(round(0.4 * AUDIO_RATE), np.float32), spoken))
+        seconds = max(item.seconds, len(speech) / AUDIO_RATE + 0.6)
+        used = 0
+        for _ in range(round(seconds / step)):
+            used += writer.write(image, speech[used:])
+
     try:
-        title, _, subtitle = args.intro.partition("|")
-        card(title, subtitle, brand="")
+        if args.intro:
+            title, _, subtitle = args.intro.partition("|")
+            card(title, subtitle, brand="")
+        voice = None
+        if any(s.narration for s in args.slide):
+            from core.config import load_config
+            from voice.tts import Tts
+
+            cfg = load_config(REPO_ROOT / "config.yaml")
+            voice = Tts(cfg.voice.tts, cfg.root)
+        for item_slide in args.slide:
+            slide(item_slide, voice)
         for item in args.items:
-            card(item.title, item.subtitle)
+            if not args.no_cards:
+                card(item.title, item.subtitle)
             audio = read_audio(item.path)
-            frames = used = 0
-            for image in read_frames(item.path):
+            frames = 0
+            used = round(item.start * AUDIO_RATE)
+            for k, image in enumerate(read_frames(item.path)):
+                t = k * step
+                if t < item.start - step / 2:
+                    continue
+                if item.end is not None and t >= item.end - step / 2:
+                    break
                 used += writer.write(fit(image, width, height), audio[used:])
                 frames += 1
-            print(f"{item.path.name}: {frames} frames, {len(audio) / AUDIO_RATE:.1f} s of audio", flush=True)
-        title, _, subtitle = args.outro.partition("|")
-        card(title, subtitle, brand="")
+            print(f"{item.path.name}: {frames} frames ({frames * step:.1f} s)", flush=True)
+        if args.outro:
+            title, _, subtitle = args.outro.partition("|")
+            card(title, subtitle, brand="")
     finally:
         writer.close()
     print(f"-> {args.out}: {writer.frames} frames ({writer.frames * step:.1f} s)", flush=True)

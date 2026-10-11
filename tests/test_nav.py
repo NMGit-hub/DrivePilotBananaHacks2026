@@ -415,3 +415,24 @@ def test_fixture_client_from_files(tmp_path: Path) -> None:
     place = client.geocode("redmond town center")
     assert len(client.route(START, place).steps) == 6
     assert math.isclose(place.location[0], PLACE.location[0])
+
+
+def test_a_lane_answer_is_not_repeated_by_the_next_reminder() -> None:
+    """Showcase render: "Am I in the right lane?" -> "use the right lane", then 2 s later the reminder said the same
+    and cut into the answer. After a lane answer, the next reminder for that maneuver is skipped (a far one isn't)."""
+    nav, gps, said = handler()
+    nav.set_destination("Redmond Town Center")
+    assert nav.route is not None
+    step = next(s for s in nav.route.steps if s.needs_lanes and "520" in f"{s.ref} {s.name}")
+    drive(nav, gps, fixes(until_m=step.start_m - 600.0))
+    assert nav.answer(ask("Which lane for 520 east?"), empty_snapshot()).startswith("For SR 520 in")
+    before = len(said)
+    drive(nav, gps, fixes(start_m=step.start_m - 600.0, until_m=step.start_m - 50.0))
+    assert not any("for SR 520" in text and text.startswith("In a quarter mile") for _, _, text in said[before:])
+
+    far, gps2, said2 = handler()  # asked a mile and a half out: the quarter-mile reminder still comes
+    far.set_destination("Redmond Town Center")
+    drive(far, gps2, fixes(until_m=step.start_m - 2400.0))
+    far.answer(ask("Which lane for 520 east?"), empty_snapshot())
+    drive(far, gps2, fixes(start_m=step.start_m - 2400.0, until_m=step.start_m - 50.0))
+    assert any(text == "In a quarter mile, use the two right lanes for SR 520." for _, _, text in said2)

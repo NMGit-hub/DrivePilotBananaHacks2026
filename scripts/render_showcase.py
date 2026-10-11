@@ -91,7 +91,7 @@ from ui.timeline import (  # noqa: E402
     schedule,
     visible_captions,
 )
-from voice.router import RouteKind  # noqa: E402
+from voice.router import RouteKind, parse_yes_no  # noqa: E402
 
 log = get_logger("scripts.render_showcase")
 
@@ -299,6 +299,7 @@ def run_pass(
     mask_from: int | None,
     destination: str | None = None,
     keep_share: float | None = None,
+    destination_at: float = -math.inf,
 ) -> Recording:
     """Play the clip in lock-step from `t_from` (warm-up: the tracker and the light's state get their history) and
     record the page's overlay and HUD for every frame from `t_render` to `t_end`, the answers and what was said.
@@ -494,7 +495,9 @@ def run_pass(
             )
             if text is not None and switches.enabled("speeding"):
                 say_alert(text, Priority.INFO, t, "speeding")
-            if pending_destination[0] and nav is not None and fix is not None:  # (app.py --destination)
+            if (
+                pending_destination[0] and nav is not None and fix is not None and t >= destination_at
+            ):  # (--destination)
                 query, pending_destination[0] = pending_destination[0], None
                 said = nav.set_destination(query)
                 log.info("destination set", query=query, answer=said)
@@ -602,6 +605,8 @@ class Voices:
         from voice.audio import resample
 
         rate = self.driver.rate
+        if len(text.split()) <= 3 and parse_yes_no(text) is not None:  # a reply to an offer: no wake word (the app
+            return self._to_out(self.driver.synthesize(text), rate), 0.0  # listens for it a few seconds)
         wake = self.driver.synthesize("Hey Drive Pilot.")
         pause = np.zeros(round(0.12 * rate), np.float32)
         blip = self.blip if rate == self.tts.rate else resample(self.blip, self.tts.rate, rate)
@@ -869,6 +874,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--destination", default=None, help="Navigate there from the first GPS fix (silently: the route is on already)."
     )
+    parser.add_argument(
+        "--destination-at", type=float, default=-math.inf, metavar="T", help="Set --destination at this video time."
+    )
     parser.add_argument("--no-brand", action="store_true", help="No 'DrivePilot' tag top left.")
     parser.add_argument("--title", default=None, help="A label under the tag for the first 5 s (e.g. 'Night · I-90').")
     parser.add_argument(
@@ -924,7 +932,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     keep_share = bar_top / info.height if crop > 0 else None
     rec = run_pass(
-        cfg, clip, models, sorted(args.ask), t_from, t_start, t_end, gps, mask_from, args.destination, keep_share
+        cfg,
+        clip,
+        models,
+        sorted(args.ask),
+        t_from,
+        t_start,
+        t_end,
+        gps,
+        mask_from,
+        args.destination,
+        keep_share,
+        args.destination_at,
     )
     print(
         f"pass 1: {rec.processed} frames in {rec.seconds:.1f} s ({rec.processed / max(rec.seconds, 1e-6):.1f} fps), "
