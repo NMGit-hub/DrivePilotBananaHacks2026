@@ -166,6 +166,7 @@ lanes:                      # V2 YOLOPv2 lanes (perception/lanes.py) + lane trac
   weights: models/lanes/yolopv2.pt  # official TorchScript release (github.com/CAIC-AD/YOLOPv2, MIT)
   half: true
   cuda_graph: true          # replay the forward pass as a CUDA graph (eager TorchScript is launch-bound here)
+  max_view_deg: 70.0        # a wider camera (the phone's 114°) gives the lane model its center, cropped to 70°
   camera_height_m: 1.3      # only a prior: our own lane's measured width sets the metric scale
   camera_offset_m: 0.0      # camera right of the car's center line (left: negative)
   horizon_prior: 0.5        # horizon row / frame height until measured from the lines' vanishing point

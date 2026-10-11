@@ -46,7 +46,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   On the V2 page: our lane (lines with a dark halo: they sit on the road's own paint), the other lines dashed
   gray, the drift line red and that screen edge pulsing (checked in the browser). Lane detection's count/lane goes
   to the vision prompt and to lane guidance (`answers/lanes.py: CameraLaneReader`). Drift warnings are SAFETY
-  (spoken in quiet mode, pre-rendered).
+  (spoken in quiet mode, pre-rendered). **Full app with lanes on** (`scripts/bench_app.py --silent`,
+  `runs/20261010-212804_bench_app`, GPU free): every target met: local answers 0.55 s median / 0.61 s p90, model
+  answers 1.33 / 1.37 s, alert 8 ms, perception 29.5 fps, lane detection 10.6 fps (V2 bar >= 10).
 - **Pedestrian warnings use YOLOPv2's drivable area** (V2-M5): someone at least 0.9 m from the path's middle counts
   as in our path only if the ground beside their feet is road (a sidewalk isn't; stepping off it still warns as
   "entering"; masks <= 0.3 s old). `scripts/eval_pedestrians.py --road` on cached masks: **crawl clips 12 -> 9
@@ -513,6 +515,9 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
   and absorbs part of a long drift in a 40 s clip (the late ones); a noisy measured position can suppress a real
   drift as a "lane change starting" (the missed ones: the safe side). Tuned on 60° BDD dashcams only; recheck on the
   phone's 114° view (PLAN: undistort or center crop) and our own drives. Drift warnings need GPS speed >= 25 mph.
+- **Lanes on the phone's 114° ultrawide are untested:** the lane model gets the frame's center cropped to 70°
+  (`lanes.max_view_deg`, V2_BUILD_PLAN's center-crop fallback; no checkerboard calibration): checked only
+  geometrically (tests) because no phone footage exists yet. Record a drive and re-run `scripts/eval_lanes.py`.
 - **Lane count from lane detection is weaker than our lane's index** (17/24 vs 55/56 on labeled frames): it misses
   lanes on the right; lane guidance only uses it when it matches the route's count.
 - **"Find me a parking spot" finds few spots on real footage: 1 of 30 labeled clear spots on BDD100K lots** (0.7

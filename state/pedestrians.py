@@ -133,6 +133,7 @@ class DrivableArea:
     t: float  # media time of the frame it was computed on
     mask: np.ndarray
     segment: int = 0  # the video segment of that frame (a seek or a loop starts a new one)
+    view: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)  # the part of the frame the mask covers
 
     def road_beside(self, box: Box, width: int, height: int) -> float | None:
         """The share of road beside the box's feet: the more of two strips left and right of the box (from half a
@@ -144,9 +145,12 @@ class DrivableArea:
         side; someone on a sidewalk has none within reach unless they stand right at the curb (then: on the road,
         the safe answer)."""
         rows, cols = self.mask.shape
+        vx0, vy0, vx1, vy1 = self.view  # (a wide camera's lane model sees only the frame's center)
+        ox, oy = vx0 * width, vy0 * height
+        sx, sy = cols / ((vx1 - vx0) * width), rows / ((vy1 - vy0) * height)
         x1, y1, x2, y2 = box
+        x1, x2, y1, y2 = x1 - ox, x2 - ox, y1 - oy, y2 - oy
         w, h = x2 - x1, y2 - y1
-        sy, sx = rows / height, cols / width
         r0 = max(0, math.floor((y2 - 0.12 * h) * sy))
         r1 = min(rows, math.ceil(y2 * sy))
         if r1 <= r0:

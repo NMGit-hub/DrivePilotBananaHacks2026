@@ -56,7 +56,7 @@ from nav.phrasing import in_distance, maneuver_phrase
 from perception.detector import Detector, Track
 from perception.ego_motion import EgoMotionEstimator
 from perception.gpu_monitor import GpuMonitor
-from perception.lanes import LaneMasks, LaneWorker
+from perception.lanes import LaneMasks, LaneWorker, lane_view
 from perception.pipeline import AsyncListener, PerceptionResult, PerceptionWorker
 from perception.sign_worker import SignWorker
 from state.lanes import DRIFT_TEXTS, LanesSnapshot, LaneTracker
@@ -223,7 +223,8 @@ class DrivePilotApp:
         self._fps_mark: tuple[float, int] = (time.perf_counter(), 0)
         self._started_at: float | None = None
 
-        self.lanes = LaneTracker(cfg.lanes, cfg.effective_hfov_deg)  # V2-M5: fed by the lanes thread
+        # V2-M5: fed by the lanes thread; a wide camera's lane model sees only its center (the crop's view)
+        self.lanes = LaneTracker(cfg.lanes, lane_view(cfg.effective_hfov_deg, cfg.lanes.max_view_deg)[1])
         self._lane_model = lane_model  # builds YOLOPv2 on the lanes thread (None: lanes off)
         self.lane_worker: LaneWorker | None = None
         self._drivable: DrivableArea | None = None  # the lane model's latest drivable area (pedestrian warnings)
@@ -719,7 +720,7 @@ class DrivePilotApp:
         pedestrian check's drivable area."""
         if frame.segment != self._segment:
             return  # a frame from before a seek / loop restart, finished after it: its lanes and road are stale
-        self._drivable = DrivableArea(masks.t, masks.drivable, frame.segment)
+        self._drivable = DrivableArea(masks.t, masks.drivable, frame.segment, masks.view)
         for event in self.lanes.update(frame.t, masks, self._gps_speed_at(frame.t)):
             if self.recorder is not None:
                 self.recorder.event(
@@ -1018,7 +1019,7 @@ def lane_model_factory(cfg: AppConfig, status: dict[str, str]) -> LaneModelFacto
     def factory() -> Callable[[Frame], LaneMasks]:
         from perception.lanes import LaneModel
 
-        return LaneModel(cfg.lanes, cfg.root)
+        return LaneModel(cfg.lanes, cfg.root, hfov_deg=cfg.effective_hfov_deg)
 
     return factory
 

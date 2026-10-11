@@ -18,12 +18,19 @@ waiting on launches), so the forward pass is captured once in a CUDA graph and r
 GPU, identical outputs). The model runs on its own CUDA stream so it overlaps with the perception thread's
 detector. Like the detector, it refuses the CPU: the weights must end up on CUDA in the configured precision.
 
+Wide cameras. YOLOPv2 is trained on BDD100K (~60° dashcams) and the lane tracker's flat-road geometry assumes a
+pinhole view; the phone's 114° ultrawide shows lanes small and bent near the edges. So a camera wider than
+`lanes.max_view_deg` gives the lane model only its center, cropped to that field of view (V2_BUILD_PLAN M5's
+"center-crop fallback"; no checkerboard calibration has been done). `LaneMasks.view` says where the crop sits in the
+frame; the tracker maps everything it reports back to frame coordinates.
+
 `LaneWorker` runs the model on its own thread on the newest frame only, at most `lanes.fps` times a second
 (perception/frame_worker.py); the model is built on that thread.
 """
 
 from __future__ import annotations
 
+import math
 import time
 import warnings
 from collections.abc import Callable
@@ -67,11 +74,31 @@ class LaneMasks:
     lines: np.ndarray  # lane-line pixels
     drivable: np.ndarray  # drivable-area pixels
     timings_ms: dict[str, float]
+    view: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)  # the crop the masks cover (frame shares)
 
     @property
     def shape(self) -> tuple[int, int]:
         """Mask (height, width)."""
         return int(self.lines.shape[0]), int(self.lines.shape[1])
+
+
+def lane_view(hfov_deg: float, max_view_deg: float | None) -> tuple[tuple[float, float, float, float], float]:
+    """The centered crop (x0, y0, x1, y1 as frame shares, same aspect ratio) the lane model sees, and its
+    horizontal field of view: the whole frame unless the camera is wider than `max_view_deg` (pinhole model)."""
+    if max_view_deg is None or hfov_deg <= max_view_deg:
+        return (0.0, 0.0, 1.0, 1.0), hfov_deg
+    share = math.tan(math.radians(max_view_deg) / 2.0) / math.tan(math.radians(hfov_deg) / 2.0)
+    lo, hi = 0.5 - share / 2.0, 0.5 + share / 2.0
+    return (lo, lo, hi, hi), max_view_deg
+
+
+def crop_view(image: np.ndarray, view: tuple[float, float, float, float]) -> np.ndarray:
+    """The part of the image inside `view` (frame shares)."""
+    if view == (0.0, 0.0, 1.0, 1.0):
+        return image
+    h, w = image.shape[:2]
+    x0, y0, x1, y1 = view
+    return image[round(y0 * h) : round(y1 * h), round(x0 * w) : round(x1 * w)]
 
 
 def preprocess(image: np.ndarray) -> np.ndarray:
@@ -98,13 +125,15 @@ class LaneModel:
     Not thread-safe: build and call it on one thread (the lanes thread).
     """
 
-    def __init__(self, cfg: LanesConfig, root: Path) -> None:
+    def __init__(self, cfg: LanesConfig, root: Path, hfov_deg: float | None = None) -> None:
+        """`hfov_deg`: the camera's field of view (a wide one is cropped to `cfg.max_view_deg`; None: no crop)."""
         if not torch.cuda.is_available():
             raise GpuRequiredError("CUDA is not available; the lane model runs on the NVIDIA GPU only")
         self.cfg = cfg
         weights = cfg.weights if cfg.weights.is_absolute() else root / cfg.weights
         if not weights.is_file():
             raise FileNotFoundError(f"YOLOPv2 weights not found: {weights} (github.com/CAIC-AD/YOLOPv2 releases)")
+        self.view = lane_view(hfov_deg, cfg.max_view_deg)[0] if hfov_deg is not None else (0.0, 0.0, 1.0, 1.0)
         self.device = torch.device(f"cuda:{cfg.device}")
         self.dtype = torch.float16 if cfg.half else torch.float32
         started = time.perf_counter()
@@ -182,9 +211,11 @@ class LaneModel:
         return lines, drivable, {"preprocess": (t1 - t0) * 1000, "gpu": (t2 - t1) * 1000, "total": (t2 - t0) * 1000}
 
     def __call__(self, frame: Frame) -> LaneMasks:
-        """Lane masks for one frame."""
-        lines, drivable, timings = self.infer(frame.image)
-        return LaneMasks(frame.t, frame.index, (frame.width, frame.height), lines, drivable, timings)
+        """Lane masks for one frame (of its center crop, for a wide camera: `view`)."""
+        image = crop_view(frame.image, self.view)
+        lines, drivable, timings = self.infer(image)
+        size = (int(image.shape[1]), int(image.shape[0]))
+        return LaneMasks(frame.t, frame.index, size, lines, drivable, timings, self.view)
 
 
 class LaneWorker(FrameWorker[LaneMasks]):

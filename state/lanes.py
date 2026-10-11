@@ -44,7 +44,7 @@ from __future__ import annotations
 import math
 import threading
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
 import numpy as np
@@ -93,6 +93,8 @@ class MasksLike(Protocol):
     def drivable(self) -> np.ndarray: ...
     @property
     def frame_size(self) -> tuple[int, int]: ...
+    @property
+    def view(self) -> tuple[float, float, float, float]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,6 +356,23 @@ def vanishing_row(lines: np.ndarray, size: tuple[int, int], lo: float, hi: float
     if score[best] < _VP_MIN_SCORE:
         return None
     return float(candidates[best]) / h
+
+
+def _in_frame(snap: LanesSnapshot, view: tuple[float, float, float, float]) -> LanesSnapshot:
+    """The snapshot with its points moved from the masks' crop (`view`, frame shares) to the whole frame."""
+    if view == (0.0, 0.0, 1.0, 1.0):
+        return snap
+    x0, y0, x1, y1 = view
+
+    def move(points: tuple[Point, ...]) -> tuple[Point, ...]:
+        return tuple((round(x0 + x * (x1 - x0), 4), round(y0 + y * (y1 - y0), 4)) for x, y in points)
+
+    return replace(
+        snap,
+        lane_polygon=move(snap.lane_polygon),
+        lines=tuple(replace(line, points=move(line.points)) for line in snap.lines),
+        drift_line=None if snap.drift_line is None else move(snap.drift_line),
+    )
 
 
 def _grid(center: float, half: float, step: float) -> np.ndarray:
@@ -752,7 +771,7 @@ class LaneTracker:
         self._votes.append((t, m.lanes_left, m.lanes_right))
         while self._votes and t - self._votes[0][0] > cfg.vote_window_s:
             self._votes.popleft()
-        snapshot = self._make_snapshot(t, m)
+        snapshot = _in_frame(self._make_snapshot(t, m), masks.view)
         with self._lock:
             if self._reset_pending:
                 return []  # a reset came in meanwhile: this frame belongs to before it

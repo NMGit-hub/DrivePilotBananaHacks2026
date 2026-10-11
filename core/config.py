@@ -638,6 +638,13 @@ class LanesConfig(_Strict):
     device: int = Field(0, ge=0, description="CUDA device index; the lane model refuses the CPU.")
     half: bool = Field(True, description="FP16 inference.")
     cuda_graph: bool = Field(True, description="Replay the forward pass as a CUDA graph (Windows launch overhead).")
+    max_view_deg: float | None = Field(
+        70.0,
+        gt=0.0,
+        lt=180.0,
+        description="A wider camera (the phone's 114° ultrawide) gives the lane model its center cropped to this field "
+        "of view (YOLOPv2 and the tracker are tuned on ~60° dashcams); null: the whole frame.",
+    )
     # Geometry (a flat road seen by a pinhole camera; lateral positions need only the height and the horizon).
     camera_height_m: float = Field(1.3, gt=0.0, description="Camera above the road (only a prior: see lane_width_m).")
     camera_offset_m: float = Field(0.0, description="Camera right of the car's center line (left: negative).")

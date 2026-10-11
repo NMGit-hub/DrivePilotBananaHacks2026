@@ -97,6 +97,7 @@ class Masks:
     lines: np.ndarray
     drivable: np.ndarray
     frame_size: tuple[int, int] = (W, H)
+    view: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
 
 
 def three_lanes(offset: float = 0.0, **kw: object) -> Road:
@@ -750,3 +751,50 @@ def test_a_lane_narrowing_beside_us_is_not_a_drift() -> None:
         road.phase = FAST * t
         alerts += tracker.update(t, Masks(*render(road)), FAST)
     assert alerts == []
+
+
+# --------------------------------------------------------------------------- wide cameras (the phone's 114°)
+
+
+def test_a_wide_camera_gives_the_lane_model_its_center() -> None:
+    from perception.lanes import crop_view, lane_view
+
+    assert lane_view(60.0, 70.0) == ((0.0, 0.0, 1.0, 1.0), 60.0)  # BDD100K: the whole frame
+    assert lane_view(114.0, None) == ((0.0, 0.0, 1.0, 1.0), 114.0)
+    view, hfov = lane_view(114.0, 70.0)
+    share = math.tan(math.radians(35.0)) / math.tan(math.radians(57.0))
+    assert hfov == 70.0 and view[0] == pytest.approx(0.5 - share / 2) and view[2] == pytest.approx(0.5 + share / 2)
+    assert view[1] == view[0] and view[3] == view[2]  # same aspect ratio
+    image = np.zeros((1080, 1920, 3), np.uint8)
+    rows, cols = round(1080 * view[3]) - round(1080 * view[1]), round(1920 * view[2]) - round(1920 * view[0])
+    assert crop_view(image, view).shape == (rows, cols, 3)
+
+
+def test_lanes_seen_in_a_crop_are_reported_in_frame_coordinates() -> None:
+    """The tracker measures in the crop (its own field of view) and reports points in the whole frame."""
+    view = (0.25, 0.25, 0.75, 0.75)
+    whole, cropped = LaneTracker(cfg_lanes(), HFOV), LaneTracker(cfg_lanes(), HFOV)  # (the crop's own view)
+    road = three_lanes(offset=0.3)
+    for i in range(int(2 * FPS)):
+        road.phase = FAST * i / FPS
+        masks = render(road)
+        whole.update(i / FPS, Masks(*masks), FAST)
+        cropped.update(i / FPS, Masks(*masks, view=view), FAST)
+    a, b = whole.snapshot(), cropped.snapshot()
+    assert b.valid and b.offset_m == a.offset_m == pytest.approx(0.3, abs=0.12) and b.lane_index == 2
+    assert len(b.lane_polygon) == len(a.lane_polygon)
+    for (xa, ya), (xb, yb) in zip(a.lane_polygon, b.lane_polygon, strict=True):
+        assert xb == pytest.approx(0.25 + 0.5 * xa, abs=2e-4) and yb == pytest.approx(0.25 + 0.5 * ya, abs=2e-4)
+
+
+def test_the_drivable_area_of_a_crop_maps_to_frame_boxes() -> None:
+    from state.pedestrians import DrivableArea
+
+    _, drivable = render(three_lanes())  # road |x| <= 5.9 m in the crop's own view
+    view = (0.25, 0.25, 0.75, 0.75)
+    area = DrivableArea(0.0, drivable, view=view)
+    # A person in the middle of the crop's road: in frame pixels, inside the crop region.
+    box = (0.25 * W + 0.47 * W / 2, 0.25 * H + 0.55 * H / 2, 0.25 * W + 0.53 * W / 2, 0.25 * H + 0.75 * H / 2)
+    share = area.road_beside(box, W, H)
+    assert share is not None and share > 0.8
+    assert area.road_beside((10.0, 20.0, 40.0, 100.0), W, H) is None  # outside the crop: unknown

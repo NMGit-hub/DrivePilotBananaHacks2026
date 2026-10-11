@@ -57,7 +57,7 @@ from core.runlog import RunRecorder  # noqa: E402
 from core.types import Frame  # noqa: E402
 from perception.detector import Detector  # noqa: E402
 from perception.ego_motion import EgoMotionEstimator  # noqa: E402
-from perception.lanes import LaneMasks  # noqa: E402
+from perception.lanes import LaneMasks, lane_view  # noqa: E402
 from perception.pipeline import PerceptionResult, PerceptionWorker  # noqa: E402
 from state.lanes import LaneTracker  # noqa: E402
 from state.memory import SceneMemory  # noqa: E402
@@ -232,7 +232,7 @@ def run_clip(
     world_holder: list[WorldState] = []
     memory = SceneMemory(cfg.memory)  # as in the app: "what was that sign?" and numbered objects
     latest_tracks: list[Any] = [()]
-    lanes = LaneTracker(cfg.lanes, cfg.effective_hfov_deg)
+    lanes = LaneTracker(cfg.lanes, lane_view(cfg.effective_hfov_deg, cfg.lanes.max_view_deg)[1])
     drivable: list[DrivableArea | None] = [None]
     lane_t = [-1e9]
     tags: list[str] = []
@@ -275,7 +275,7 @@ def run_clip(
             lane_t[0] = frame.t
             masks = lane_model(frame)
             lanes.update(frame.t, masks, None)
-            drivable[0] = DrivableArea(masks.t, masks.drivable)
+            drivable[0] = DrivableArea(masks.t, masks.drivable, frame.segment, masks.view)
         world.on_perception(result)
         latest_tracks[0] = tuple(result.tracks)
         memory.add(result.frame, result.tracks)
@@ -519,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         if cfg.lanes.enabled and cfg.resolve_path(cfg.lanes.weights).is_file() and not args.no_lanes:
             from perception.lanes import LaneModel
 
-            lane_model = LaneModel(cfg.lanes, cfg.root)
+            lane_model = LaneModel(cfg.lanes, cfg.root, hfov_deg=cfg.effective_hfov_deg)
         clips: dict[str, list[Row]] = {}
         for row in rows:
             clips.setdefault(row.clip, []).append(row)
