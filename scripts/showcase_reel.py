@@ -199,6 +199,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--card-s", type=float, default=CARD_S)
     parser.add_argument("--no-cards", action="store_true", help="No title card before each video (titles drawn in).")
     parser.add_argument(
+        "--motion",
+        action="append",
+        default=[],
+        metavar="NARRATION",
+        help="Animated intro (ui/motion.py): three parts (title, how it works, what it does), each with its narration "
+        "(give it three times); replaces --intro and --slide.",
+    )
+    parser.add_argument("--shot", action="append", default=[], metavar="PNG=TITLE|SUBTITLE", help="Frames for part 3.")
+    parser.add_argument("--stinger", type=float, default=0.0, help="Animated transition between videos (seconds).")
+    parser.add_argument(
         "--slide",
         action="append",
         type=parse_slide,
@@ -246,42 +256,102 @@ def main(argv: list[str] | None = None) -> int:
         for _ in range(round(seconds / step)):
             used += writer.write(image, speech[used:])
 
+    def frames_of(item: Item) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+        """(frame at the reel's size, its slot's audio) for an item's segments, in order."""
+        audio = read_audio(item.path)
+        pending = list(item.segments)
+        seg_start, seg_end = pending.pop(0)
+        used = round(seg_start * AUDIO_RATE)
+        for k, image in enumerate(read_frames(item.path)):
+            t = k * step
+            if seg_end is not None and t >= seg_end - step / 2:
+                if not pending:
+                    return
+                seg_start, seg_end = pending.pop(0)
+                used = round(seg_start * AUDIO_RATE)
+            if t < seg_start - step / 2:
+                continue
+            want = round((writer.frames + 1) * AUDIO_RATE / writer.rate) - writer.samples  # (the writer's next slot)
+            yield fit(image, width, height), audio[used : used + want]
+            used += want
+
+    def motion_intro(voice: Any) -> None:
+        from ui import motion
+        from voice.audio import resample
+
+        shots = []
+        for spec in args.shot:
+            path, _, caption = spec.partition("=")
+            title, _, subtitle = caption.partition("|")
+            import cv2
+
+            picture = cv2.imread(path)
+            if picture is None:
+                raise SystemExit(f"can't read shot {path}")
+            shots.append(motion.Shot(picture, title, subtitle))
+        parts = (
+            (motion.title_part, 3.6),
+            (motion.how_part, 7.5),
+            (lambda w, h, t, d: motion.shots_part(w, h, t, d, shots), 3.2),
+        )
+        for (draw, minimum), narration in zip(parts, args.motion, strict=False):
+            speech = np.zeros(0, np.float32)
+            if narration:
+                spoken = resample(voice.synthesize(narration).astype(np.float32), voice.rate, AUDIO_RATE)
+                speech = np.concatenate((np.zeros(round(0.35 * AUDIO_RATE), np.float32), spoken))
+            duration = max(minimum, len(speech) / AUDIO_RATE + 0.5)
+            used = 0
+            for k in range(round(duration / step)):
+                used += writer.write(draw(width, height, k * step, duration), speech[used:])
+
     try:
-        if args.intro:
+        if args.intro and not args.motion:
             title, _, subtitle = args.intro.partition("|")
             card(title, subtitle, brand="")
         voice = None
-        if any(s.narration for s in args.slide):
+        if any(s.narration for s in args.slide) or any(args.motion):
             from core.config import load_config
             from voice.tts import Tts
 
             cfg = load_config(REPO_ROOT / "config.yaml")
             voice = Tts(cfg.voice.tts, cfg.root)
-        for item_slide in args.slide:
-            slide(item_slide, voice)
-        for item in args.items:
+        if args.motion:
+            motion_intro(voice)
+        else:
+            for item_slide in args.slide:
+                slide(item_slide, voice)
+        last: np.ndarray | None = None
+        for n, item in enumerate(args.items, 1):
             if not args.no_cards:
                 card(item.title, item.subtitle)
-            audio = read_audio(item.path)
             frames = 0
-            pending = list(item.segments)
-            seg_start, seg_end = pending.pop(0)
-            used = round(seg_start * AUDIO_RATE)
-            for k, image in enumerate(read_frames(item.path)):
-                t = k * step
-                if seg_end is not None and t >= seg_end - step / 2:
-                    if not pending:
-                        break
-                    seg_start, seg_end = pending.pop(0)
-                    used = round(seg_start * AUDIO_RATE)
-                if t < seg_start - step / 2:
-                    continue
-                used += writer.write(fit(image, width, height), audio[used:])
+            stream = frames_of(item)
+            first = next(stream, None)
+            if first is None:
+                continue
+            if args.stinger > 0 and last is not None:
+                from ui.motion import stinger
+
+                for k in range(round(args.stinger / step)):
+                    writer.write(
+                        stinger(last, first[0], k * step, args.stinger, f"{n:02d}", item.title), np.zeros(0, np.float32)
+                    )
+            for image, chunk in (first, *stream):
+                writer.write(image, chunk)
+                last = image
                 frames += 1
             print(f"{item.path.name}: {frames} frames ({frames * step:.1f} s)", flush=True)
         if args.outro:
             title, _, subtitle = args.outro.partition("|")
-            card(title, subtitle, brand="")
+            if args.motion:
+                from ui.motion import end_part
+
+                for k in range(round(args.card_s / step)):
+                    writer.write(
+                        end_part(width, height, k * step, args.card_s, subtitle or title), np.zeros(0, np.float32)
+                    )
+            else:
+                card(title, subtitle, brand="")
     finally:
         writer.close()
     print(f"-> {args.out}: {writer.frames} frames ({writer.frames * step:.1f} s)", flush=True)

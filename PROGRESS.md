@@ -4,6 +4,16 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### Showcase motion graphics (2026-10-11 ~18:45, the user's request)
+`runs/showcase/v2/DrivePilot_showcase_v2_motion.mp4` (2:28; `build_reel_motion.sh`), the same scenes as the plain
+reel with motion graphics drawn in code (`ui/motion.py`, Pillow at 2x, the page's colors and fonts; tests in
+tests/test_motion.py): an animated intro narrated as before (DrivePilot's letters rising in over a road whose lane
+dashes stream toward us, the tagline, a voice waveform; "How it works": the phone / laptop / you cards sliding up one
+after another, arrows drawing themselves with data dots flowing along them, the models popping into the laptop card,
+"Light's green." popping out with its waveform; "What it does": three frames of the scenes flying in, slowly zooming),
+a diagonal gradient stinger between scenes carrying the next scene's number and name, and an animated end card.
+`scripts/showcase_reel.py --motion NARRATION (x3) --shot PNG=TITLE|SUBTITLE --stinger S`.
+
 ### Showcase v2, second pass (2026-10-11 ~18:00): the wrong-lane warning and a pedestrian warning
 The user missed the two biggest use cases (no pedestrian warning at the roundabout, only a cut; no "wrong lane" at
 the exit). Two app changes, then one scene ("Exit and roundabout") in place of the exit-sign and roundabout scenes;
