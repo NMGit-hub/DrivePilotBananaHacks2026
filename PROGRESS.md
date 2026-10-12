@@ -4,6 +4,35 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### Showcase v2 (2026-10-11 evening, the user's notes on the first reel)
+`runs/showcase/v2/DrivePilot_showcase_v2.mp4` (2:29.9; `build_reel.sh` there rebuilds it from the scenes, the
+`render_v2*.sh` scripts re-render them): 3 narrated intro slides (`scripts/showcase_intro.py`: what it is, phone +
+laptop, here the dashcam; what it does with frames of the scenes), then 7 scenes, titles drawn in, slow stretches cut
+(`scripts/showcase_reel.py video@a-b,c-d`):
+1. red light + "tell me when it's green" (kept);
+2. **lane guidance from navigation**: a route set before the scene (SR 520 E -> the NE 40th St exit), "Am I in the
+   right lane?" -> "use the right lane. You're in lane 2 from the left, so move one lane right", the target lane in
+   green, the car moves over, "In 500 feet, take the exit";
+3. rain (kept);
+4. **exit signs tied to navigation**: "Exit 10B, Factoria Blvd, ½ mile" read off the gantry, then the route's "In
+   half a mile, take exit 10B toward Factoria Boulevard" with the lane arrows;
+5. **roundabout** (two clips joined, the route set on SR 520 before the exit: on the 92nd Ave NE lid every GPS fix
+   snaps onto the freeway below): "At the roundabout, take the 4th exit onto 92nd Avenue Northeast", the exit diagram,
+   a person crossing outlined in amber (shown, not spoken: we're stopped, by design), "Which exit is mine?" -> "At the
+   roundabout now, take the 4th exit...", "Not this one." as we pass an exit;
+6. **parking**: the app's own offer ("Looks like a parking lot. Want help finding a spot?"), a plain "yes" (no wake
+   word, as the app takes it), then "Can I park here?" at the empty stall -> "an ordinary parking space with no
+   wheelchair symbol, blue paint, or posted signs... It appears fine, but check any signs posted nearby";
+7. **night, the car ahead keeps braking** (the user's request: W Lake Sammamish Pkwy, 2026-10-10 23:02, found by an
+   agent, 3.2 km from home): "Why does the car ahead keep braking?" during its hardest stop -> "I can see a car ahead
+   with its brake lights lit... There's no clear hazard visible on the road ahead."
+No snow (none in the footage). Every scene is a real run; for several, more than one take was rendered and the best
+used (answers vary). Fixed on the way: a lane answer is no longer repeated (and cut into) by the next lane reminder for
+the same maneuver; diagonal / U-turn lane arrows were empty boxes in the banner (Segoe UI has no such glyphs: Segoe UI
+Symbol now). Not fixed: the parking-spot finder (0/8 on this camera; an agent traced it to several stages at once:
+turn gating, rows that rarely form here, empty rows, the hood cutting boxes; no single principled fix, reverted); GPS on
+the roundabout lid reroutes after the exit (the scene ends before).
+
 ### The user's own dashcam footage: showcase videos, evals, fixes (2026-10-11 afternoon)
 The user's Mercedes dashcam clips (D:\Dashcam, HANDOFF.md section 2) are the data for the evals and the submission.
 - **Camera:** horizontal FOV **96°** (median of 18 turns, IQR 92-103°; `scripts/dashcam_calibrate.py --turns 20`,

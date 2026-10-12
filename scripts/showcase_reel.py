@@ -38,24 +38,25 @@ class Item:
     path: Path
     title: str
     subtitle: str = ""
-    start: float = 0.0  # seconds into the video to start from...
-    end: float | None = None  # ...and to stop at (None: its end)
+    segments: tuple[tuple[float, float | None], ...] = ((0.0, None),)  # (from, to) seconds of the video (to None:
+    # its end), played in order: a slow stretch can be cut out
 
 
 def parse_item(text: str) -> Item:
-    """ "clip.mp4=Rain|What did that sign say?" -> Item; "clip.mp4@3.5-17=Rain" plays 3.5-17 s of the video."""
+    """ "clip.mp4=Rain|What did that sign say?" -> Item; "clip.mp4@3.5-17=Rain" plays 3.5-17 s of the video,
+    "clip.mp4@3-9,14-20=Rain" those two stretches one after the other."""
     path, sep, label = text.partition("=")
     if not sep:
         raise argparse.ArgumentTypeError(f"expected <video>[@start-end]=<title>[|<subtitle>], got {text!r}")
     title, _, subtitle = label.partition("|")
-    path, at, span = path.partition("@")
-    start, end = 0.0, None
-    if at:
+    path, at, spans = path.partition("@")
+    segments: list[tuple[float, float | None]] = []
+    for span in spans.split(",") if at else []:
         a, dash, b = span.partition("-")
-        if not dash:
-            raise argparse.ArgumentTypeError(f"expected @start-end, got {span!r}")
-        start, end = float(a), float(b)
-    return Item(Path(path), title.strip(), subtitle.strip(), start, end)
+        if not dash or float(b) <= float(a):
+            raise argparse.ArgumentTypeError(f"expected @start-end[,start-end...], got {spans!r}")
+        segments.append((float(a), float(b)))
+    return Item(Path(path), title.strip(), subtitle.strip(), tuple(segments) or ((0.0, None),))
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,13 +264,18 @@ def main(argv: list[str] | None = None) -> int:
                 card(item.title, item.subtitle)
             audio = read_audio(item.path)
             frames = 0
-            used = round(item.start * AUDIO_RATE)
+            pending = list(item.segments)
+            seg_start, seg_end = pending.pop(0)
+            used = round(seg_start * AUDIO_RATE)
             for k, image in enumerate(read_frames(item.path)):
                 t = k * step
-                if t < item.start - step / 2:
+                if seg_end is not None and t >= seg_end - step / 2:
+                    if not pending:
+                        break
+                    seg_start, seg_end = pending.pop(0)
+                    used = round(seg_start * AUDIO_RATE)
+                if t < seg_start - step / 2:
                     continue
-                if item.end is not None and t >= item.end - step / 2:
-                    break
                 used += writer.write(fit(image, width, height), audio[used:])
                 frames += 1
             print(f"{item.path.name}: {frames} frames ({frames * step:.1f} s)", flush=True)

@@ -277,6 +277,13 @@ def font(size: int, weight: int = 400) -> ImageFont.FreeTypeFont | ImageFont.Ima
     return ImageFont.load_default(size)
 
 
+@lru_cache(maxsize=16)
+def symbol_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Segoe UI Symbol (the lane arrows: Segoe UI itself has only some of them, e.g. no diagonal ones)."""
+    path = FONT_DIR / "seguisym.ttf"
+    return ImageFont.truetype(str(path), size) if path.is_file() else font(size, 700)
+
+
 def _length(f: ImageFont.FreeTypeFont | ImageFont.ImageFont, text: str) -> float:
     return float(f.getlength(text))
 
@@ -365,7 +372,7 @@ def limit_sprite(value: int, school: bool, u: float) -> np.ndarray:
 def banner_sprite(text: str, distance: str, lanes: tuple[tuple[bool, str], ...], u: float) -> np.ndarray:
     """The navigation banner: lane arrows (the ones that work for the maneuver in green), the step, the distance."""
     s = u * SS
-    fstep, fdist, farrow = font(round(20 * s), 650), font(round(18 * s), 700), font(round(20 * s), 700)
+    fstep, fdist, farrow = font(round(20 * s), 650), font(round(18 * s), 700), symbol_font(round(20 * s))
     pad_x, pad_y, gap = 18 * s, 10 * s, 14 * s
     lane_w, lane_h, lane_gap = 30 * s, 34 * s, 4 * s
     lanes_w = len(lanes) * lane_w + max(0, len(lanes) - 1) * lane_gap

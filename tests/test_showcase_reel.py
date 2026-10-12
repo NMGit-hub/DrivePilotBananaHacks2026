@@ -18,6 +18,11 @@ def test_parse_item() -> None:
     assert parse_item("b.mp4=Night") == Item(Path("b.mp4"), "Night", "")
     with pytest.raises(argparse.ArgumentTypeError):
         parse_item("b.mp4")
+    cut = parse_item("c.mp4@3-9,14.5-20=Roundabout|Which exit?")
+    assert cut.path == Path("c.mp4") and cut.segments == ((3.0, 9.0), (14.5, 20.0)) and cut.subtitle == "Which exit?"
+    assert parse_item("b.mp4=Night").segments == ((0.0, None),)
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse_item("c.mp4@9-3=Backwards")
 
 
 def test_title_card_is_a_dark_bgr_frame_with_text() -> None:

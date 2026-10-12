@@ -125,7 +125,7 @@ def shots_slide(w: int, h: int, shots: list[tuple[Path, str]]) -> Image.Image:
     for i, (path, caption) in enumerate(shots[:3]):
         shot = Image.open(path).convert("RGB")
         tile_h = tile_w * shot.height / shot.width
-        x, y = 50 * u + i * (tile_w + gap), 150 * u
+        x, y = 50 * u + i * (tile_w + gap), max(150 * u, (h - tile_h - 90 * u) / 2 + 30 * u)  # (centered)
         img.paste(shot.resize((round(tile_w), round(tile_h)), Image.Resampling.LANCZOS), (round(x), round(y)))
         d.rounded_rectangle((x, y, x + tile_w, y + tile_h), radius=10 * u, outline=color("#2a3240"), width=2)
         for k, line in enumerate(caption.split("|")):
