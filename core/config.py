@@ -499,6 +499,12 @@ class PedestriansConfig(_Strict):
         1.5, gt=0.0, description="Our path: this far either side of straight ahead (half our car, plus a margin)."
     )
     min_length_m: float = Field(6.0, gt=0.0, description="The path reaches this far when we close in on nothing...")
+    stopped_crossing: bool = Field(
+        True,
+        description="While we wait somewhere that isn't a red or yellow light (a crosswalk, a stop sign, a roundabout "
+        "entry), someone crossing right in front of us is warned about too (once per person)...",
+    )
+    stopped_zone_m: float = Field(8.0, gt=0.0, description="...within this far ahead.")
     headway_s: float = Field(
         2.0,
         ge=0.0,

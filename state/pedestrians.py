@@ -78,7 +78,7 @@ from state.parking import Camera
 
 Box = tuple[float, float, float, float]
 PEDESTRIAN, CYCLIST, BICYCLE = "pedestrian", "cyclist", "bicycle"  # BICYCLE: never seen with a rider (parked)
-IN_PATH, ENTERING = "in_path", "entering"
+IN_PATH, ENTERING, CROSSING = "in_path", "entering", "crossing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +189,7 @@ class PersonView:
 class PedestrianEvent:
     """Someone in, or stepping into, our path while we move (spoken once per track)."""
 
-    how: str  # "in_path" | "entering"
+    how: str  # "in_path" | "entering" | "crossing" (in front of us while we wait, not at a red light)
     t: float
     person: PersonView
     side: str  # "ahead" | "left" | "right" (for "entering": the side they come from)
@@ -303,10 +303,12 @@ class PedestrianTracker:
         gps_speed: float | None = None,
         ego_confident: bool = True,
         drivable: DrivableArea | None = None,
+        red_light: bool = False,
     ) -> list[PedestrianEvent]:
         """Fold one frame in. `horizon`: the horizon row (px); `gps_speed`: our GPS speed (m/s) with a fresh fix;
         `ego_confident`: ego motion could be measured (otherwise it holds its last state); `drivable`: YOLOPv2's
-        drivable area of a recent frame (used if at most `road_max_age_s` old)."""
+        drivable area of a recent frame (used if at most `road_max_age_s` old); `red_light`: our light reads red
+        or yellow (people crossing in front of us while we wait there are normal: no `stopped_crossing` warning)."""
         cfg = self.cfg
         if self._last_t is not None and t < self._last_t - 1e-6:
             self.reset()  # time went backwards (a seek without a segment change): histories don't apply
@@ -333,9 +335,12 @@ class PedestrianTracker:
         curvature = math.copysign(
             min(max(0.0, abs(measured) - cfg.curvature_uncertainty), 1 / cfg.min_turn_radius_m), measured
         )
+        # Waiting, but not at a red light (a crosswalk, a stop sign, a roundabout's entry): someone crossing right in
+        # front of us is worth a word before we go, so the path reaches `stopped_zone_m` and alerts may fire.
+        crossing_watch = cfg.stopped_crossing and still is not None and not red_light
         zone = PathZone(
             half_width=cfg.half_width_m,
-            min_length=cfg.min_length_m,
+            min_length=max(cfg.min_length_m, cfg.stopped_zone_m) if crossing_watch else cfg.min_length_m,
             headway_s=cfg.headway_s,
             max_length=min(cfg.max_length_m, cfg.turn_max_length_m) if turning else cfg.max_length_m,
             speed=speed,
@@ -355,7 +360,9 @@ class PedestrianTracker:
                 continue
             share = None if road is None else road.road_beside(box, width, height)
             on_road = None if share is None else share >= cfg.road_min_share
-            view = self._observe(t, track_id, kind, box, placed, zone, turning, still is None, present, events, on_road)
+            view = self._observe(
+                t, track_id, kind, box, placed, zone, turning, still is None, present, events, on_road, crossing_watch
+            )
             views.append(view)
         self._drop_stale(t)
         self._snapshot = PedestrianSnapshot(
@@ -532,6 +539,7 @@ class PedestrianTracker:
         present: set[int],
         events: list[PedestrianEvent],
         on_road: bool | None = None,
+        crossing_watch: bool = False,
     ) -> PersonView:
         cfg = self.cfg
         x, z = placed.x, placed.z
@@ -585,7 +593,7 @@ class PedestrianTracker:
             ignored = "too tall"
         person.streak = person.streak + 1 if ignored is None and (in_path or entering) else 0
 
-        fire = moving and not person.alerted and person.streak >= cfg.confirm_frames
+        fire = (moving or (crossing_watch and in_path)) and not person.alerted and person.streak >= cfg.confirm_frames
         person.alerted = person.alerted or fire
         view = PersonView(
             track_id,
@@ -603,7 +611,9 @@ class PedestrianTracker:
             ignored,
             on_road,
         )
-        if fire:
+        if fire and not moving:  # (waiting, not at a red light: someone crossing in front of us)
+            events.append(PedestrianEvent(CROSSING, t, view, "ahead"))
+        elif fire:
             if in_path:
                 side = "ahead" if abs(offset) < cfg.ahead_m else ("right" if offset > 0 else "left")
             else:

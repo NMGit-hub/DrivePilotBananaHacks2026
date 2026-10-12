@@ -139,7 +139,9 @@ pedestrians:                # "Pedestrian stepping into the road on your right."
   min_length_m: 6.0         # ...out to 6 m + 2 s at our speed (GPS; 8 m/s assumed when moving without a fix),
   headway_s: 2.0            #   at most 35 m; a cyclist riding ahead with us is closed in on slower: shorter
   max_length_m: 35.0
-  min_speed_mps: 0.5        # GPS slower than this = not moving (people crossing while we wait are normal)
+  min_speed_mps: 0.5        # GPS slower than this = not moving (people crossing while we wait are normal)...
+  stopped_crossing: true    # ...except where we wait without a red light (crosswalk, stop sign, roundabout): someone
+  stopped_zone_m: 8.0       #   crossing within 8 m in front: "Pedestrian crossing in front of you. Wait."
   confirm_frames: 3         # in (or stepping into) the path 3 observations in a row before a warning
   road_min_share: 0.3       # with the lanes model on: "in our path" only if >= 30 % of the ground at their feet is
   road_max_age_s: 0.3       #   drivable (a sidewalk isn't; stepping off it still warns), masks <= 0.3 s old,

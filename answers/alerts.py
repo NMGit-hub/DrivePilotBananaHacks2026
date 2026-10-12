@@ -59,6 +59,8 @@ PEDESTRIAN_TEXTS: dict[tuple[str, str, str], str] = {
     ("cyclist", "in_path", "right"): "Cyclist ahead on your right.",
     ("cyclist", "entering", "left"): "Cyclist cutting in on your left.",
     ("cyclist", "entering", "right"): "Cyclist cutting in on your right.",
+    ("pedestrian", "crossing", "ahead"): "Pedestrian crossing in front of you. Wait.",
+    ("cyclist", "crossing", "ahead"): "Cyclist crossing in front of you. Wait.",
 }
 SAFETY_ALERT_TEXTS = tuple(PEDESTRIAN_TEXTS.values())  # pre-rendered at startup with the other fixed alerts
 _WARNED_MEMORY_S = 120.0  # how long a warned track id is remembered (ids only grow within a segment)

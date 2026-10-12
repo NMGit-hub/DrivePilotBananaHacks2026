@@ -109,6 +109,7 @@ class Street:
     ) -> None:
         self.horizon_error = horizon_error  # the tracker is told the horizon is this many px lower than it is
         self.confident = True  # ego motion could be measured
+        self.red_light = True  # stopped = waiting at a red light (people crossing then are normal), unless set False
         self.radius = radius  # the road curves right with this radius (None: straight)
         self.misread_dps = misread_dps  # the homography reads a turn (°/s, + = right) that isn't there
         self.walkers = walkers
@@ -188,7 +189,17 @@ class Street:
                 mask[int(self.hood_row * rows / H) :] = 0
             road = DrivableArea(self.t - self.road_age, mask)
         events = self.tracker.update(
-            self.t, W, H, tracks, horizon, stopped, hom, gps_speed, self.confident, drivable=road
+            self.t,
+            W,
+            H,
+            tracks,
+            horizon,
+            stopped,
+            hom,
+            gps_speed,
+            self.confident,
+            drivable=road,
+            red_light=self.red_light,
         )
         self.events += events
         self.t = round(self.t + 1 / FPS, 6)
@@ -644,7 +655,7 @@ def ped(t: float, track: int, cls: str = "pedestrian", how: str = "in_path", sid
 
 def test_every_warning_is_a_fixed_pre_renderable_sentence() -> None:
     texts = set(PEDESTRIAN_TEXTS.values())
-    assert len(texts) == len(PEDESTRIAN_TEXTS) == 10
+    assert len(texts) == len(PEDESTRIAN_TEXTS) == 12
     for (cls, _how, side), text in PEDESTRIAN_TEXTS.items():
         assert cls.capitalize() in text and (side == "ahead" or side in text)
     from app import FIXED_ALERT_TEXTS
@@ -816,3 +827,25 @@ def test_someone_crossing_right_in_front_is_on_the_road() -> None:
     street.drive(3.0, 4.0)
     assert len(street.events) == 1 and street.events[0].person.track_id == 7
     assert all(p.on_road is not False for p in street.tracker.snapshot().people)
+
+
+def test_someone_crossing_in_front_while_we_wait_but_not_at_a_red_light_is_warned_about() -> None:
+    """The user's roundabout drive: stopped at the crosswalk before the roundabout (no light), a woman crossing right
+    in front: "Pedestrian crossing in front of you. Wait." once. At a red light, or with the setting off: quiet."""
+    from state.pedestrians import CROSSING
+
+    def wait(red_light: bool, cfg: PedestriansConfig | None = None) -> Street:
+        street = Street([Walker(1, standing(0.5, 6.5))], cfg=cfg)
+        street.red_light = red_light
+        for _ in range(round(2.0 * FPS)):
+            street.frame(0.0, stopped=True, gps=0.0)
+        return street
+
+    assert wait(red_light=False).kinds() == [(1, CROSSING, "ahead")]
+    assert wait(red_light=True).events == []
+    assert wait(red_light=False, cfg=PedestriansConfig(stopped_crossing=False)).events == []
+    far = Street([Walker(1, standing(0.5, 14.0))])  # across the intersection, not in front of us: quiet
+    far.red_light = False
+    for _ in range(round(2.0 * FPS)):
+        far.frame(0.0, stopped=True, gps=0.0)
+    assert far.events == []

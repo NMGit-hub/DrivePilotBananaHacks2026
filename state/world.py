@@ -265,6 +265,7 @@ class WorldState:
                 gps_speed,
                 ego.confident,
                 self.drivable_source() if self.drivable_source is not None else None,
+                red_light=red,
             )
         ]
         first = 1 if events and events[0].kind == "segment_reset" else 0

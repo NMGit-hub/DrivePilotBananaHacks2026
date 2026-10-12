@@ -17,8 +17,14 @@ the reel is 2:24:
   lane with "move 1 lane right". (On the I-90 exit 10B clip the lane reading flickers, so the 2 s hold never held.)
 - **"Pedestrian crossing ahead."**: the sign detector already knew pedestrian-crossing signs, but only speed limits
   and school zones were spoken; now a confirmed one is said (once per sign, at most once a minute:
-  `sign_alerts.crossing`, `crossing_repeat_s`). Person warnings themselves stay as designed (only while we move, not
-  for a person cut off at the frame edge, so at the roundabout the person crossing is outlined, not announced).
+  `sign_alerts.crossing`, `crossing_repeat_s`).
+- **"Pedestrian crossing in front of you. Wait."** (the user: it still didn't warn about the person actually
+  crossing). Person warnings were only for while we move (people crossing in front of us at a red light are normal),
+  and at the roundabout the car was stopped at the crosswalk while she crossed, then she was cut off at the frame edge
+  when it pulled away. Now, while we wait somewhere that isn't a red or yellow light (a crosswalk, a stop sign, a
+  roundabout's entry), the path reaches 8 m and someone confirmed in it is warned about once per person
+  (`pedestrians.stopped_crossing`, `stopped_zone_m`; the world passes the light's state). At a red light: quiet as
+  before. In the scene: at 0 mph, the woman in the crosswalk, "Pedestrian crossing in front of you. Wait."
 
 ### Showcase v2 (2026-10-11 evening, the user's notes on the first reel)
 `runs/showcase/v2/DrivePilot_showcase_v2.mp4` (2:29.9; `build_reel.sh` there rebuilds it from the scenes, the
