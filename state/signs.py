@@ -50,13 +50,14 @@ def limit_text(kind: str, value: int) -> str:
 
 
 SCHOOL_ZONE_TEXT = "School zone ahead."
+CROSSING_TEXT = "Pedestrian crossing ahead."
 
 
 def alert_texts(values: Sequence[int]) -> list[str]:
     """Every alert this tracker can say (the app pre-renders them so they play at once)."""
     texts = [limit_text("speed_limit", v) for v in values]
     texts += [limit_text("school_speed_limit", v) for v in values if v <= 25]
-    return [*texts, SCHOOL_ZONE_TEXT]
+    return [*texts, SCHOOL_ZONE_TEXT, CROSSING_TEXT]
 
 
 @dataclass(slots=True)
@@ -154,6 +155,7 @@ class SignTracker:
             self._limit: tuple[int, float] | None = None
             self._school: tuple[int, float] | None = None
             self._zone_t: float | None = None  # a school-zone sign of the current zone was last seen then
+            self._crossing_t: float | None = None  # "Pedestrian crossing ahead." was last said then
             self._last_t: float | None = None
             self._snapshot = EMPTY
             self.last_frame: list[SignView] = []  # this frame's detections as sightings (memory close-ups)
@@ -166,6 +168,7 @@ class SignTracker:
         with self._lock:
             if self._last_t is not None and t < self._last_t:  # time went backwards: another moment
                 self._sightings, self._limit, self._school, self._zone_t = [], None, None, None
+                self._crossing_t = None
             self._last_t = t
             live = [s for s in self._sightings if t - s.last_t <= cfg.link_s]
             for det in sorted(detections, key=lambda d: -d.conf):
@@ -203,6 +206,14 @@ class SignTracker:
                 return [] if in_zone else [SignEvent("school_zone", t, SCHOOL_ZONE_TEXT, None, s.id, s.box)]
         if s.kind == "school_zone":
             return []
+        if s.kind == "pedestrian_crossing":  # confirmed (a one-frame look-alike says nothing), once per sign
+            if s.announced or s.frames < cfg.agree_frames or not cfg.crossing:
+                return []
+            s.announced = True
+            if self._crossing_t is not None and t - self._crossing_t <= cfg.crossing_repeat_s:
+                return []  # (one said a moment ago: a crossing at every corner isn't news)
+            self._crossing_t = t
+            return [SignEvent("pedestrian_crossing", t, CROSSING_TEXT, None, s.id, s.box)]
         if s.announced:
             return []
         if s.kind not in VALUE_KINDS:

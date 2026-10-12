@@ -14,7 +14,7 @@ import numpy as np
 from core.config import SignAlertsConfig
 from core.types import Frame
 from perception.sign_worker import SignWorker
-from state.signs import SCHOOL_ZONE_TEXT, SignTracker, alert_texts, limit_text
+from state.signs import CROSSING_TEXT, SCHOOL_ZONE_TEXT, SignTracker, alert_texts, limit_text
 
 Box = tuple[float, float, float, float]
 
@@ -335,3 +335,13 @@ def test_sign_alerts_are_muted_in_quiet_mode(tmp_path: Path) -> None:
     app.assistant.alerts.set_quiet(False)
     app._on_signs(frame, [])
     assert [u.text for u in speaker.said] == ["Speed limit is now 35."]
+
+
+def test_a_pedestrian_crossing_sign_is_said_once_confirmed_and_not_again_at_the_next_corner() -> None:
+    tracker = SignTracker(SignAlertsConfig(crossing_repeat_s=60.0))
+    assert run(tracker, approach("pedestrian_crossing", [None])) == []  # one frame: not yet
+    assert run(tracker, approach("pedestrian_crossing", [None, None, None], start=20.0)) == [CROSSING_TEXT]
+    assert run(tracker, approach("pedestrian_crossing", [None, None], start=50.0)) == []  # 30 s later: quiet
+    assert run(tracker, approach("pedestrian_crossing", [None, None], start=95.0)) == [CROSSING_TEXT]
+    assert run(SignTracker(SignAlertsConfig(crossing=False)), approach("pedestrian_crossing", [None] * 3)) == []
+    assert CROSSING_TEXT in alert_texts([25])  # (pre-rendered by the app)

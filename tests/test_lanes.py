@@ -902,3 +902,26 @@ def test_the_mask_cache_keeps_the_yellow_lines_and_its_crop(tmp_path: Path) -> N
     np.savez_compressed(tmp_path / "old.npz", **old)
     legacy = load_mask_cache(tmp_path / "old.npz")
     assert legacy[0].yellow is None and legacy[0].view == (0.0, 0.0, 1.0, 1.0)
+
+
+def test_the_target_lane_from_the_lanes_on_one_side_when_the_count_is_unsure() -> None:
+    """The car dashcam's freeways: the total count is often unknown (one side's edge unseen), but an exit from the
+    rightmost lane only needs the lanes to our right: 1 to our right -> move one right (the wrong-lane warning)."""
+    from types import SimpleNamespace
+
+    from nav.route import Lane
+    from ui.overlay import lane_target
+
+    def progress(*valid: bool) -> Any:
+        step = SimpleNamespace(lanes=tuple(Lane(("straight",), v) for v in valid), needs_lanes=True)
+        return SimpleNamespace(arrived=False, next_step=step, to_next_m=300.0)
+
+    exit_right = progress(False, False, False, False, True)  # 5 lanes, the exit from the rightmost
+    unsure = _lanes_snapshot(lane_count=None, lane_index=None, lanes_left=None, lanes_right=1)
+    assert lane_target(unsure, exit_right) == {"lane": "right", "moves": 1}
+    assert lane_target(replace(unsure, lanes_right=0), exit_right) == {"lane": "ours"}
+    assert lane_target(replace(unsure, lanes_right=None), exit_right) is None  # nothing known: nothing said
+    left_turn = progress(True, True, False, False)  # the two left lanes turn left
+    assert lane_target(replace(unsure, lanes_right=None, lanes_left=3), left_turn) == {"lane": "left", "moves": 2}
+    middle = progress(False, True, False)  # a middle lane only: needs the whole count
+    assert lane_target(unsure, middle) is None

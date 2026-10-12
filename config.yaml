@@ -324,3 +324,5 @@ sign_alerts:                # what the sign detector's readings turn into (state
   repeat_s: 300.0           # the same school limit again within this long: quiet
   zone_gap_s: 120.0         # "School zone ahead." once per zone: a zone ends after 2 min without a school sign
   recent: 6
+  crossing: true            # "Pedestrian crossing ahead." for a pedestrian-crossing sign...
+  crossing_repeat_s: 60.0   # ...at most once a minute (a street with a crossing at every corner)

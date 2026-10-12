@@ -714,6 +714,10 @@ class SignAlertsConfig(_Strict):
         "zone or school speed limit), and the next one is a new zone.",
     )
     recent: int = Field(6, ge=1, description="Recent sightings kept for the page and answers.")
+    crossing: bool = Field(True, description='"Pedestrian crossing ahead." for a pedestrian-crossing sign...')
+    crossing_repeat_s: float = Field(
+        60.0, gt=0.0, description="...at most once in this long (a street with a crossing at every corner)."
+    )
 
 
 class LanesConfig(_Strict):

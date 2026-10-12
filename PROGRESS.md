@@ -4,6 +4,22 @@ Live status of the V1 build. Updated at every milestone. Newest information firs
 
 ## Done
 
+### Showcase v2, second pass (2026-10-11 ~18:00): the wrong-lane warning and a pedestrian warning
+The user missed the two biggest use cases (no pedestrian warning at the roundabout, only a cut; no "wrong lane" at
+the exit). Two app changes, then one scene ("Exit and roundabout") in place of the exit-sign and roundabout scenes;
+the reel is 2:24:
+- **"You're in the wrong lane for your turn"** needed lane detection's whole count to match the route's lanes, and on
+  the dashcam the count is often unknown (one edge unseen). `ui/overlay.lane_target` now also decides from one side
+  when the lanes that work are at that edge: an exit from the rightmost lane needs only the lanes to our right (1 to
+  our right -> "move one lane right"); a turn from the left lanes, the lanes to our left. A middle lane still needs the
+  whole count. On the SR 520 approach to the 92nd Ave NE exit: "You're in the wrong lane for your turn. Move one lane
+  right." -> "You're still in the wrong lane." -> the car moves over -> "That's the right lane.", the green target
+  lane with "move 1 lane right". (On the I-90 exit 10B clip the lane reading flickers, so the 2 s hold never held.)
+- **"Pedestrian crossing ahead."**: the sign detector already knew pedestrian-crossing signs, but only speed limits
+  and school zones were spoken; now a confirmed one is said (once per sign, at most once a minute:
+  `sign_alerts.crossing`, `crossing_repeat_s`). Person warnings themselves stay as designed (only while we move, not
+  for a person cut off at the frame edge, so at the roundabout the person crossing is outlined, not announced).
+
 ### Showcase v2 (2026-10-11 evening, the user's notes on the first reel)
 `runs/showcase/v2/DrivePilot_showcase_v2.mp4` (2:29.9; `build_reel.sh` there rebuilds it from the scenes, the
 `render_v2*.sh` scripts re-render them): 3 narrated intro slides (`scripts/showcase_intro.py`: what it is, phone +

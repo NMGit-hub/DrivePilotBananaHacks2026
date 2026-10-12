@@ -77,10 +77,23 @@ def lane_target(lanes: LanesSnapshot | None, progress: Progress | None) -> dict[
     if step is None or to_next is None or to_next > TARGET_LANE_M or not step.lanes or not step.needs_lanes:
         return None
     ours, count = lanes.lane_index, lanes.lane_count
-    if ours is None or count is None or count != len(step.lanes):
-        return None
     valid = [i + 1 for i, lane in enumerate(step.lanes) if lane.valid]
     if not valid:
+        return None
+    n = len(step.lanes)
+    if ours is None or count is None or count != n:
+        # Without the whole count: when the lanes that work are the ones at an edge (an exit from the right lanes),
+        # the lanes seen on that side are enough ("1 lane to our right, only the rightmost works: move one right").
+        contiguous = valid == list(range(valid[0], valid[-1] + 1))
+        if contiguous and valid[-1] == n and valid[0] > 1 and lanes.lanes_right is not None:
+            from_right, works = (
+                lanes.lanes_right + 1,
+                n - valid[0] + 1,
+            )  # (ours / the good ones, counted from the right)
+            return {"lane": "ours"} if from_right <= works else {"lane": "right", "moves": from_right - works}
+        if contiguous and valid[0] == 1 and valid[-1] < n and lanes.lanes_left is not None:
+            from_left, works = lanes.lanes_left + 1, valid[-1]
+            return {"lane": "ours"} if from_left <= works else {"lane": "left", "moves": from_left - works}
         return None
     if ours in valid:
         return {"lane": "ours"}
